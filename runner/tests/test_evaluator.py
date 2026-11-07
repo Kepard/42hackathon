@@ -21,9 +21,21 @@ def test_order_and_persistence():
     assert evaluator.update({})["completed"] == list(LADDER[:3])
 
 
-@pytest.mark.parametrize("category,item", [("picked_up", "birch_log"), ("crafted", "stripped_oak_wood"), ("mined", "spruce_log")])
+@pytest.mark.parametrize("category,item", [("picked_up", "birch_log"), ("crafted", "stripped_oak_wood")])
 def test_historical_obtained(category, item):
     assert LadderEvaluator().update({"stats": {category: {"minecraft:" + item: 1}}})["completed"] == ["log"]
+
+
+def test_mined_log_requires_collection_but_other_rungs_keep_mining_credit():
+    evaluator = LadderEvaluator()
+    mined = {"stats": {"mined": {"minecraft:spruce_log": 1, "minecraft:cobblestone": 1}}}
+    result = evaluator.update(mined)
+    assert result["completed"] == [] and "log" not in result["observed"]
+    assert "cobblestone" in result["observed"]
+    assert evaluator.update({})["completed"] == []
+    result = evaluator.update({"stats": {"picked_up": {"minecraft:spruce_log": 1}}})
+    assert result["completed"] == ["log"]
+    assert evaluator.update({})["completed"] == ["log"]
 
 
 def test_full_ladder_stats_and_nether():

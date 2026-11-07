@@ -57,8 +57,8 @@ class LadderEvaluator:
         stats = state.get("stats", {})
         if not isinstance(stats, dict):
             raise ValueError("Stats must be an object")
-        for category in ("picked_up", "crafted", "mined"):
-            observed |= _counts(stats.get(category, {}))
+        acquired = observed | _counts(stats.get("picked_up", {})) | _counts(stats.get("crafted", {}))
+        observed = acquired | _counts(stats.get("mined", {}))
         killed = _counts(stats.get("killed", {}))
         advancements = state.get("advancements", [])
         if not isinstance(advancements, list) or not all(isinstance(a, str) for a in advancements):
@@ -71,9 +71,9 @@ class LadderEvaluator:
         if world is not None:
             self.world_id = world
         self.obtained |= observed
-        if any(item.startswith("minecraft:") and item.endswith(("_log", "_wood", "_stem", "_hyphae")) for item in self.obtained):
+        if any(item.startswith("minecraft:") and item.endswith(("_log", "_wood", "_stem", "_hyphae")) for item in acquired):
             self.evidence.add("log")
-        for rung in LADDER:
+        for rung in LADDER[1:]:
             if f"minecraft:{rung}" in self.obtained:
                 self.evidence.add(rung)
         if self.obtained & {"minecraft:raw_iron", "minecraft:deepslate_iron_ore", "minecraft:iron_ore"}:

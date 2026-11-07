@@ -23,7 +23,9 @@ All inputs return pixels only, not game-state data. Prefer seek for block approa
 Key names include all letters/digits, punctuation (`/`, `[`, `]`, `;`, etc.),
 F1–F25, both sides of Shift/Ctrl/Alt/Super, navigation/edit/lock keys and keypad.
 Press modifiers/F3 first, then press the second key; release in reverse order.
-Left/right modifier holds are independent. Release all held inputs when done.
+Left/right modifier holds are independent. RAW keeps full hold/release, including across turns (freeze mode reapplies retained holds only during action execution).
+
+SKILLS direct `key_down`/`mouse_down` holds have `ms` (default500,max1000) leases; they can span subsequent GUI drag/chord actions within the SAME turn, but expire automatically and every input is released before the next model call. `key_press`, combat `attack` and manual movement are capped at1s. Block mining keeps its dedicated bounded mining budget; seek/collect walk in short rechecked steps. Feedback lists only the agent's own synthetic held controls, never game state. For GUI Ctrl+A use `key_press(key="a",ms=100,ctrl=true)`; `shift`, `alt` and `super` flags are also supported. Atomic chords preserve previously held modifiers. Do not split GUI modifiers over turns or use indefinite movement to take a step.
 Vanilla permission/GUI restrictions still apply: exposing a key does not grant
 Creative or operator powers. F3+C's intentional crash chord is still a vanilla
 key sequence; do not hold it for ten seconds during a trial.

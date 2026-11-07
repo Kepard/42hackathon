@@ -1,6 +1,7 @@
+import asyncio
 import pytest
 
-from mc_observatory.holo_tools import ToolExecutor, parse_calls, tool_schemas
+from mc_observatory.holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
 from mc_observatory.session import keycode
 from test_holo import PixelClient, call
 
@@ -54,6 +55,47 @@ async def test_alias_holds_release_only_after_last_name_and_taps_preserve_holds(
     await ex.key("left_ctrl",False)
     assert not ex.held_keys
     assert client.events == [("key",341,{"pressed":True}),("key",341,{"pressed":False})]
+
+
+@pytest.mark.parametrize("name,args",[("key_down",{"key":"w","ms":1001}),("mouse_down",{"button":"left","ms":1001}),("key_press",{"key":"a","ms":1001}),("move",{"direction":"forward","seconds":1.1}),("attack",{"seconds":1.1})])
+def test_skills_direct_inputs_are_short_bounded(name,args):
+    with pytest.raises(InvalidToolArgs): parse_calls({"tool_calls":[call(name,**args)]},"skills")
+    if name=="key_press": assert parse_calls({"tool_calls":[call(name,**args)]},"raw")
+
+
+async def test_skills_key_mouse_leases_expire_during_other_work_and_cleanup():
+    client=PixelClient();ex=ToolExecutor(client,640,480)
+    await ex.execute_inputs({"name":"key_down","arguments":{"key":"w","ms":5}},"skills")
+    await ex.execute_inputs({"name":"mouse_down","arguments":{"button":"left","ms":5}},"skills")
+    assert ex.held_inputs()=={"keys":["w"],"buttons":[0]}
+    await asyncio.sleep(.02)
+    assert ex.held_inputs()=={"keys":[],"buttons":[]}
+    await ex.finish_turn()
+    assert not ex.hold_timers and not ex.hold_tasks
+    await ex.execute_inputs({"name":"key_down","arguments":{"key":"w"}},"raw")
+    await asyncio.sleep(.02)
+    assert ex.held_keys=={"w"}
+    await ex.release()
+
+
+async def test_atomic_modifiers_preserve_aliases_and_release_in_reverse_order():
+    client=PixelClient();ex=ToolExecutor(client,640,480)
+    await ex.key("left_ctrl",True)
+    await ex.execute_inputs({"name":"key_press","arguments":{"key":"a","ms":0,"ctrl":True,"shift":True}},"skills")
+    assert ex.held_keys=={"left_ctrl"}
+    events=[e for e in client.events if isinstance(e,tuple) and e[0]=="key"]
+    assert events==[("key",341,{"pressed":True}),("key",340,{"pressed":True}),("key",65,{"pressed":True}),("key",65,{"pressed":False}),("key",340,{"pressed":False})]
+    await ex.release()
+
+
+async def test_cancelled_and_renewed_leases_do_not_release_new_hold():
+    ex=ToolExecutor(PixelClient(),640,480)
+    await ex.bounded_hold("key","w",0)
+    await ex.bounded_hold("key","w",50)
+    await asyncio.sleep(.01)
+    assert ex.held_keys=={"w"}
+    await ex.release()
+    assert not ex.held_keys and not ex.hold_timers
 
 
 async def test_freeze_restore_physically_represses_retained_aliased_keys():

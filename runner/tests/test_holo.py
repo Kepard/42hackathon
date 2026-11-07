@@ -149,6 +149,59 @@ async def test_realtime_never_pauses_and_multiple_tools(tmp_path):
     assert [a["action"] for a in records[0]["executed_actions"]] == ["key", "wait", "key", "mouse"]
 
 
+@pytest.mark.parametrize("tier",["skills","raw"])
+@pytest.mark.parametrize("timing",["freeze","realtime"])
+async def test_skills_release_every_hold_before_next_api_raw_retains_holds(tmp_path,tier,timing):
+    class ActiveClient(PixelClient):
+        def __init__(self): super().__init__();self.keys=set();self.buttons=set()
+        async def key(self,code,**args):
+            (self.keys.add if args["pressed"] else self.keys.discard)(code)
+            await super().key(code,**args)
+        async def mouse(self,**args):
+            (self.buttons.add if args["pressed"] else self.buttons.discard)(args["button"])
+            await super().mouse(**args)
+    class InspectAPI(FakeAPI):
+        snapshots=[]
+        async def complete(self,payload):
+            self.snapshots.append((self.client.keys.copy(),self.client.buttons.copy()))
+            duration={"ms":5} if tier=="skills" else {}
+            self.result=response([call("key_down",key="w",**duration),call("mouse_down",button="left",**duration)] if not self.payloads else [call("key_up",key="w"),call("mouse_up",button="left")])
+            return await super().complete(payload)
+    client=ActiveClient();api=InspectAPI(client)
+    records=[r async for r in HoloAgent(HoloConfig(tier=tier,timing=timing,max_steps=2),api).steps(client,"Walk",tmp_path)]
+    assert api.snapshots[0]==(set(),set())
+    assert api.snapshots[1]==(({87},{0}) if tier=="raw" and timing=="realtime" else (set(),set()))
+    assert not client.keys and not client.buttons
+    text=json.dumps(api.payloads[1]["messages"])
+    assert ("input bookkeeping, not game state" in text) is (tier=="skills")
+    if tier=="skills": assert all(r["held_inputs"]=={"keys":[],"buttons":[]} for r in records)
+
+
+async def test_failed_atomic_chord_releases_all_inputs_before_feedback(tmp_path):
+    class RejectedKeyClient(PixelClient):
+        async def key(self,code,**args):
+            await super().key(code,**args)
+            if code==65 and args["pressed"]: raise RuntimeError("dispatch rejected")
+    client=RejectedKeyClient();api=FakeAPI(client,response([call("key_press",key="a",ms=0,ctrl=True)]))
+    records=[r async for r in HoloAgent(HoloConfig(max_steps=1),api).steps(client,"Select text",tmp_path)]
+    assert "action_error" in records[0]["failure_tags"]
+    assert records[0]["held_inputs"]=={"keys":[],"buttons":[]}
+    assert ("key",341,{"pressed":False}) in client.events
+    assert ("key",65,{"pressed":False}) in client.events
+
+
+async def test_lease_release_error_is_reported_and_cleanup_is_settled(tmp_path):
+    class ReleaseErrorClient(PixelClient):
+        async def key(self,code,**args):
+            await super().key(code,**args)
+            if not args["pressed"]: raise RuntimeError("release acknowledgement failed")
+    client=ReleaseErrorClient();api=FakeAPI(client,response([call("key_down",key="w",ms=0)]))
+    records=[r async for r in HoloAgent(HoloConfig(max_steps=1),api).steps(client,"Walk",tmp_path)]
+    assert "action_error" in records[0]["failure_tags"]
+    assert records[0]["held_inputs"]=={"keys":[],"buttons":[]}
+    assert "release acknowledgement failed" in records[0]["errors"][-1]
+
+
 @pytest.mark.parametrize("finish,calls,tag",[("tool_calls",[call(seconds=0)],None),("length",[],"no_tool_call"),("length",[call(seconds=-1)],"invalid_tool_args"),(None,[call(seconds=0)],None)])
 async def test_completion_budget_and_finish_reason(tmp_path,finish,calls,tag):
     client=PixelClient();result=response(calls)
@@ -196,7 +249,7 @@ async def test_timeout_releases_controls(tmp_path, monkeypatch):
     from mc_observatory.holo_tools import ToolExecutor
     monkeypatch.setattr(ToolExecutor, "approach_close", AsyncMock(return_value=True))
     client = PixelClient()
-    api = FakeAPI(client, response([call("attack", seconds=10)]))
+    api = FakeAPI(client, response([call("attack", seconds=1)]))
     agent = HoloAgent(HoloConfig(time_budget=.03, timing="freeze"), api)
     records = [r async for r in agent.steps(client, "Mine", tmp_path)]
     assert "timeout" in records[0]["failure_tags"]

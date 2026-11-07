@@ -27,7 +27,7 @@ KEY = choice(*sorted(set(KEYS) | set("abcdefghijklmnopqrstuvwxyz0123456789")))
 RAW = {
     "key_down": ("Hold any keyboard key until key_up; hold modifiers/F3 first for combos (Ctrl+Q drops a stack, F swaps offhand, F1/F2/F5/F11, L/P/T/Tab). Use wait for ticks. Commands are blocked; no cheats. Smooth camera/unbound actions can be bound in vanilla Controls.", {"key": KEY}),
     "key_up": ("Release a held key.", {"key": KEY}),
-    "key_press": ("Press and release a key for ms milliseconds.", {"key": KEY, "ms": number(0, 10000)}),
+    "key_press": ("Atomic press/release for ms milliseconds, with optional ctrl/shift/alt/super modifiers; GUI Ctrl+A: key='a',ctrl=true. Preserves previously held modifiers.", {"key": KEY, "ms": number(0, 10000), **{k: {"type":"boolean","default":False} for k in ("ctrl","shift","alt","super")}}),
     "mouse_move": ("Relative look units: 0.15 degrees/unit; positive dx right, dy down.", {"dx": number(-2400, 2400), "dy": number(-1200, 1200)}),
     "mouse_down": ("Hold left mine/attack, right use/place or middle pick-block. In GUIs combine mouse_move_to then mouse_up for drag splitting; modifiers work.", {"button": BUTTON}),
     "mouse_up": ("Release mouse button.", {"button": BUTTON}),
@@ -40,13 +40,16 @@ RAW = {
 }
 SKILLS = {
     **RAW,
+    "key_down": ("Bounded key hold for ms (default500,max1000), within THIS turn only. Auto-released before thinking. Prefer move/reposition for walking and atomic key_press modifiers for GUI chords.", {"key":KEY,"ms":{**number(0,1000),"default":500}}),
+    "mouse_down": ("Bounded mouse hold for ms (default500,max1000), within THIS turn only. Batch cursor moves/up in the same turn for GUI drag splitting; use mining skills for blocks.", {"button":BUTTON,"ms":{**number(0,1000),"default":500}}),
+    "key_press": (RAW["key_press"][0], {**RAW["key_press"][1],"ms":number(0,1000)}),
     "approach_until_outline": ("Pixel reflex: walk toward the crosshair, checking thin dark rectangular selection edges every 0.2s; stop on an outline cue, two unchanged views, or max_s. False negatives/positives are possible; inspect returned frame. No game state.", {"max_s": number(.2, 10), "sprint": {"type": "boolean", "default": False}}),
     "mine": ("Pixel reflex: hold attack; release on a NEW vanilla English Block broken subtitle plus strong center change, or no visible progress after 0.8s, or max_s. A pixel cue is not semantic proof: verify bark/target and drops. Uses screenshots only.", {"max_s": number(.2, 30)}),
     "collect": ("Pixel reflex: step forward in 0.2s chunks, stop when hotbar slot pixels gain an item-like foreground or at max_s. Returns hotbar_changed, not item identity; visually confirm the log. Do not use near cliffs. No inventory lookup.", {"max_s": number(.2, 3)}),
-    "move": ("Hold direction with optional concurrent sprint/jump/sneak; release all afterwards. Jump is held for the whole move; do not sprint+sneak together.", {"direction": choice("forward", "back", "left", "right"), "seconds": number(0, 10), "sprint": {"type": "boolean", "default": False}, "jump": {"type": "boolean", "default": False}, "sneak": {"type": "boolean", "default": False}}),
+    "move": ("Bounded movement up to1s with optional concurrent sprint/jump/sneak; release all afterwards. Jump is held for the whole move; do not sprint+sneak together.", {"direction": choice("forward", "back", "left", "right"), "seconds": number(0, 1), "sprint": {"type": "boolean", "default": False}, "jump": {"type": "boolean", "default": False}, "sneak": {"type": "boolean", "default": False}}),
     "jump": ("Tap space for a jump.", {}),
     "look": ("RELATIVE yaw/pitch degrees, not absolute orientation: positive yaw right, pitch down.", {"yaw_deg": number(-360, 360), "pitch_deg": number(-180, 180)}),
-    "attack": ("Combat/entity attack: hold left mouse without a block-face gate. For blocks use attack_until_broken, which enforces close standoff.", {"seconds": number(0, 10)}),
+    "attack": ("Combat/entity attack up to1s without a block-face gate. For blocks use attack_until_broken, which enforces close standoff.", {"seconds": number(0, 1)}),
     "use": ("Right click once.", {}),
     "select_hotbar": ("Select hotbar slot 1..9.", {"n": {"type": "integer", "minimum": 1, "maximum": 9}}),
     "open_inventory": ("Tap E. Only use if inventory is currently closed.", {}),
@@ -149,6 +152,7 @@ class ToolExecutor:
         self.unchanged_moves = 0
         self.failed_mining_frame = None
         self.jev, self.visibility_threshold = jev, visibility_threshold
+        self.hold_tasks, self.hold_timers = {}, set()
 
     def begin_step(self, png=None):
         self.actions, self.results, self.frames = [], [], []
@@ -392,7 +396,36 @@ class ToolExecutor:
         elif kind == "type":
             await self.client.type_text(args["text"])
 
+    def cancel_hold(self, kind, value):
+        task = self.hold_tasks.pop((kind,value),None)
+        if task is not None and task is not asyncio.current_task(): task.cancel()
+
+    def held_inputs(self):
+        return {"keys":sorted(self.held_keys),"buttons":sorted(self.held_buttons)}
+
+    async def bounded_hold(self, kind, value, ms):
+        self.cancel_hold(kind,value)
+        dispatch = self.key if kind=="key" else self.button
+        await dispatch(value,True)
+        async def expire():
+            await asyncio.sleep(min(1000,max(0,ms))/1000)
+            await dispatch(value,False)
+        task=asyncio.create_task(expire())
+        self.hold_tasks[kind,value]=task
+        self.hold_timers.add(task)
+
+    async def finish_turn(self):
+        timers=list(self.hold_timers)
+        try:
+            results=await asyncio.gather(*timers,return_exceptions=True)
+        finally:
+            await self.release()
+        for result in results:
+            if isinstance(result,Exception): raise result
+        if timers: await self.observe()
+
     async def key(self, key, pressed):
+        if not pressed: self.cancel_hold("key",key)
         code = keycode(key)
         was_held = any(keycode(held) == code for held in self.held_keys)
         (self.held_keys.add if pressed else self.held_keys.discard)(key)
@@ -401,6 +434,7 @@ class ToolExecutor:
             await self.primitive("key", key=key, pressed=is_held)
 
     async def button(self, button, pressed):
+        if not pressed: self.cancel_hold("mouse",button)
         (self.held_buttons.add if pressed else self.held_buttons.discard)(button)
         await self.primitive("mouse", button=button, pressed=pressed)
 
@@ -421,6 +455,10 @@ class ToolExecutor:
             await self.button(button, False)
 
     async def release(self, retain=False):
+        timers=list(self.hold_timers)
+        for timer in timers: timer.cancel()
+        await asyncio.gather(*timers,return_exceptions=True)
+        self.hold_tasks.clear();self.hold_timers.clear()
         keys, buttons = self.held_keys.copy(), self.held_buttons.copy()
         try:
             for key in keys:
@@ -495,15 +533,25 @@ class ToolExecutor:
         if name in ("approach_until_outline", "mine", "collect"):
             return await self.reflex(name, args["max_s"], args.get("sprint", False))
         if name in ("key_down", "key_up"):
-            await self.key(args["key"], name == "key_down")
+            if tier=="skills" and name=="key_down":
+                await self.bounded_hold("key",args["key"],args.get("ms",500))
+            else:
+                await self.key(args["key"], name == "key_down")
         elif name == "key_press":
-            await self.tap(args["key"], args["ms"])
+            owned=[k for k in ("ctrl","shift","alt","super") if args.get(k) and k not in self.held_keys]
+            try:
+                for key in owned: await self.key(key,True)
+                await self.tap(args["key"], min(args["ms"],1000) if tier=="skills" else args["ms"])
+            finally:
+                for key in reversed(owned): await self.key(key,False)
         elif name == "mouse_move":
             await self.primitive("mouse", dx=args["dx"], dy=args["dy"])
         elif name in ("mouse_down", "mouse_up", "mouse_click"):
             button = {"left": 0, "right": 1, "middle": 2}[args["button"]]
             if name == "mouse_click":
                 await self.click(button)
+            elif tier=="skills" and name=="mouse_down":
+                await self.bounded_hold("mouse",button,args.get("ms",500))
             else:
                 await self.button(button, name == "mouse_down")
         elif name == "scroll":
@@ -528,14 +576,14 @@ class ToolExecutor:
             try:
                 for key in keys:
                     await self.key(key, True)
-                await self.primitive("wait", ms=args["seconds"] * 1000)
+                await self.primitive("wait", ms=(min(args["seconds"],1) if tier=="skills" else args["seconds"]) * 1000)
             finally:
                 for key in reversed(keys):
                     await self.key(key, False)
         elif name == "look":
             await self.primitive("mouse", dx=args["yaw_deg"] / 0.15, dy=args["pitch_deg"] / 0.15)
         elif name == "attack":
-            await self.click(ms=args["seconds"] * 1000)
+            await self.click(ms=min(args["seconds"],1) * 1000)
         elif name == "use":
             await self.click(1)
         elif name == "jump":

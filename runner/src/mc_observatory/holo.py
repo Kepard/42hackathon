@@ -264,13 +264,17 @@ class HoloAgent(BaseAgent):
     def name():
         return "holo-minecraft"
 
-    def messages(self, images, feedback_images=(), notes="", crop=None):
+    def messages(self, images, feedback_images=(), notes="", crop=None, held_inputs=None):
         timing = ("The game is frozen during deliberation; actions run with ticks enabled. Held inputs carry across steps only during action execution."
                   if self.config.timing == "freeze" else "The game runs during deliberation. Release held controls explicitly.")
+        if self.config.tier == "skills":
+            timing = ("The game is frozen during deliberation; actions run with ticks enabled." if self.config.timing == "freeze" else "The game runs during deliberation.") + " Skills direct holds/movement are bounded to1s and all inputs are released before thinking. Batch GUI holds/drags within one turn; use atomic key_press modifier flags for chords."
         history = self.records[-self.config.history_steps:] if self.config.history_steps else []
         summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "skipped_tool_calls": r.get("skipped_tool_calls", []), "errors": r["errors"], "tool_results": r.get("tool_results", [])} for r in history]
         content = [{"type": "text", "text": "Your recent actions and visible effects you reported; skills pixel estimates are heuristics: " + json.dumps(summaries)},
                    {"type": "text", "text": "Your scratchpad (may be stale; reconcile with CURRENT pixels): " + (notes or "(empty)")}]
+        if held_inputs is not None:
+            content.append({"type":"text","text":"Your own synthetic controls still held (input bookkeeping, not game state): " + json.dumps(held_inputs) + ". Skills holds last at most1s and are released before thinking. Use bounded move/reposition; GUI Ctrl+A: key_press(key='a',ms=100,ctrl=true), not modifiers across turns."})
         selected = images[-min(3, self.config.history_images):]
         observations = [(f"Full screen from step {idx}", png) for idx, png in selected[:-1]]
         observations += [(f"Previous action pixel-evidence frame {idx}", png) for idx, png in enumerate(feedback_images)]
@@ -345,7 +349,7 @@ class HoloAgent(BaseAgent):
                         executor.begin_step(png)
                         if jev is not None:
                             jev.calls = []
-                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop), "tools": tool_schemas(config.tier, config.reflex),
+                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop, executor.held_inputs() if config.tier=="skills" else None), "tools": tool_schemas(config.tier, config.reflex),
                                    "temperature": config.temperature, "max_tokens": 4096}
                         if config.reasoning_effort is not None:
                             payload["reasoning_effort"] = config.reasoning_effort
@@ -397,8 +401,13 @@ class HoloAgent(BaseAgent):
                                 for call in calls:
                                     await executor.execute(call, config.tier)
                             finally:
-                                if config.timing == "freeze":
+                                if config.tier == "skills":
+                                    record["held_inputs_before_release"] = executor.held_inputs()
+                                    await executor.finish_turn()
+                                    record["held_inputs"] = executor.held_inputs()
+                                elif config.timing == "freeze":
                                     await executor.release(retain=True)
+                                if config.timing == "freeze":
                                     await client.pause()
                                 record["action_duration_ms"] = (time.monotonic() - action_start) * 1000
                 except InvalidToolArgs as error:
@@ -418,6 +427,7 @@ class HoloAgent(BaseAgent):
                         record["failure_tags"].append(error_tag)
                     record["errors"].append(f"{type(error).__name__}: {error}")
                 if executor is not None:
+                    if config.tier == "skills": record["held_inputs"] = executor.held_inputs()
                     record["executed_actions"] = executor.actions.copy()
                     record["tool_results"] = executor.results.copy()
                     record["notes"] = executor.notes

@@ -66,7 +66,7 @@ public class Observatory implements ClientModInitializer {
             Capture pending;
             while ((pending = captures.poll()) != null) capture(pending, "after_hud_before_overlay");
         }
-        if (overlay.size() == 0 || (mc.currentScreen != null && !captures.isEmpty())) return;
+        if ((overlay.size() == 0 && !inputDisplay.active(System.nanoTime())) || (mc.currentScreen != null && !captures.isEmpty())) return;
         try {
             drawOverlay(mc, context);
         } catch (RuntimeException error) {
@@ -115,6 +115,19 @@ public class Observatory implements ClientModInitializer {
                 (int)((width - 8) / scale)), (int)(10 / scale), (int)(21 / scale), 0xEDF4FF, false);
         } finally {
             context.getMatrices().pop();
+        }
+        if (inputDisplay.active(now)) {
+            List<InputDisplay.Line> lines = inputDisplay.lines(now);
+            context.fill(6, 33, width + 6, 37 + lines.size() * 7, 0xB0101A29);
+            context.getMatrices().push();
+            try {
+                context.getMatrices().scale(scale, scale, 1);
+                for (int i = 0; i < lines.size(); i++) {
+                    InputDisplay.Line line = lines.get(i);
+                    context.drawText(mc.textRenderer, ellipsize(mc, line.text(), (int)((width-8)/scale)),
+                            (int)(10/scale), (int)((36+i*7)/scale), (line.alpha()<<24)|0xEDF4FF, false);
+                }
+            } finally { context.getMatrices().pop(); }
         }
     }
 
@@ -172,6 +185,7 @@ public class Observatory implements ClientModInitializer {
     private int readyTicks;
     private static double cursorX, cursorY;
     private static final SyntheticKeys syntheticKeys = new SyntheticKeys();
+    private static final InputDisplay inputDisplay = new InputDisplay();
 
     private record Capture(WebSocket socket, JsonElement id, AtomicBoolean done) {}
     private record PortalAttempt(ServerWorld world, BlockPos position, UUID player) {}
@@ -497,12 +511,14 @@ public class Observatory implements ClientModInitializer {
 
     private static void setKey(int code, boolean pressed) {
         syntheticKeys.set(code, pressed);
+        inputDisplay.key(code, pressed, System.nanoTime());
         MinecraftClient mc = MinecraftClient.getInstance();
         mc.keyboard.onKey(mc.getWindow().getHandle(), code, GLFW.glfwGetKeyScancode(code),
                 pressed ? GLFW.GLFW_PRESS : GLFW.GLFW_RELEASE, syntheticKeys.modifiers());
     }
 
     private static void releaseInputs() {
+        inputDisplay.clear(System.nanoTime());
         syntheticMouse.release();
         syntheticKeys.clear();
         MinecraftClient mc = MinecraftClient.getInstance(); KeyBinding.unpressAll();
@@ -610,6 +626,7 @@ public class Observatory implements ClientModInitializer {
                         double vertical = request.has("scroll_y") ? request.get("scroll_y").getAsDouble() : 0;
                         if (!Double.isFinite(horizontal) || !Double.isFinite(vertical) || Math.abs(horizontal) > 100 || Math.abs(vertical) > 100) throw new IllegalArgumentException("Scroll out of range");
                         ((dev.observatory.mixin.MouseInvoker) mc.mouse).observatoryScroll(mc.getWindow().getHandle(), horizontal, vertical);
+                        inputDisplay.note("Wheel " + horizontal + ", " + vertical, System.nanoTime());
                     }
                     if ((request.has("x") || request.has("y")) && mc.currentScreen == null) {
                         throw new IllegalArgumentException("Coordinate clicks require an open GUI; in-world clicks target the crosshair. Use look to aim, or omit coordinates.");
@@ -629,6 +646,7 @@ public class Observatory implements ClientModInitializer {
                         if (request.has("button")) {
                             int button = request.get("button").getAsInt(); if (button < 0 || button > 2) throw new IllegalArgumentException("button must be0..2");
                             syntheticMouse.button(button, false);
+                            inputDisplay.mouse(button, request.get("pressed").getAsBoolean(), System.nanoTime());
                             if (request.get("pressed").getAsBoolean()) { mc.currentScreen.mouseClicked(cursorX, cursorY, button); guiButtons.add(button); }
                             else { mc.currentScreen.mouseReleased(cursorX, cursorY, button); guiButtons.remove(button); }
                         }
@@ -639,6 +657,7 @@ public class Observatory implements ClientModInitializer {
                             int button = request.get("button").getAsInt(); if (button < 0 || button > 2) throw new IllegalArgumentException("button must be0..2");
                             InputUtil.Key key = InputUtil.Type.MOUSE.createFromCode(button); boolean pressed = request.get("pressed").getAsBoolean();
                             syntheticMouse.button(button, pressed);
+                            inputDisplay.mouse(button, pressed, System.nanoTime());
                             KeyBinding.setKeyPressed(key, pressed); if (pressed) KeyBinding.onKeyPressed(key);
                         }
                     }
@@ -647,6 +666,7 @@ public class Observatory implements ClientModInitializer {
                     if (paused || reset != null) { result.addProperty("ignored", true); break; }
                     if (mc.currentScreen == null) throw new IllegalStateException("Typing requires an open screen");
                     for (char c : request.get("text").getAsString().toCharArray()) mc.currentScreen.charTyped(c, 0);
+                    inputDisplay.note("Text " + request.get("text").getAsString().length() + " chars", System.nanoTime());
                 }
                 case "subscribe" -> subscribers.add(socket);
                 case "unsubscribe" -> subscribers.remove(socket);

@@ -96,6 +96,23 @@ def close_face(box, width, height):
     return box is not None and box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3] and (box[2] - box[0]) * width >= 180 * height / 480
 
 
+def large_face_box(png):
+    im = image(png)
+    if im.height > 480:
+        im = im.resize((round(im.width * 480 / im.height),480))
+    cy, cx = im.height//2, im.width//2
+    half = min(80,cy)
+    band = im.crop((0,cy-half,im.width,cy+half)).convert("L")
+    ridge = ImageChops.subtract(band.filter(ImageFilter.MaxFilter(5)),band)
+    p, light = ridge.load(),band.load()
+    columns = [x for x in range(3,im.width-3) if sum(p[x,y]>18 and light[x,y]<130 for y in range(band.height)) >= band.height*.85]
+    left = max((x for x in columns if x < cx-120),default=None)
+    right = min((x for x in columns if x > cx+120),default=None)
+    if left is None or right is None:
+        return None
+    return (left/im.width,(cy-half)/im.height,right/im.width,(cy+half)/im.height)
+
+
 def movement_danger(png):
     im = image(png)
     patch = im.crop((int(im.width * .35), int(im.height * .62), int(im.width * .65), int(im.height * .78))).resize((30, 16))

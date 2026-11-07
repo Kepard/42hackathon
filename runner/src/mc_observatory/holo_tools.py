@@ -6,7 +6,7 @@ import math
 import time
 
 from .session import KEYS, keycode
-from .vision import changes, outline, outline_box, close_face, movement_danger, broken_caption, hotbar_change
+from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change
 
 
 class InvalidToolArgs(ValueError):
@@ -304,7 +304,7 @@ class ToolExecutor:
                     decision.update(decision="close_check", frame_index=len(self.frames) - 1)
                     box = decision.get("box") if decision.get("noul", 0) >= self.visibility_threshold else None
                 else:
-                    box = outline_box(frame)
+                    box = outline_box(frame) or large_face_box(frame)
                 close = close_face(box, self.width, self.height)
                 check = {"box": box, "close": close, "decision": "close" if close else "approach"}
                 self.close_checks.append(check)

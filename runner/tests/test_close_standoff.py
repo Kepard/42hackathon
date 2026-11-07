@@ -104,3 +104,19 @@ async def test_entity_attack_never_requires_a_block_face(monkeypatch):
     await ex.execute({"name":"attack","arguments":{"seconds":.1}},"skills")
     assert ("mouse",{"button":0,"pressed":True}) in client.events
     assert client.walks==0
+
+
+async def test_face_filling_centre_crop_counts_close_without_outline_edges_in_crop(monkeypatch):
+    from PIL import ImageDraw
+    from unittest.mock import AsyncMock
+    from mc_observatory.vision import large_face_box
+    im=Image.new("RGB",(854,480),"gray")
+    ImageDraw.Draw(im).rectangle((207,80,647,400),outline="black",width=2)
+    out=io.BytesIO();im.save(out,format="PNG");png=out.getvalue()
+    assert outline_box(png) is None
+    assert close_face(large_face_box(png),854,480)
+    assert large_face_box(frame()) is None
+    client,ex=setup(monkeypatch);ex.jev=None
+    client.screenshot=AsyncMock(return_value=png)
+    assert await ex.approach_close()
+    assert client.walks==0

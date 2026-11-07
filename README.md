@@ -125,8 +125,13 @@ Rendering and network/control threads stay alive. `resume` unfreezes. Pause does
 Minecraft's pause menu; ordinary menu-based singleplayer pause remains vanilla behavior.
 Inputs during pause/reset return `ignored:true`.
 
+Inventory counts are total quantities, not individual stacks: reset uses Minecraft's
+item limits to split them (64 ender pearls become four stacks of 16). Duplicate item
+entries are combined first. An expanded inventory exceeding 36 slots is rejected before
+changing worlds; Minecraft's registry remains authoritative for item IDs and stack sizes.
+
 `reset` validates the inventory, disconnects, and creates a unique fresh Survival save with
-the requested signed 64-bit seed. Each stack must be 1..its normal max count, up to 36 stacks.
+the requested signed 64-bit seed.
 The reply arrives after server inventory grant and client in-world readiness (120s mod
 deadline, 150s Python timeout). Previous saves are retained under `mod/run/saves`; remove
 them manually when no longer needed. Reset is intended for a ready local client, not to

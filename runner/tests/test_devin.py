@@ -97,6 +97,13 @@ def test_obtain_goal_is_not_reinterpreted_from_item_name_in_description():
     assert validate_task(task) == task
 
 
+@pytest.mark.parametrize("item,count", [("ender_pearl", 64), ("egg", 20), ("stone_pickaxe", 3), ("oak_log", 64)])
+def test_inventory_counts_are_total_quantities_split_by_mod(item, count):
+    task = copy.deepcopy(definitions()[0])
+    task["inventory"] = [{"id": "minecraft:" + item, "count": count}]
+    assert validate_task(task)["inventory"] == task["inventory"]
+
+
 def test_api_shapes_workflows_persistence_poll_and_add_locally(recorded, monkeypatch):
     monkeypatch.setenv("DEVIN_API_KEY", "test-key-not-real")
     monkeypatch.delenv("DEVIN_ORG_ID", raising=False)

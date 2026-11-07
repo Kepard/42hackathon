@@ -20,7 +20,8 @@ TASK_SCHEMA = {
         "time_limit_seconds": {"type": "integer", "minimum": 1, "maximum": 10800},
         "inventory": {"type": "array", "maxItems": 36, "items": {
             "type": "object", "additionalProperties": False, "required": ["id", "count"],
-            "properties": {"id": ITEM, "count": {"type": "integer", "minimum": 1, "maximum": 64}}}},
+            "properties": {"id": ITEM, "count": {"type": "integer", "minimum": 1, "maximum": 64,
+                "description": "Total quantity; reset splits by Minecraft's item stack limit. Expanded inventory must fit 36 slots."}}}},
         "goal": {"oneOf": [
             {"type": "object", "additionalProperties": False, "required": [key], "properties": {key: spec}}
             for key, spec in [("crafted", ITEM), ("item", ITEM), ("milestone", {"enum": list(LADDER)})]

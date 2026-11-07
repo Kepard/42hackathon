@@ -18,6 +18,7 @@ import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.ScreenshotRecorder;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Item;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.resource.DataConfiguration;
@@ -375,16 +376,21 @@ public class Observatory implements ClientModInitializer {
                 case "reset" -> {
                     if (reset != null) throw new IllegalStateException("Reset already in progress");
                     long seed = request.get("seed").getAsLong(); List<ItemStack> items = new ArrayList<>();
+                    Map<Item, Integer> quantities = new LinkedHashMap<>();
                     if (request.has("inventory")) {
                         for (JsonElement value : request.getAsJsonArray("inventory")) {
                             JsonObject item = value.getAsJsonObject(); Identifier name = new Identifier(item.get("id").getAsString());
                             if (!Registries.ITEM.containsId(name) || name.toString().equals("minecraft:air")) throw new IllegalArgumentException("Unknown item " + name);
                             int count = item.get("count").getAsInt(); var type = Registries.ITEM.get(name);
-                            if (count < 1 || count > type.getMaxCount()) throw new IllegalArgumentException("Invalid item count " + count);
-                            items.add(new ItemStack(type, count));
+                            if (count < 1) throw new IllegalArgumentException("Invalid item count " + count);
+                            quantities.merge(type, count, Math::addExact);
                         }
                     }
-                    if (items.size() > 36) throw new IllegalArgumentException("At most 36 starting stacks");
+                    for (var entry : quantities.entrySet()) {
+                        for (int size : StartingStacks.split(entry.getValue(), entry.getKey().getMaxCount(), 36 - items.size())) {
+                            items.add(new ItemStack(entry.getKey(), size));
+                        }
+                    }
                     worldStarted = true; configure(mc);
                     paused = false; releases.clear(); releaseInputs(); portalTouched = false; portalLit = false; serverState = new JsonObject();
                     String world = "observatory-" + UUID.randomUUID(); readyTicks = 0;

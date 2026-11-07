@@ -241,3 +241,22 @@ async def test_cost_cap_applies_to_unusable_completions(tmp_path, calls, tag):
     assert len(api.payloads) == len(rows) == 1
     assert {tag, "budget_exhausted"} <= set(rows[0]["failure_tags"])
     assert rows[0]["executed_actions"] == []
+
+
+@pytest.mark.parametrize("elapsed,expected", [(119, True), (120, True), (150, False)])
+async def test_runner_enforces_task_deadline(tmp_path, monkeypatch, elapsed, expected):
+    from types import SimpleNamespace
+    import mc_observatory.run as runner_module
+    clock = [0]
+    monkeypatch.setattr(runner_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    class Client(PixelClient):
+        async def reset(self, *args): return {}
+        async def state(self):
+            clock[0] = elapsed
+            return {"stats": {"crafted": {"minecraft:oak_planks": 4}}}
+
+    client = Client()
+    agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(client))
+    summary = await MinecraftRunner(agent, client, tmp_path, tracing=False).run("craft_planks")
+    assert summary["success"] is expected

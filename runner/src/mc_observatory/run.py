@@ -118,6 +118,7 @@ class MinecraftRunner:
                     success = (state.get("stats", {}).get("crafted", {}).get(task["goal"]["crafted"], 0) > 0 if "crafted" in task["goal"] else
                                task["goal"]["milestone"] in snapshot["completed"] if "milestone" in task["goal"]
                                else evaluator.has_item(task["goal"]["item"]))
+                    success = success and time.monotonic() - start <= task["time_limit_seconds"]
                     record["evaluator"] = snapshot
                     record["failure_tags"] += self.detector.update(record, state, (tuple(snapshot["completed"]), len(evaluator.obtained)))
                     record["metrics"] = {key: state.get(key) for key in ("x", "y", "z", "health", "screen", "screen_open")}

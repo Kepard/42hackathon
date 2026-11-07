@@ -213,6 +213,9 @@ class ToolExecutor:
             x, y = (l + r) / 2, (t + b) / 2
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
             previous_miss = self.failed_mining_frame is not None and changes(self.failed_mining_frame, frame)["center_change"] < .01
+            if previous_miss and l <= .5 <= r and t <= .5 <= b and (r - l) * self.width >= 180 * self.height / 480:
+                decision.update(decision="stuck", reason="unchanged_mining_target_too_close")
+                return "stuck"
             if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame):
                 await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
                 if outline(await self.observe()):
@@ -363,6 +366,8 @@ class ToolExecutor:
             result["outcome"] = outcome
         if self.jev is not None and outcome == "not_in_reach":
             result["next_action"] = "call seek(<target>) first"
+        if call["name"] == "seek" and outcome == "stuck":
+            result["next_action"] = "retreat or sidestep with reposition, then seek(<target>) again; or choose another target"
         if call["name"] == "collect" and self.jev is not None:
             try:
                 advice = await self.jev.ask(after, call["arguments"].get("item", "log"), hotbar=True)

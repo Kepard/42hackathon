@@ -163,6 +163,18 @@ async def test_failed_mining_pixels_prevent_reusing_the_same_false_reach_cue(mon
     assert any(a["action"] == "key" and a.get("pressed") for a in ex.actions)
 
 
+async def test_failed_mining_at_close_face_reports_stuck_with_recovery(monkeypatch):
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    ex = executor(FakeJev(box=(.3,.3,.7,.7)))
+    assert await ex.attack_until_broken(.35) == "no_change"
+    ex.begin_step(PNG)
+    result = await ex.execute({"name": "seek", "arguments": {"target": "oak log trunk", "max_s": .01}}, "skills")
+    assert result["outcome"] == "stuck" and result["stuck"]
+    assert "reposition" in result["next_action"]
+    assert ex.jev.calls[0]["reason"] == "unchanged_mining_target_too_close"
+    assert not any(a["action"] in ("mouse", "key") for a in ex.actions)
+
+
 async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
     fake = FakeJev()

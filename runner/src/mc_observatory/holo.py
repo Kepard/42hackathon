@@ -82,10 +82,14 @@ class HoloAPIError(RuntimeError):
 class HoloAPI:
     _locks = {}
     _next = {}
-    def __init__(self, api_key):
+    short_timeout = 20
+
+    def __init__(self, api_key, api_timeout=45):
         if not api_key:
             raise ValueError("HCOMPANY_API_KEY is required")
         self.api_key = api_key
+        self.api_timeout = api_timeout
+        self.total_timeout = min(self.short_timeout, api_timeout) + 2 * api_timeout + 67
 
     async def complete(self, payload):
         errors = []
@@ -100,9 +104,11 @@ class HoloAPI:
                     await asyncio.sleep(max(0, self._next.get(model, 0) - time.monotonic()))
                     self._next[model] = time.monotonic() + 2.05
                 try:
-                    return await self._request(session, payload, errors)
+                    request_timeout = min(self.short_timeout, self.api_timeout) if attempt == 0 else self.api_timeout
+                    async with asyncio.timeout(request_timeout):
+                        return await self._request(session, payload, errors, request_timeout)
                 except TimeoutError:
-                    errors.append({"status": None, "type": "request_timeout", "timeout_s": 20, "attempt": attempt + 1})
+                    errors.append({"status": None, "type": "request_timeout", "timeout_s": request_timeout, "attempt": attempt + 1})
                     if timeout_retried or attempt == 2:
                         raise
                     timeout_retried = True
@@ -115,10 +121,10 @@ class HoloAPI:
                         delay = 2 ** (attempt + 1)
                     await asyncio.sleep(delay)
 
-    async def _request(self, session, payload, errors):
+    async def _request(self, session, payload, errors, request_timeout):
         async with session.post("https://api.hcompany.ai/v1/chat/completions",
                                 headers={"Authorization": f"Bearer {self.api_key}"}, json=payload,
-                                timeout=aiohttp.ClientTimeout(total=20)) as response:
+                                timeout=aiohttp.ClientTimeout(total=request_timeout)) as response:
             if response.status == 200:
                 result = await response.json()
                 result["_api_errors"] = errors
@@ -236,7 +242,7 @@ class HoloAgent(BaseAgent):
     def __init__(self, config=None, api=None, controller=None, jev_client=None):
         super().__init__()
         self.config = config or HoloConfig()
-        self.api = api if api is not None else HoloAPI(os.environ.get("HCOMPANY_API_KEY"))
+        self.api = api if api is not None else HoloAPI(os.environ.get("HCOMPANY_API_KEY"), self.config.api_timeout)
         self.controller = controller or RunController()
         self.terminal_tags = []
         self.records = []
@@ -337,7 +343,7 @@ class HoloAgent(BaseAgent):
                             await announce(idx, payload["messages"][1]["content"], record["input_image_refs"])
                         api_start = time.monotonic()
                         try:
-                            async with asyncio.timeout(config.api_timeout):
+                            async with asyncio.timeout(getattr(self.api, "total_timeout", config.api_timeout)):
                                 response = await self.api.complete(payload)
                                 record["api_errors"] = response.get("_api_errors", [])
                         except TimeoutError:

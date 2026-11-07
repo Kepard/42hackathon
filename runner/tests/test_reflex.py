@@ -189,7 +189,7 @@ async def test_http_error_redaction_and_recovered_429(monkeypatch):
 async def test_api_twenty_second_timeout_retries_once_and_records_attempts(monkeypatch, recover):
     from unittest.mock import AsyncMock
     class API(HoloAPI):
-        async def _request(self, session, payload, errors):
+        async def _request(self, session, payload, errors, request_timeout):
             if recover and self.last_attempts == 2:
                 return {"_api_errors": errors}
             raise TimeoutError
@@ -204,3 +204,32 @@ async def test_api_twenty_second_timeout_retries_once_and_records_attempts(monke
         assert len(api.last_errors) == 2
     assert api.last_attempts == 2
     assert api.last_errors[0]["timeout_s"] == 20
+
+
+async def test_retry_allows_full_configured_timeout_after_short_attempt(monkeypatch):
+    class API(HoloAPI):
+        short_timeout = .01
+        async def _request(self, session, payload, errors, request_timeout):
+            await asyncio.sleep(.03)
+            assert request_timeout == self.api_timeout == .06
+            return {"_api_errors": errors}
+    api = API("test-key", api_timeout=.06)
+    monkeypatch.setattr(HoloAPI, "_locks", {})
+    monkeypatch.setattr(HoloAPI, "_next", {})
+    api._next["test"] = -100
+    async def no_rate_wait(*args):
+        pass
+    original_sleep = asyncio.sleep
+    class TestAPI(API):
+        async def _request(self, session, payload, errors, request_timeout):
+            if self.last_attempts == 1:
+                raise TimeoutError
+            await original_sleep(.03)
+            assert request_timeout == .06
+            return {"_api_errors": errors}
+    monkeypatch.setattr("mc_observatory.holo.asyncio.sleep", no_rate_wait)
+    api = TestAPI("test-key", api_timeout=.06)
+    result = await api.complete({"model": "test"})
+    assert api.last_attempts == 2 and len(result["_api_errors"]) == 1
+    assert result["_api_errors"][0]["timeout_s"] == .01
+    assert api.total_timeout > .01 + .06

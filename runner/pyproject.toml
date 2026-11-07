@@ -6,7 +6,10 @@ build-backend = "hatchling.build"
 name = "mc-observatory"
 version = "0.2.0"
 requires-python = ">=3.12"
-dependencies = ["websockets>=12,<17"]
+dependencies = ["websockets>=12,<17", "aiohttp>=3.9,<4"]
+
+[project.scripts]
+obs = "mc_observatory.run:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24"]

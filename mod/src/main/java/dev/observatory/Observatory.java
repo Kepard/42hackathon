@@ -60,6 +60,7 @@ public class Observatory implements ClientModInitializer {
     private static volatile Reset reset;
     private int readyTicks;
     private static double cursorX, cursorY;
+    private static boolean syntheticShift;
 
     private record Capture(WebSocket socket, JsonElement id, AtomicBoolean done) {}
     private record PortalAttempt(ServerWorld world, BlockPos position, UUID player) {}
@@ -73,6 +74,7 @@ public class Observatory implements ClientModInitializer {
     }
 
     public static boolean isPaused() { return paused; }
+    public static boolean isShiftHeld() { return syntheticShift; }
     public static void touchPortal(ServerPlayerEntity player) {
         if (reset == null && player.getServer() == MinecraftClient.getInstance().getServer()) portalTouched = true;
     }
@@ -286,12 +288,14 @@ public class Observatory implements ClientModInitializer {
     }
 
     private static void setKey(int code, boolean pressed) {
+        if (code == GLFW.GLFW_KEY_LEFT_SHIFT || code == GLFW.GLFW_KEY_RIGHT_SHIFT) syntheticShift = pressed;
         MinecraftClient mc = MinecraftClient.getInstance();
         mc.keyboard.onKey(mc.getWindow().getHandle(), code, GLFW.glfwGetKeyScancode(code),
                 pressed ? GLFW.GLFW_PRESS : GLFW.GLFW_RELEASE, 0);
     }
 
     private static void releaseInputs() {
+        syntheticShift = false;
         MinecraftClient mc = MinecraftClient.getInstance(); KeyBinding.unpressAll();
         if (mc.currentScreen != null) for (int button : guiButtons) mc.currentScreen.mouseReleased(cursorX, cursorY, button);
         guiButtons.clear();
@@ -339,6 +343,7 @@ public class Observatory implements ClientModInitializer {
                     int code = request.get("code").getAsInt(); boolean pressed = !request.has("pressed") || request.get("pressed").getAsBoolean();
                     long ms = request.has("duration_ms") ? request.get("duration_ms").getAsLong() : -1;
                     if (ms < -1 || ms > 60000) throw new IllegalArgumentException("duration_ms must be 0..60000");
+                    if (code == GLFW.GLFW_KEY_LEFT_SHIFT || code == GLFW.GLFW_KEY_RIGHT_SHIFT) syntheticShift = pressed;
                     if (mc.currentScreen != null) {
                         if (pressed) mc.currentScreen.keyPressed(code, GLFW.glfwGetKeyScancode(code), 0);
                         else mc.currentScreen.keyReleased(code, GLFW.glfwGetKeyScancode(code), 0);

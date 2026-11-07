@@ -1,6 +1,6 @@
 # Minecraft observatory: mod + Python evaluation core
 
-Fabric 1.20.4 / Java 17 / Fabric API. Local experimental control endpoint, not a hardened service.
+Fabric 1.20.4 / Java 17 / Fabric API. Local experimental control endpoint and screenshot-only Holo agent.
 
 ## Run
 
@@ -58,7 +58,8 @@ In-world, `mouse` uses vanilla relative look units (0.15 degrees/unit).
 Button 0 is attack/left, 1 is use/right. Send a separate release.
 With a GUI open, `x,y` are absolute **framebuffer/screenshot pixels**, converted to GUI scale;
 movement without a button is supported. This also moves the GLFW cursor. Clicks call the
-vanilla screen methods. Dragging, scrolling, modifier chords and supplementary-plane Unicode
+vanilla screen methods. Synthetic Shift is supported for shift-clicking. Other modifier chords,
+dragging, scrolling and supplementary-plane Unicode
 are not implemented. `type` dispatches Java chars to the open screen; without one it errors.
 
 `pause` freezes the integrated server tick manager (same mechanism as `/tick freeze`),
@@ -90,7 +91,12 @@ emit `{"event":"frame","data":{...screenshot...}}` then `{"event":"state","data"
 at approximately 2 Hz, without request IDs. Stream captures are end-of-frame, not pre-HUD.
 The Python client drops oldest queued events beyond 8; the mod skips slow subscribers with
 buffered data. Streams are best-effort, not a fixed-rate video recorder.
-No auth: loopback-only, for trusted local clients. Concurrent controllers are not isolated.
+Loopback-only; browser `Origin` headers are rejected by default. Explicitly allow trusted origins
+with comma-separated `OBS_ALLOWED_ORIGINS` or Java property `observatory.allowedOrigins` (property
+wins). Optional `OBS_TOKEN` requires `Authorization: Bearer <token>` at the WebSocket handshake;
+the Python client reads the same environment variable (or accepts `token=`). Native clients omit
+Origin. Tokens are never sent in URLs. Browser dashboards with tokens need a backend proxy capable
+of setting authorization headers. Concurrent controllers are not isolated.
 Java-WebSocket is relocated/shaded in the built mod JAR (dev runs use the dependency directly).
 
 ## Python 3.12 runner
@@ -102,7 +108,7 @@ uv pip install -e '.[test]'
 .venv/bin/python -m pytest -q -m 'not live'
 ```
 
-The base client/evaluator needs only `websockets`; task/session tracing integration is optional.
+The package needs `websockets` and `aiohttp`; task/session tracing integration is optional.
 For the local cua-bench checkout, this environment installs only its non-agent/non-sandbox
 dependencies, deliberately avoiding installing an unused model/VM stack:
 
@@ -129,6 +135,8 @@ Nether dimension (or its completed advancement) implies portal evidence. Startin
 can satisfy obtained goals. `fraction = completed/13` is a **local equal-weight convention**,
 not Vals' unpublished per-rung weights. JSON sub-tasks specify seed, starting inventory,
 goal and wall-clock time limit; setup time is excluded, pauses after setup still consume time.
+Crafting sub-tasks explicitly require `stats.crafted` evidence; picking up, mining, or starting
+with the target item cannot satisfy a craft goal. The ladder's obtained goals remain broader.
 
 `MinecraftSession` implements the lifecycle/screenshot/action subset of cua-bench's
 `DesktopSession`, translating click/right/double-click, move, single key, type, wait and done.
@@ -137,7 +145,108 @@ goal and wall-clock time limit; setup time is excluded, pauses after setup still
 complete DesktopSession/provider**: shell/files, CSS/native apps, VM lifecycle, scrolling,
 dragging and chords are unsupported. Cua-bench's `cb run` constructs sandbox environments;
 we do not force the local client into that factory. Call the decorated hooks with a
-`MinecraftSession` directly, as the live integration test does. No agent loop is built.
+`MinecraftSession` directly, as the live integration test does.
+
+## Holo agent loop
+
+With the mod running and `HCOMPANY_API_KEY` already in your environment:
+
+```sh
+cd ~/repos/mc-observatory/runner
+uv pip install -e '.[test]'
+.venv/bin/obs run --task get_log --model holo4-27b --tier skills --timing freeze --max-steps 30 --out ../runs/
+.venv/bin/obs run --task ladder --model holo4-35b-a3b --tier raw --timing realtime --max-steps 100 --time-budget 1800 --out ../runs/
+```
+
+Each invocation creates a unique run directory. **Do not commit runs, screenshots, logs or
+traces**; `runs/` and spike outputs are ignored. `--no-trace` runs without cua-bench installed.
+Otherwise install the optional local cua-bench integration as above. Available options include
+`--history-steps` (default 8 text summaries), `--history-images` (default 1, includes current),
+`--temperature`, model sampling `--seed`, `--time-budget` (seconds, default 180),
+`--max-cost-usd`, `--failure-window` (default 5) and `--url`. Task definitions determine the
+world seed and inventory independently of model sampling seed. The run time budget is explicit;
+it defaults to the get-log task's three-minute budget, but may be overridden for longer trials.
+
+`HoloAgent` subclasses cua-bench `BaseAgent` when installed and exposes `perform_task` with
+`AgentResult`; it expects our Minecraft session, not a generic sandbox. Its `steps` generator
+also works without cua-bench. It calls only screenshot/input/pause APIs. `MinecraftRunner`
+separately reads state for grading/diagnostics, appends it to records, and never feeds it into
+the model. Prompts contain a concise controls primer, current goal, previous input summaries
+and only the configured screenshots. They contain no inventory, coordinates, health, GUI flags,
+milestone feedback or other state telemetry. The image files are the exact PNGs sent as data URLs.
+
+- **raw:** named key down/up/press, relative mouse look, mouse button down/up/click, GUI
+  `click_at`, text and millisecond waits. Multiple calls run sequentially; no parallel actions.
+- **skills:** bounded, timed input-only movement, jump, **relative** yaw/pitch look, held attack,
+  use, hotbar selection, inventory open/Escape, GUI click/shift-click and second-based waits.
+  No teleporting, block targeting, inventory queries or state-assisted aiming. All calls in
+  both tiers require an intent sentence. Coordinates are normalized 0..1000, top-left origin;
+  the mod rejects coordinate clicks without a GUI, instead of silently attacking the crosshair.
+- **freeze:** pause before screenshot/API, resume for sequential action execution, release
+  actual inputs and pause again. Logically held raw inputs are restored during the next action
+  window. Runs finish paused. **realtime:** never calls pause/resume; held raw inputs remain
+  active during API calls until explicitly released. Vanilla menus can still pause singleplayer.
+
+`holo.PRICING` is a configurable-per-model table in USD per million input/cached/output tokens:
+`holo4-27b`: **0.40 / 0.04 / 3.00**; `holo4-35b-a3b`: **0.30 / 0.03 / 2.00**. Any model ID is
+accepted; unknown pricing produces `null` cost and disallows a dollar budget until a rate is
+added. Cached tokens are subtracted from normal input; reasoning tokens are reported separately
+but already included in output billing. Dollar budgets are checked after each response, so one
+in-flight request can overshoot; actions stop once the cap is reached. No hidden API retries.
+
+Outputs: `steps.jsonl`, `screenshots/`, `summary.json`, optional cua-bench `trajectory/`. Step
+records include index, timestamps, exact image references, model/goal, reasoning (`reasoning_content`
+or `reasoning`), intents, parsed/raw calls, executed primitives, API/action timings, token/cost
+breakdown, evaluator snapshot, privileged metrics and errors. Summary includes task success,
+ladder fraction, wall-clock time-to-reach per milestone, steps, wall time, mean/nearest-rank p95
+API latency, cost, tokens and failure tags. A successful get-log task scores **1/13** of the
+ladder, not 1.0. State stats can lag ~0.5 seconds. BaseAgent-only use records actions but has no
+scoring authority; use `MinecraftRunner` for scored runs.
+
+Failure tags include `api_error`, `no_tool_call`, `invalid_tool_args`, `gui_stuck`,
+`stuck_position`, `repeated_action_loop`, `death`, `timeout`, `budget_exhausted`. GUI/repetition
+diagnostics reset with progress; movement checks require movement actions over a configurable
+window and <0.2 blocks displacement. These are heuristic labels, not proof of model error;
+ordinary mining can legitimately repeat actions. Only death, success, limits or external stop
+end a run automatically. Additional `action_error`/`metrics_error` tags distinguish transport
+or scoring failures. Model errors never trigger privileged corrective gameplay.
+
+For dashboard/voice embedding, pass a `RunController` to agent/runner. Its async `pause()`,
+`resume()`, `stop()` and `set_goal(text)` take effect between steps; current API/action batches
+are not interrupted by hooks. Controller pauses still consume the wall-clock budget. In
+realtime a controller pause stops decisions, not simulation. `set_goal` updates the model's
+instruction, not the runner's immutable scoring target. `events` is a bounded asyncio queue
+(oldest dropped beyond 100); optional sync/async `callback(record)` receives every completed
+step with intent, actions and privileged metrics. Keep dashboard consumers trusted; those
+events are not model inputs. Callback exceptions propagate rather than silently losing events.
+
+Mocked tests cover parsing (including malformed args), billing, pixel-only history, freeze
+ordering, realtime, macros/shift-click, controller hooks, failure taxonomy and runner scoring:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_holo.py
+```
+
+### Holo smoke observations
+
+Single seeded get-log trials, skills caps 30 steps and raw cap 15, all freeze mode. Runs stop
+early on state-verified task success. Wall times below exclude world-reset/setup and trace export.
+
+| Model / tier | Success | Steps | Ladder fraction | Agent wall seconds | Mean / p95 API ms | Cost USD |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| holo4-27b / skills | yes | 11 | 1/13 | 28.77 | 968.6 / 2544.3 | 0.015458 |
+| holo4-35b-a3b / skills | no | 30 | 0 | 68.60 | 999.8 / 1521.2 | 0.02574514 |
+| holo4-27b / raw | yes | 3 | 1/13 | 8.35 | 591.7 / 662.0 | 0.0036612 |
+
+The 35b trial repeatedly mined without obtaining a log, then was in GameMenuScreen and
+repeatedly clicked normalized y=195/255 instead of the visible Back-to-Game button around
+y=325. Tagged `gui_stuck`, `repeated_action_loop`, `budget_exhausted`. The cause of the menu
+opening is **unverified** (no Escape tool call was recorded); the missed button targeting was
+verified against the exact input image. No state-based recovery was injected. The 27b skills
+trial navigated and used a longer mining hold; the raw trial held left mouse and waited.
+World seeds matched but vanilla spawn positions differed, so these are smoke checks, not a
+controlled model ranking. All three exported JSONL, summaries, exact screenshots and cua-bench
+traces locally, with no artifacts committed.
 
 The opt-in live test resets seed 12345 with four logs from the `craft_planks` sub-task,
 freezes/resumes and rejects bad requests, hides the HUD and captures, opens inventory,

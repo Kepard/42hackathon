@@ -13,3 +13,4 @@ spike/unit-tests.log
 spike/**
 !spike/*.py
 !spike/
+runs/

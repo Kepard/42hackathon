@@ -7,6 +7,7 @@ import pytest
 
 from mc_observatory.client import MinecraftClient, ModError
 from mc_observatory.session import MinecraftSession
+from mc_observatory.holo_tools import ToolExecutor
 
 cb = pytest.importorskip("cua_bench")
 from mc_observatory.tasks import evaluate, setup, tasks
@@ -140,3 +141,15 @@ async def test_frame_counter_with_hidden_hud():
             assert (await client.call("screenshot"))["capture_point"] == "end_frame_fallback"
         finally:
             await tap(client, 290)
+
+
+async def test_shift_click_macro_moves_stack():
+    async with MinecraftClient() as client:
+        await client.reset(12345, [{"id": "minecraft:oak_log", "count": 4}])
+        await tap(client, 69)
+        executor = ToolExecutor(client, 640, 480)
+        await executor.execute({"name": "shift_click_at", "arguments": {"x": 176 * 1000 / 639, "y": 374 * 1000 / 479, "intent": "Move logs to the main inventory."}}, "skills")
+        await asyncio.sleep(.3)
+        inventory = (await client.state())["inventory"]
+        assert any(stack["id"] == "minecraft:oak_log" and stack["slot"] >= 9 and stack["count"] == 4 for stack in inventory)
+        await tap(client, 256)

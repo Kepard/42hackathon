@@ -58,6 +58,20 @@ def test_outline_rejects_wide_background_and_crop_boundary_edges(box):
     assert not outline(encode(im))
 
 
+async def test_complete_narrow_face_stops_approach_before_movement():
+    im = Image.new("RGB", (854, 480), (90, 100, 110))
+    ImageDraw.Draw(im).rectangle((392, 145, 462, 335), outline="black", width=2)
+    frame = encode(im)
+    assert outline(frame)
+    ex = ToolExecutor(PixelClient(), 854, 480)
+    ex.begin_step(frame)
+    assert await ex.reflex("approach_until_outline", .2) == "outline_pixel_cue"
+    assert ex.actions == []
+    assert not ex.held_keys
+    ImageDraw.Draw(im).rectangle((389, 180, 395, 220), fill=(90, 100, 110))
+    assert not outline(encode(im))
+
+
 @pytest.mark.parametrize("name,cue,outcome", [
     ("approach_until_outline", "outline", "outline_pixel_cue"),
     ("mine", "broken_caption", "block_gone_pixel_cue"),

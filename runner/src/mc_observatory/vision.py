@@ -59,13 +59,14 @@ def outline(png):
         for bottom, l2, r2 in rows:
             if bottom <= cy + 10 or bottom - top < 55 or abs(left - l2) > 8 or abs(right - r2) > 8:
                 continue
-            if left < 8 or right > patch.width - 8 or not .55 <= (right - left) / (bottom - top) <= 1.65:
+            if left < 8 or right > patch.width - 8 or (right - left) / (bottom - top) > 1.65:
                 continue
             hits = sum(any(p[x, y] > 18 for x in range(max(0, left - 3), min(patch.width, left + 4)))
                        for y in range(top, bottom))
             right_hits = sum(any(p[x, y] > 18 for x in range(max(0, right - 3), min(patch.width, right + 4)))
                              for y in range(top, bottom))
-            if min(hits, right_hits) / (bottom - top) >= .7:
+            required = .9 if (right - left) / (bottom - top) < .55 else .7
+            if min(hits, right_hits) / (bottom - top) >= required:
                 return True
     return False
 

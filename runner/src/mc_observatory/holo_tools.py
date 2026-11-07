@@ -292,6 +292,7 @@ class ToolExecutor:
 
     async def approach_close(self, walk=True):
         deadline, still = time.monotonic() + 4, 0
+        owns_w = not any(keycode(key) == 87 for key in self.held_keys)
         try:
             while (remaining := deadline - time.monotonic()) > 0:
                 frame = await asyncio.wait_for(self.observe(), remaining)
@@ -315,9 +316,11 @@ class ToolExecutor:
                     return False
                 if deadline - time.monotonic() < .2:
                     break
-                await self.key("w", True)
+                if owns_w:
+                    await self.key("w", True)
                 await self.primitive("wait", ms=200)
-                await self.key("w", False)
+                if owns_w:
+                    await self.key("w", False)
                 after = await self.observe()
                 still = still + .2 if changes(frame, after)["frame_change"] < .002 else 0
                 if still >= .8:
@@ -326,7 +329,7 @@ class ToolExecutor:
         except Exception:
             self.close_checks.append({"decision": "not_close", "reason": "vision_error"})
         finally:
-            if "w" in self.held_keys:
+            if owns_w and "w" in self.held_keys:
                 await self.key("w", False)
         return False
 

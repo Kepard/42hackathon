@@ -120,3 +120,13 @@ async def test_face_filling_centre_crop_counts_close_without_outline_edges_in_cr
     client.screenshot=AsyncMock(return_value=png)
     assert await ex.approach_close()
     assert client.walks==0
+
+
+@pytest.mark.parametrize("error",[False,True])
+async def test_approach_only_releases_w_it_owns(monkeypatch,error):
+    client,ex=setup(monkeypatch,near=True,error=error)
+    await ex.key("w",True)
+    assert await ex.approach_close() is (not error)
+    assert ex.held_keys=={"w"}
+    assert ("key",87,{"pressed":False}) not in client.events
+    await ex.release()

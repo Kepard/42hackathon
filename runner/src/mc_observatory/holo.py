@@ -277,7 +277,7 @@ class HoloAgent(BaseAgent):
         if self.config.reflex == "jev":
             start, end = primer.index("TREE:"), primer.index("CONTROLS:")
             primer = primer[:start] + "TREE: seek('oak log trunk',max_s=8) -> attack_until_broken(max_s=4) -> collect(max_s=0.8,item='log') -> confirm LOG icon. Seek is the ONLY block approach tool. If leaves obstruct bark, seek('oak leaves'), attack_until_broken(max_s=0.6), then seek bark again. Leaf gone is progress, not a log. Scan with look when not_visible; reposition only to retreat/sidestep. Seek/collect use fast TypeSafe Jev on screenshots; outline gates mining and hotbar scores are advisory.\n\n" + primer[end:]
-            primer = primer.replace("Sprint+jump; sneak near cliffs.", "Avoid cliffs/lava; seek safe solid targets, never walk into lava.")
+            primer = primer.replace("At854x480/FOV70, trunk width >=85px usually means reach. Sprint+jump; sneak near cliffs.", "Mine only after in_reach. not_in_reach -> call seek again, NOT another attack or manual aim. No center change while mining means no visible progress; scene_changed alone is not cracking. Collect is only for drops after mining, not block approach. Avoid cliffs/lava; seek safe solid targets.")
         return [{"role": "system", "content": primer}, {"role": "user", "content": content}]
 
     async def steps(self, client, goal, out):

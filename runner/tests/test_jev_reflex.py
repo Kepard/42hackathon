@@ -226,6 +226,8 @@ def test_jev_has_no_legacy_block_approach_and_prompt_uses_seek():
     assert "seek is the ONLY" in text or "Seek is the ONLY" in text
     assert "mine(max_s=4)" not in text
     assert "approach ->" not in text
+    assert "trunk width >=85px" not in text
+    assert "Mine only after in_reach" in text
     with pytest.raises(ValueError):
         parse_calls({"tool_calls": [call("reposition", direction="forward", seconds=.1)]}, "skills", "jev")
 

@@ -49,6 +49,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class Observatory implements ClientModInitializer {
     private static JsonObject overlay = new JsonObject();
     private static boolean overlayDrawn;
+    private static boolean autoJump = true;
+    private static int renderDistance = 2;
+    private static int windowWidth = 854;
 
     public static void afterHud(DrawContext context) {
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -320,10 +323,19 @@ public class Observatory implements ClientModInitializer {
     }
 
     private static void configure(MinecraftClient mc) {
-        mc.options.getViewDistance().setValue(4); mc.options.getSimulationDistance().setValue(5);
-        mc.options.getMaxFps().setValue(260); mc.options.getEnableVsync().setValue(false);
+        mc.options.getViewDistance().setValue(renderDistance); mc.options.getSimulationDistance().setValue(5);
+        mc.options.getMaxFps().setValue(60); mc.options.getEnableVsync().setValue(false);
         mc.options.pauseOnLostFocus = false; mc.options.getGuiScale().setValue(2); mc.options.hudHidden = false;
         mc.options.getFov().setValue(70); mc.options.getMouseSensitivity().setValue(.5);
+        mc.options.getAutoJump().setValue(autoJump); mc.options.getBobView().setValue(false);
+        mc.options.getFovEffectScale().setValue(0.0); mc.options.getDistortionEffectScale().setValue(0.0);
+        mc.options.getDarknessEffectScale().setValue(0.0); mc.options.getDamageTiltStrength().setValue(0.0);
+        mc.options.getGamma().setValue(1.0); mc.options.getEntityShadows().setValue(false);
+        mc.options.getCloudRenderMode().setValue(net.minecraft.client.option.CloudRenderMode.OFF);
+        mc.options.getParticles().setValue(net.minecraft.client.option.ParticlesMode.DECREASED);
+        mc.options.getShowSubtitles().setValue(true); mc.options.advancedItemTooltips = true;
+        if (mc.getWindow().getWidth() != windowWidth || mc.getWindow().getHeight() != 480)
+            GLFW.glfwSetWindowSize(mc.getWindow().getHandle(), windowWidth, 480);
         mc.options.setPerspective(net.minecraft.client.option.Perspective.FIRST_PERSON);
         if (mc.getDebugHud().shouldShowDebugHud()) mc.getDebugHud().toggleDebugHud();
         mc.options.tutorialStep = net.minecraft.client.tutorial.TutorialStep.NONE; mc.options.write();
@@ -391,6 +403,23 @@ public class Observatory implements ClientModInitializer {
         try {
             String command = request.get("command").getAsString(); JsonObject result = new JsonObject();
             switch (command) {
+                case "configure" -> {
+                    if (request.has("auto_jump")) {
+                        if (!request.get("auto_jump").isJsonPrimitive() || !request.getAsJsonPrimitive("auto_jump").isBoolean()) throw new IllegalArgumentException("auto_jump must be boolean");
+                        autoJump = request.get("auto_jump").getAsBoolean();
+                    }
+                    if (request.has("render_distance")) {
+                        int distance = request.get("render_distance").getAsInt();
+                        if (distance < 2 || distance > 12) throw new IllegalArgumentException("render_distance must be 2..12");
+                        renderDistance = distance;
+                    }
+                    if (request.has("width")) {
+                        int width = request.get("width").getAsInt();
+                        if (width != 640 && width != 854) throw new IllegalArgumentException("width must be 640 or 854");
+                        windowWidth = width;
+                    }
+                    configure(mc);
+                }
                 case "overlay" -> {
                     JsonObject payload = request.getAsJsonObject("payload");
                     if (payload == null || payload.toString().length() > 8192) throw new IllegalArgumentException("Overlay payload must be an object under 8192 characters");

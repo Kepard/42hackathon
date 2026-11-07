@@ -107,6 +107,7 @@ class MinecraftRunner:
             from cua_bench.tracing import Tracing
             tracer = Tracing(self)
             tracer.start()
+        await self.client.call("configure", auto_jump=self.agent.config.tier == "skills")
         initial = await self.client.reset(task["seed"], task["inventory"], task.get("spawn"))
         (self.out / "initial_state.json").write_text(json.dumps({"task": task, "state": initial}, indent=2))
         if self.agent.config.timing == "realtime":

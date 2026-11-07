@@ -17,6 +17,24 @@ class Client:
     async def call(self, *args, **kwargs): return {}
 
 
+def test_model_input_is_exact_and_labels_history_feedback_current_crop(tmp_path):
+    service = ObservatoryService(tmp_path, Client())
+    events = []
+    service.publish = lambda event, data: events.append((event, data))
+    content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + png}} for png in ("history", "feedback", "current", "crop")]
+    refs = ["screenshots/00000.png", "screenshots/00000-action-000.png", "screenshots/00001.png", "screenshots/00001-center.png"]
+    service.model_input("run", 1, content, refs)
+    event, data = events[0]
+    assert event == "agent_frame" and data["png_base64"] == "current" and data["step"] == 1
+    assert [image["kind"] for image in data["input_images"]] == ["history", "feedback", "current", "crop"]
+    assert [image["source_step"] for image in data["input_images"]] == [0, 0, 1, 1]
+    assert all("submitted on turn 1" in image["label"] for image in data["input_images"])
+    service.model_input("run", 2, [], [])
+    assert len(events) == 1
+    with pytest.raises(ValueError, match="references"):
+        service.model_input("run", 2, content, [])
+
+
 class Service(ObservatoryService):
     async def execute(self, *args): await asyncio.sleep(3600)
 

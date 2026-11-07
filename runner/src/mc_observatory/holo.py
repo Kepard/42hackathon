@@ -256,6 +256,9 @@ class HoloAgent(BaseAgent):
                                    "temperature": config.temperature, "max_tokens": 2048}
                         if config.seed is not None:
                             payload["seed"] = config.seed
+                        announce = getattr(client, "model_input", None)
+                        if announce is not None:
+                            await announce(idx, payload["messages"][1]["content"], record["input_image_refs"])
                         api_start = time.monotonic()
                         try:
                             async with asyncio.timeout(config.api_timeout):

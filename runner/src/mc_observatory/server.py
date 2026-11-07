@@ -239,13 +239,10 @@ class ObservatoryService:
 
         class ObservedClient:
             def __getattr__(self, name): return getattr(service.client, name)
-            async def screenshot(self):
+            async def model_input(self, step, content, refs):
                 service.phase = "THINKING"
                 await service.set_overlay(badges="THINKING FROZEN" if config.timing == "freeze" else "THINKING")
-                png = await service.client.screenshot()
-                service.agent_frame = {"png_base64": base64.b64encode(png).decode(), "step": len(agent.records), "run_id": run_id}
-                service.publish("agent_frame", service.agent_frame)
-                return png
+                service.model_input(run_id, step, content, refs)
             async def resume(self):
                 service.phase = "ACTING"
                 await service.set_overlay(badges="ACTING")
@@ -269,6 +266,22 @@ class ObservatoryService:
             self.pending = None
             await self.set_overlay(badges="PAUSED FROZEN" if config.timing == "freeze" else "PAUSED")
             self.publish("run_status", {"id": run_id, "status": meta["status"]})
+
+    def model_input(self, run_id, step, content, refs):
+        images = [part["image_url"]["url"] for part in content if part["type"] == "image_url"]
+        if not images:
+            return
+        if len(images) != len(refs):
+            raise ValueError("Model image references must match payload images")
+        inputs = []
+        for url, ref in zip(images, refs):
+            source_step = int(Path(ref).stem.split("-")[0])
+            kind = "crop" if ref.endswith("-center.png") else "feedback" if "-action-" in ref else "current" if source_step == step else "history"
+            inputs.append({"png_base64": url.split(",", 1)[1], "ref": ref, "kind": kind, "source_step": source_step,
+                           "label": f"{kind} image from step {source_step}, submitted on turn {step}"})
+        current = next(image for image in inputs if image["kind"] == "current")
+        self.agent_frame = {**current, "run_id": run_id, "step": step, "input_images": inputs}
+        self.publish("agent_frame", self.agent_frame)
 
 
 def create_app(service=None, devin_api=None):

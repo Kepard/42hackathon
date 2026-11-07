@@ -164,3 +164,22 @@ async def test_three_frames_crop_notes_and_pixel_boundary(tmp_path, tier):
     assert bool(records[-1]["tool_results"]) == (tier == "skills")
     assert ("center_change" in text) == (tier == "skills")
     assert len(PRIMER.split()) < 550
+
+
+async def test_model_input_hook_only_announces_api_payloads(tmp_path):
+    announcements = []
+    class Client(PixelClient):
+        async def model_input(self, step, content, refs):
+            announcements.append((step, content, refs))
+            self.events.append("model_input")
+    c = Client()
+    api = FakeAPI(c)
+    agent = HoloAgent(HoloConfig(max_steps=2), api)
+    records = [r async for r in agent.steps(c, "observe", tmp_path)]
+    assert c.events.count("screenshot") == 4
+    assert c.events.count("model_input") == c.events.count("api") == 2
+    for idx, (_, content, refs) in enumerate(announcements):
+        assert content == api.payloads[idx]["messages"][1]["content"]
+        assert refs == records[idx]["input_image_refs"]
+    assert records[0]["feedback_image_refs"][0] not in announcements[0][2]
+    assert records[0]["feedback_image_refs"][0] in announcements[1][2]

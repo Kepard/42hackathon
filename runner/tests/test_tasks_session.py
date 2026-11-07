@@ -11,10 +11,27 @@ from mc_observatory.session import MinecraftSession, keycode
 from mc_observatory.tasks import definitions, evaluate, setup, tasks
 
 
-def test_decorated_task_data():
+def test_decorated_task_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("OBS_USER_TASKS_FILE", str(tmp_path / "tasks.json"))
     assert tasks._td_type == "tasks_config" and setup._td_type == "setup_task" and evaluate._td_type == "evaluate_task"
-    assert len(tasks()) == len(definitions()) == 3
+    assert len(tasks()) == len(definitions()) == 4
     assert all(isinstance(task, cb.Task) for task in tasks())
+
+
+@pytest.mark.parametrize("dimension,expected", [("minecraft:overworld", 0), ("minecraft:the_nether", 1), (None, 0)])
+async def test_dimension_task_does_not_require_prior_ladder_rungs(dimension, expected):
+    from mc_observatory.run import MinecraftRunner
+    from mc_observatory.user_tasks import validate_task
+    task = next(task for task in definitions() if task["id"] == "nether_dev")
+    validate_task(task)
+    assert task["inventory"] == [] and task["time_limit_seconds"] == 10800
+    state = {"dimension": dimension}
+    class Session:
+        task_started = time.monotonic()
+        evaluator = LadderEvaluator()
+        async def state(self): return state
+    assert MinecraftRunner.achieved(task, Session.evaluator, state) is bool(expected)
+    assert await evaluate(type("Task", (), {"metadata": task}), Session()) == [float(expected)]
 
 
 def test_keycodes():

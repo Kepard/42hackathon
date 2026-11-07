@@ -33,7 +33,8 @@ TASK_SCHEMA = {
                 "description": "Total quantity; reset splits by Minecraft's item stack limit. Expanded inventory must fit 36 slots."}}}},
         "goal": {"oneOf": [
             {"type": "object", "additionalProperties": False, "required": [key], "properties": {key: spec}}
-            for key, spec in [("crafted", ITEM), ("item", ITEM), ("milestone", {"enum": list(LADDER)})]
+            for key, spec in [("crafted", ITEM), ("item", ITEM), ("milestone", {"enum": list(LADDER)}),
+                              ("dimension", {"enum": ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"]})]
         ]},
     },
 }

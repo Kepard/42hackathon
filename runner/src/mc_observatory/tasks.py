@@ -27,7 +27,8 @@ async def evaluate(task_cfg, session):
     state = await session.state()
     task = task_cfg.metadata
     goal = task["goal"]
-    achieved = (state.get("stats", {}).get("crafted", {}).get(goal["crafted"], 0) > 0 if "crafted" in goal else
+    achieved = (state.get("dimension") == goal["dimension"] if "dimension" in goal else
+                state.get("stats", {}).get("crafted", {}).get(goal["crafted"], 0) > 0 if "crafted" in goal else
                 goal["milestone"] in session.evaluator.result()["completed"]
                 if "milestone" in goal else session.evaluator.has_item(goal["item"]))
     within_limit = time.monotonic() - session.task_started <= task["time_limit_seconds"]

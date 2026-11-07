@@ -94,6 +94,8 @@ class MinecraftRunner:
     @staticmethod
     def achieved(task, evaluator, state):
         goal = task["goal"]
+        if "dimension" in goal:
+            return state.get("dimension") == goal["dimension"]
         return (state.get("stats", {}).get("crafted", {}).get(goal["crafted"], 0) > 0 if "crafted" in goal else
                 goal["milestone"] in evaluator.result()["completed"] if "milestone" in goal else
                 evaluator.has_item(goal["item"]))

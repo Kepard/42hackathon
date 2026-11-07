@@ -530,6 +530,13 @@ semantic guarantees. Internal reflex screenshots are recorded, not all sent to H
 The log milestone now requires inventory/pickup/crafting evidence, never mining alone;
 other rung scoring and the created-obsidian exception are unchanged.
 
+`nether_dev` is an explicitly dev-hinted, seed7941, empty-inventory Survival task.
+Its success condition is actual Nether dimension, independent of optional intermediate
+ladder rungs (which are still recorded). Set `max_steps=4000,time_budget=10800` in the
+backend start request for a full attempt; the task permits up to3h. It is not a fair
+held-out benchmark. Concurrent clients are not enabled; the single model/key allowance
+is shared, so run one full attempt at a time.
+
 Skills batch GUI clicks/typing and look/aim followed by movement. An observation
 barrier ends the turn after attacks/mining, closed-loop movement, or a move >0.5s.
 Later requested calls are **discarded**, recorded in `skipped_tool_calls`, and shown

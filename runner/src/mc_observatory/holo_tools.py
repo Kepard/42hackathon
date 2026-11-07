@@ -179,7 +179,7 @@ class ToolExecutor:
             await self.button(0, False)
         settled = changes(reference, await self.observe())
         center_progress = max(center_progress, settled["center_change"])
-        scene_changed |= settled["center_changed_fraction"] >= .7 and settled["center_change"] >= .08
+        scene_changed |= settled["frame_change"] >= .002
         self.failed_mining_frame = reference if seconds >= .35 and center_progress < .01 else None
         return "scene_changed" if scene_changed else "no_change"
 
@@ -364,8 +364,12 @@ class ToolExecutor:
                           hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
+        if call["name"] == "attack_until_broken":
+            result["scene_changed"] = outcome == "scene_changed"
         if self.jev is not None and outcome == "not_in_reach":
             result["next_action"] = "call seek(<target>) first"
+        if self.jev is not None and call["name"] == "attack_until_broken" and outcome in ("scene_changed", "no_change") and self.failed_mining_frame is not None:
+            result.update(mining_progress_pixel_cue=False, next_action="call seek(<target>) first")
         if call["name"] == "seek" and outcome == "stuck":
             result["next_action"] = "retreat or sidestep with reposition, then seek(<target>) again; or choose another target"
         if call["name"] == "collect" and self.jev is not None:

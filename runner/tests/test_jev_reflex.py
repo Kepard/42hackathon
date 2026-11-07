@@ -1,3 +1,4 @@
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,7 @@ from mc_observatory.holo import HoloAgent, HoloConfig
 from mc_observatory.holo_tools import ToolExecutor, tool_schemas, parse_calls, observation_prefix
 from mc_observatory.jev import JevVision
 from mc_observatory.jev_eval import PRICE_PER_INPUT_TOKEN, RESERVE_PER_CALL
+from mc_observatory.vision import image
 from test_holo import PixelClient, PNG, call, FakeAPI, response
 
 pytest.importorskip("typesafe_sdk")
@@ -173,6 +175,29 @@ async def test_failed_mining_at_close_face_reports_stuck_with_recovery(monkeypat
     assert "reposition" in result["next_action"]
     assert ex.jev.calls[0]["reason"] == "unchanged_mining_target_too_close"
     assert not any(a["action"] in ("mouse", "key") for a in ex.actions)
+
+
+@pytest.mark.parametrize("use_jev", [False, True])
+async def test_attack_footer_change_has_consistent_scene_feedback_but_no_target_progress(monkeypatch, use_jev):
+    from test_pixel_skills import png
+    before = png("black", (640,480))
+    footer = image(before)
+    footer.paste((255,255,255), (0,400,640,430))
+    buffer = io.BytesIO()
+    footer.save(buffer, format="PNG")
+    class Client(PixelClient):
+        async def screenshot(self):
+            return buffer.getvalue()
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()) if use_jev else None)
+    ex.begin_step(before)
+    result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": .35}}, "skills")
+    assert result["outcome"] == ("no_change" if use_jev else "scene_changed")
+    assert result["scene_changed"] is (not use_jev)
+    assert result["center_change"] == 0
+    if use_jev:
+        assert result["mining_progress_pixel_cue"] is False
+        assert result["next_action"] == "call seek(<target>) first"
 
 
 async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):

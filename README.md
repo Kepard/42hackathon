@@ -520,6 +520,9 @@ fit the next request's hard budget of three full frames plus crop (including fee
 Raw receives no computed feedback. Provider error bodies are traced, redacting credentials
 and limiting bodies to64KiB. HTTP429s retry twice with bounded backoff; model requests
 are spaced by2.05s in this process to respect the shared30RPM allowance.
+An individual API timeout is recorded as `api_error,api_timeout` and retries on the
+next observation; it does not terminate a long attempt. The overall run budget remains
+terminal. Failed requests never execute input actions.
 
 Closed-loop `approach_until_outline` checks thin rectangular dark edges and stops on
 an outline cue, two unchanged views, or timeout. `mine` releases on a refreshed vanilla

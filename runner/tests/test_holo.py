@@ -163,11 +163,18 @@ async def test_api_timeout_and_cost_budget(tmp_path):
     client = PixelClient()
 
     class SlowAPI:
-        async def complete(self, payload): await asyncio.sleep(1)
+        attempts = 0
+        async def complete(self, payload):
+            self.attempts += 1
+            if self.attempts == 1:
+                await asyncio.sleep(1)
+            return response([call(seconds=0)])
 
-    agent = HoloAgent(HoloConfig(api_timeout=.01), SlowAPI())
+    agent = HoloAgent(HoloConfig(max_steps=2, api_timeout=.01), SlowAPI())
     records = [r async for r in agent.steps(client, "Observe", tmp_path / "timeout")]
-    assert {"timeout", "api_error"} <= set(records[0]["failure_tags"])
+    assert {"api_timeout", "api_error"} <= set(records[0]["failure_tags"])
+    assert "timeout" not in records[0]["failure_tags"]
+    assert len(records) == 2 and records[1]["executed_actions"]
     agent = HoloAgent(HoloConfig(max_cost_usd=.000001), FakeAPI(client))
     records = [r async for r in agent.steps(client, "Observe", tmp_path / "cost")]
     assert "budget_exhausted" in records[0]["failure_tags"]

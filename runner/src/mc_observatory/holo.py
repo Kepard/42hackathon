@@ -302,7 +302,7 @@ class HoloAgent(BaseAgent):
                                 response = await self.api.complete(payload)
                                 record["api_errors"] = response.get("_api_errors", [])
                         except TimeoutError:
-                            record["failure_tags"] += ["api_error", "timeout"]
+                            record["failure_tags"] += ["api_error", "api_timeout"]
                             raise
                         except Exception:
                             record["failure_tags"].append("api_error")
@@ -343,9 +343,9 @@ class HoloAgent(BaseAgent):
                 except TimeoutError:
                     if api_start is not None:
                         record["api_errors"] = getattr(self.api, "last_errors", [])
-                    if "timeout" not in record["failure_tags"]:
+                    if "api_timeout" not in record["failure_tags"]:
                         record["failure_tags"].append("timeout")
-                    record["errors"].append("Step or API time budget exceeded")
+                    record["errors"].append("API request timed out; observe and retry next turn" if "api_timeout" in record["failure_tags"] else "Step time budget exceeded")
                 except Exception as error:
                     if isinstance(error, HoloAPIError):
                         record["api_errors"] = error.errors

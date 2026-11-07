@@ -7,6 +7,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+from .vision import changes
+
 
 FAILURES = {"not_close", "not_in_reach", "no_change", "no_progress_cue", "stuck", "timeout", "vision_error", "not_visible"}
 
@@ -44,7 +46,17 @@ def verdict(records, elapsed):
         calls = [{"name": call["name"], "arguments": {k:v for k,v in call.get("arguments",{}).items() if k!="intent"}}
                  for call in row.get("tool_calls",[]) if call.get("name")!="update_notes"]
         actions.append(json.dumps(calls,sort_keys=True) if calls else None)
-    unchanged = all(row.get("tool_results") and all(not result.get("scene_changed") for result in row["tool_results"]) for row in records[-6:])
+    signals=[]
+    for row in records[-6:]:
+        if row.get("tool_results"):
+            signals.append(any(result.get("scene_changed") for result in row["tool_results"]))
+        elif "judge_scene_changed" in row:
+            signals.append(row["judge_scene_changed"])
+        elif "scene_changed" in row:
+            signals.append(row["scene_changed"])
+        elif "frame_change" in row:
+            signals.append(row["frame_change"] >= .002)
+    unchanged = len(signals)>=5 and not any(signals)
     if len(actions)==6 and actions[0] and len(set(actions))==1 and unchanged:
         reason = reason or "identical_actions_without_scene_progress"
     if next_rung and elapsed-progressed > budget:
@@ -64,16 +76,34 @@ def read_records(path):
         try: rows.append(json.loads(line))
         except json.JSONDecodeError:
             if i!=len(lines)-1: raise
+    for row,following in zip(rows,rows[1:]):
+        if row.get("tool_results"): continue
+        before=frame_path(path.parent,row.get("screenshot_ref"))
+        after=frame_path(path.parent,following.get("screenshot_ref"))
+        if before is None or after is None: continue
+        try:
+            delta=changes(before.read_bytes(),after.read_bytes())
+            row["judge_scene_changed"]=delta["frame_change"]>=.002
+        except ValueError:
+            row["judge_scene_changed"]=True
+        except OSError:
+            pass
     return rows
+
+
+def frame_path(run_dir, ref):
+    if not isinstance(ref,str): return None
+    source=(run_dir/ref).resolve()
+    if source.is_relative_to(run_dir.resolve()) and source.suffix.lower() in (".png",".jpg",".jpeg") and source.is_file():
+        return source
+    return None
 
 
 def evidence(run_dir, records):
     saved=[]
     for row in records[-3:]:
-        ref=row.get("screenshot_ref")
-        if not isinstance(ref,str): continue
-        source=(run_dir/ref).resolve()
-        if not source.is_relative_to(run_dir.resolve()) or source.suffix.lower() not in (".png",".jpg",".jpeg") or not source.is_file(): continue
+        source=frame_path(run_dir,row.get("screenshot_ref"))
+        if source is None: continue
         folder=run_dir/"judge_evidence";folder.mkdir(exist_ok=True)
         destination=folder/f"step-{row.get('step')}{source.suffix}"
         shutil.copyfile(source,destination);saved.append(str(destination.relative_to(run_dir)))

@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from mc_observatory.judge import verdict,read_records,watch,evidence,agent_elapsed
 
@@ -43,6 +44,21 @@ def test_identical_actions_only_interrupt_when_not_changing_scene():
     assert verdict(rows,60)["reason"]=="identical_actions_without_scene_progress"
     rows[-1]["tool_results"][0]["scene_changed"]=True
     assert verdict(rows,60) is None
+
+
+@pytest.mark.parametrize("last",["black","white",None])
+def test_raw_identical_actions_use_saved_model_frames(tmp_path,last):
+    from PIL import Image
+    rows=[]
+    for i in range(6):
+        r=row(i);r["tool_results"]=[];r["screenshot_ref"]=f"{i}.png"
+        r["tool_calls"]=[{"name":"key_press","arguments":{"key":"w","ms":200,"intent":str(i)}}]
+        rows.append(r)
+        if i<5 or last is not None: Image.new("RGB",(16,16),last if i==5 else "black").save(tmp_path/f"{i}.png")
+    path=tmp_path/"steps.jsonl";path.write_text("\n".join(json.dumps(r) for r in rows))
+    decision=verdict(read_records(path),60)
+    assert bool(decision) is (last=="black")
+    if decision: assert decision["reason"]=="identical_actions_without_scene_progress"
 
 
 def test_partial_trace_tail_is_ignored(tmp_path):

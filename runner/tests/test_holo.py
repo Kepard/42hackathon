@@ -149,7 +149,10 @@ async def test_api_and_tool_failures(tmp_path, result, error, tag):
     assert "resume" not in client.events
 
 
-async def test_timeout_releases_controls(tmp_path):
+async def test_timeout_releases_controls(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from mc_observatory.holo_tools import ToolExecutor
+    monkeypatch.setattr(ToolExecutor, "approach_close", AsyncMock(return_value=True))
     client = PixelClient()
     api = FakeAPI(client, response([call("attack", seconds=10)]))
     agent = HoloAgent(HoloConfig(time_budget=.03, timing="freeze"), api)

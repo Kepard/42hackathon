@@ -16,6 +16,12 @@ from test_holo import PixelClient, PNG, call, FakeAPI, response
 pytest.importorskip("typesafe_sdk")
 
 
+@pytest.fixture(autouse=True)
+def isolate_hold_loop_from_close_approach(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(ToolExecutor, "approach_close", AsyncMock(return_value=True))
+
+
 class FakeJev:
     def __init__(self, p=.9, box=(.4, .3, .6, .7), error=None):
         self.p, self.box, self.error = p, box, error
@@ -41,7 +47,7 @@ def executor(fake):
 
 @pytest.mark.parametrize("p,box,outline,expected", [
     (.1, (.4,.3,.6,.7), True, "not_visible"),
-    (.9, (.4,.3,.6,.7), True, "in_reach"),
+    (.9, (.3,.3,.7,.7), True, "in_reach"),
     (.9, (.7,.3,.9,.7), True, "timeout"),
     (.9, (.4,.3,.6,.7), False, "timeout"),
 ])
@@ -68,7 +74,7 @@ async def test_seek_proportional_aim_is_clamped_and_does_not_walk_off_target(mon
 async def test_seek_aligns_before_walking_and_does_not_press_into_close_face(monkeypatch, box):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     ex = executor(FakeJev(box=box))
-    assert await ex.seek("oak log trunk", .01) == "timeout"
+    assert await ex.seek("oak log trunk", .01) == ("close_unconfirmed" if box == (.3,.3,.7,.7) else "timeout")
     assert not ex.jev.calls[0]["walking"]
     assert not any(a["action"] == "key" and a.get("pressed") for a in ex.actions)
 
@@ -106,7 +112,7 @@ async def test_error_stops_without_walking_and_logs_unknown_cost(monkeypatch):
 
 @pytest.mark.parametrize("p,box,outline,error,expected", [
     (.1, (.4,.3,.6,.7), False, None, "not_visible"),
-    (.9, (.4,.3,.6,.7), True, None, "in_reach"),
+    (.9, (.3,.3,.7,.7), True, None, "in_reach"),
     (.9, (.8,.8,1,1), False, None, "timeout"),
     (.9, (.4,.3,.6,.7), False, RuntimeError("failed"), "vision_error"),
 ])
@@ -141,7 +147,7 @@ async def test_seek_does_not_report_transient_outline_as_settled_reach(monkeypat
             self.captures += 1
             return first if self.captures == 1 else settled
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame, *args: frame == first)
-    ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
+    ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev(box=(.3,.3,.7,.7))))
     ex.begin_step(first)
     assert await ex.seek("oak log trunk", .01) == "timeout"
     assert ex.jev.calls[0]["reach_unconfirmed"]
@@ -335,7 +341,7 @@ async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhe
 
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(dark if overhead_outline else light)
-    ex.attack_until_broken = lambda _, *args: ToolExecutor.attack_until_broken(ex, 0)
+    ex.attack_until_broken = lambda _, **kwargs: ToolExecutor.attack_until_broken(ex, 0)
     result = await ex.execute({"name": "mine_up", "arguments": {"count": 1}}, "skills")
     assert result["outcome"] == (["no_change"] if overhead_outline else ["not_in_reach"])
     assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is overhead_outline
@@ -381,7 +387,7 @@ def test_jev_has_no_legacy_block_approach_and_prompt_uses_seek():
     assert "approach ->" not in text
     assert "aim_at" not in text and "look->move" not in text
     assert "trunk width >=85px" not in text
-    assert "Mining uses an outline or a short pixel-progress probe" in text
+    assert "mining checks close size before any outline/progress probe" in text
     with pytest.raises(ValueError):
         parse_calls({"tool_calls": [call("reposition", direction="forward", seconds=.1)]}, "skills", "jev")
 

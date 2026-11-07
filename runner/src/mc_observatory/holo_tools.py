@@ -6,7 +6,7 @@ import math
 import time
 
 from .session import KEYS, keycode
-from .vision import changes, outline, broken_caption, hotbar_change
+from .vision import changes, outline, outline_box, close_face, movement_danger, broken_caption, hotbar_change
 
 
 class InvalidToolArgs(ValueError):
@@ -54,8 +54,9 @@ SKILLS = {
     "toggle_debug": ("Tap F3 to toggle Minecraft's vanilla debug screen; read it only from screenshots.", {}),
     "aim_at": ("Aim at a full-screen point (0..1000) using FOV70 geometry, not game state. Approximate at steep pitch. Lower-right points warn about possible held-item confusion, not object identification. Check next frame.", XY),
     "set_pitch": ("Set pitch -90 up .. +90 down by clamping with mouse input, then rotating back. Reads no orientation state.", {"deg": number(-90, 90)}),
-    "mine_up": ("Look straight up, attempt count overhead blocks (up to 4 seconds each). Pixel-change heuristic only; verify drops visually.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
-    "attack_until_broken": ("Legacy full-duration attack. Prefer mine for closed-loop stopping. Returns scene_changed/no_change, NOT proof of break/pickup. Captures are saved; only representative frames fit the model image budget.", {"max_s": number(.35, 10)}),
+    "mine_up": ("Mine close overhead blocks, looking straight up; far faces return not_close without walking. Up to4s each; verify drops visually.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
+    "mine_down": ("Mine close blocks directly below; dangerous, inspect ground first. Far vertical faces return not_close without walking. Up to4s each.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
+    "attack_until_broken": ("Always walk right up to the block before mining (~1.5–2blocks, centred face width scaled by frame height). First take short forward steps up to4s; stuck/danger/uncertain target returns not_close. Then hold at most max_s. Scene change is NOT break/pickup proof.", {"max_s": number(.35, 10)}),
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
     "shift_click_at": ("Shift-click a GUI slot at normalized screenshot coordinates.", XY),
@@ -65,7 +66,7 @@ SKILLS = {
 
 
 JEV_SKILLS = {
-    "seek": ("Use fast TypeSafe Jev vision on the same overlay-free screenshots to seek a free-text block target. Proportional look/forward, selection-outline reach gate, visibility/stuck/timeout stops. No attack or privileged state. Fallible pixel/model cues; inspect the returned frame.", {"target": {"type": "string", "minLength": 1, "maxLength": 160}, "max_s": {**number(.2, 10), "default": 8}}),
+    "seek": ("Always walk right up to a block (~1.5–2blocks; face width scaled by frame height), not edge of reach. Fast TypeSafe Jev on the same screenshots aims/walks. Stops: in_reach(close+outline), close_unconfirmed(close; mining must probe), not_visible/stuck/danger/timeout. Never attacks; no privileged state.", {"target": {"type": "string", "minLength": 1, "maxLength": 160}, "max_s": {**number(.2, 10), "default": 8}}),
 }
 
 
@@ -77,7 +78,7 @@ def tool_schemas(tier, reflex="none"):
             vocabulary.pop(legacy)
         vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
         vocabulary["collect"] = ("Pick up visible drops AFTER mining, never use for block approach (call seek). Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
-        vocabulary["attack_until_broken"] = ("Hold attack steadily until max_s (logs ~3.3s by hand). If the selection outline is absent, first probe for0.6s and continue ONLY if target-centre pixels show mining progress; otherwise release and call seek again. Probe use/success is logged. Scene change is NOT proof of breaking or pickup. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
+        vocabulary["attack_until_broken"] = (SKILLS["attack_until_broken"][0] + " Close approach uses fast TypeSafe Jev on screenshots. ONLY once close, an absent outline permits a probe up to0.6s, bounded by max_s; continue ONLY on target-centre progress and release on break pixels. Probe use/success is logged. Otherwise seek first. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
              "parameters": {"type": "object", "properties": {**fields, "intent": {"type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence explaining why you are taking this action."}},
                             "required": [*[key for key, spec in fields.items() if "default" not in spec], "intent"], "additionalProperties": False}}}
@@ -128,7 +129,7 @@ def observation_prefix(calls, reflex="none"):
             call = parse_calls({"tool_calls": [raw]}, "skills", reflex)[0]
         except InvalidToolArgs:
             return calls[:index + 1], calls[index + 1:]
-        if call["name"] in {"seek", "attack", "mine", "attack_until_broken", "mine_up", "approach_until_outline", "collect"} or (
+        if call["name"] in {"seek", "attack", "mine", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "collect"} or (
                 call["name"] in ("move", "reposition") and call["arguments"]["seconds"] > .5):
             return calls[:index + 1], calls[index + 1:]
     return calls, []
@@ -141,6 +142,8 @@ class ToolExecutor:
         self.actions = []
         self.results, self.frames = [], []
         self.mining_probes = []
+        self.close_checks = []
+        self.seek_target = "block face under the crosshair"
         self.current_frame = None
         self.notes = ""
         self.unchanged_moves = 0
@@ -150,6 +153,7 @@ class ToolExecutor:
     def begin_step(self, png=None):
         self.actions, self.results, self.frames = [], [], []
         self.mining_probes = []
+        self.close_checks = []
         self.current_frame = png
 
     async def observe(self):
@@ -162,7 +166,10 @@ class ToolExecutor:
         await self.primitive("mouse", dx=0, dy=180 / .15)
         await self.primitive("mouse", dx=0, dy=(degrees - 90) / .15)
 
-    async def attack_until_broken(self, seconds):
+    async def attack_until_broken(self, seconds, walk=True):
+        if not await self.approach_close(walk=walk):
+            self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
+            return "not_close"
         reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
         probe = {"used": self.jev is not None and not outline(reference), "succeeded": None}
         self.mining_probes.append(probe)
@@ -214,6 +221,7 @@ class ToolExecutor:
         return "scene_changed" if scene_changed else "no_change"
 
     async def seek(self, target, seconds):
+        self.seek_target = target
         try:
             return await self._seek(target, seconds)
         finally:
@@ -229,6 +237,8 @@ class ToolExecutor:
             tick = time.monotonic()
             frame = await self.observe()
             try:
+                if movement_danger(frame):
+                    return "danger"
                 async with asyncio.timeout(max(.001, deadline - time.monotonic())):
                     decision = await self.jev.ask(frame, target)
             except TimeoutError:
@@ -247,13 +257,16 @@ class ToolExecutor:
             if previous_miss and centered and near_face:
                 decision.update(decision="stuck", reason="unchanged_mining_target_too_close")
                 return "stuck"
-            if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame, decision["box"]):
+            if not previous_miss and close_face(decision["box"], self.width, self.height) and outline(frame, decision["box"]):
                 await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
                 if outline(await self.observe(), decision["box"]):
                     decision["decision"] = "in_reach"
                     return "in_reach"
                 decision["reach_unconfirmed"] = True
                 continue
+            if not previous_miss and close_face(decision["box"], self.width, self.height):
+                decision.update(decision="close_unconfirmed", walking=False)
+                return "close_unconfirmed"
             focal = self.height / 2 / math.tan(math.radians(35))
             px, py = (x - .5) * (self.width - 1), (y - .5) * (self.height - 1)
             yaw = max(-12, min(12, .7 * math.degrees(math.atan2(px, focal))))
@@ -276,6 +289,46 @@ class ToolExecutor:
                 anchor, walking_since = None, None
             await asyncio.sleep(max(0, min(.2 - (time.monotonic() - tick), deadline - time.monotonic())))
         return "timeout"
+
+    async def approach_close(self, walk=True):
+        deadline, still = time.monotonic() + 4, 0
+        try:
+            while (remaining := deadline - time.monotonic()) > 0:
+                frame = await asyncio.wait_for(self.observe(), remaining)
+                danger = movement_danger(frame)
+                if danger:
+                    self.close_checks.append({"decision": "not_close", "reason": danger})
+                    return False
+                if self.jev is not None:
+                    decision = await asyncio.wait_for(self.jev.ask(frame, self.seek_target), max(.001, deadline - time.monotonic()))
+                    decision.update(decision="close_check", frame_index=len(self.frames) - 1)
+                    box = decision.get("box") if decision.get("noul", 0) >= self.visibility_threshold else None
+                else:
+                    box = outline_box(frame)
+                close = close_face(box, self.width, self.height)
+                check = {"box": box, "close": close, "decision": "close" if close else "approach"}
+                self.close_checks.append(check)
+                if close:
+                    return True
+                if not walk or box is None or not (box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3]):
+                    check.update(decision="not_close", reason="no_centred_close_face")
+                    return False
+                if deadline - time.monotonic() < .2:
+                    break
+                await self.key("w", True)
+                await self.primitive("wait", ms=200)
+                await self.key("w", False)
+                after = await self.observe()
+                still = still + .2 if changes(frame, after)["frame_change"] < .002 else 0
+                if still >= .8:
+                    check.update(decision="not_close", reason="stuck")
+                    return False
+        except Exception:
+            self.close_checks.append({"decision": "not_close", "reason": "vision_error"})
+        finally:
+            if "w" in self.held_keys:
+                await self.key("w", False)
+        return False
 
     async def reflex(self, name, seconds, sprint=False):
         reference = self.current_frame or await self.observe()
@@ -406,8 +459,10 @@ class ToolExecutor:
             result["scene_changed"] = outcome == "scene_changed"
         if len(self.mining_probes) > probe_start:
             result["mining_probes"] = self.mining_probes[probe_start:]
-        if self.jev is not None and outcome == "not_in_reach":
+        if outcome in ("not_in_reach", "not_close"):
             result["next_action"] = "call seek(<target>) first"
+        if self.close_checks:
+            result["close_checks"] = list(self.close_checks)
         if self.jev is not None and call["name"] == "attack_until_broken" and outcome in ("scene_changed", "no_change") and self.failed_mining_frame is not None:
             result.update(mining_progress_pixel_cue=False, next_action="call seek(<target>) first")
         if call["name"] == "seek" and outcome == "stuck":
@@ -430,6 +485,9 @@ class ToolExecutor:
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
+        if tier == "skills" and name in ("attack", "mine") and not await self.approach_close():
+            self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
+            return "not_close"
         if name in ("approach_until_outline", "mine", "collect"):
             return await self.reflex(name, args["max_s"], args.get("sprint", False))
         if name in ("key_down", "key_up"):
@@ -491,13 +549,14 @@ class ToolExecutor:
             await self.set_pitch(args["deg"])
         elif name == "attack_until_broken":
             return await self.attack_until_broken(args["max_s"])
-        elif name == "mine_up":
-            await self.set_pitch(-90)
-            if self.jev is None:
-                await self.observe()
+        elif name in ("mine_up", "mine_down"):
+            await self.set_pitch(-90 if name == "mine_up" else 90)
+            await self.observe()
             outcomes = []
             for _ in range(args["count"]):
-                outcomes.append(await self.attack_until_broken(4))
+                outcomes.append(await self.attack_until_broken(4, walk=False))
+                if outcomes[-1] == "not_close":
+                    return "not_close"
             return outcomes
         elif name == "update_notes":
             self.notes = args["text"]

@@ -196,7 +196,7 @@ TREE_GUIDANCE = """TREE: streaked brown bark, NOT speckled dirt -> approach -> c
 collect(max_s=0.8) -> confirm LOG icon/count. Leaf gone is progress, NOT a log.
 Reflex outline/break/hotbar pixel cues are fallible, not semantic guarantees. Get4 logs.
 No cracks: change ONE variable (closer/re-aim/pitch/strafe); don't blindly retreat from leaves."""
-JEV_REACH_GUIDANCE = "After seek centres a visible target, attempt mining. Mining uses an outline or a short pixel-progress probe. not_in_reach -> call seek again, NOT another attack or manual aim. No center change while mining means no visible progress; scene_changed alone is not cracking. Collect is only for drops after mining, not block approach. Avoid cliffs/lava; seek safe solid targets."
+JEV_REACH_GUIDANCE = "Always walk right up to the block before mining (~1.5–2blocks). Seek until close, then attack; mining checks close size before any outline/progress probe. Never back away merely to find an outline. not_close/not_in_reach -> seek(target) first, not another attack. No centre change means no progress; scene_changed alone is not cracking. Collect only drops. Avoid cliffs/lava."
 JEV_TREE_GUIDANCE = "TREE: seek('oak log trunk',max_s=8) -> attack_until_broken(max_s=4) -> collect(max_s=0.8,item='log') -> confirm LOG icon. Seek is the ONLY block approach tool. If leaves obstruct bark, seek('oak leaves'), attack_until_broken(max_s=0.6), then seek bark again. Leaf gone is progress, not a log. Scan with look when not_visible; reposition only to retreat/sidestep. Seek/collect use fast TypeSafe Jev on screenshots; mining uses outline/progress pixels and hotbar scores are advisory."
 
 PRIMER = """Minecraft Java Survival, screenshots and input tools only. Goal: {goal}
@@ -204,7 +204,8 @@ CHECK -> EXPLAIN -> ACT: intent names visible outcome, failure hypothesis, next 
 CURRENT pixels override old frames/notes. After milestones update_notes: inventory,
 completed subgoals, next waypoint. Don't recraft visible tools. Goal overrides route.
 
-REACH: visible black block selection outline confirms ~4.5-block reach; absence is ambiguous
+REACH: always walk right up to the block before mining (~1.5–2blocks).
+Visible black block selection outline confirms ~4.5-block reach, not close size; absence is ambiguous
 when edges are offscreen. Cracks appear within ~0.3s; swinging isn't progress.
 {reach_guidance}
 {tree_guidance}

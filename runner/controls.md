@@ -1,5 +1,7 @@
 # Vanilla1.20.4 input audit
 
+Skills mining always walks right up to the block first (~1.5–2blocks, face width180px at480px frame height, scaled at other resolutions). Jev uses the same screenshot Box/visibility proposals; non-Jev uses selection-face geometry. Short forward steps stop on unchanged views or lower-centre lava/blue drop/water pixel cues. These conservative heuristics are not safe pathfinding. Uncertain/stuck/dangerous approaches return `not_close` with a seek-first hint, without attacking/probing. Straight-up/down mining never walks. Missing outlines permit the bounded mining-progress probe only after close size is established. `seek` distinguishes close+outline (`in_reach`) from close without an outline (`close_unconfirmed`), which requires the mining probe. Never back away merely to find an outline.
+
 RAW and SKILLS (including Jev) expose the same low-level keyboard and mouse inputs.
 All inputs return pixels only, not game-state data. Prefer seek for block approach.
 

@@ -35,7 +35,13 @@ def changes(before, after):
 
 
 def outline(png, target_box=None):
+    return outline_box(png, target_box) is not None
+
+
+def outline_box(png, target_box=None):
     im = image(png)
+    if im.height > 480:
+        im = im.resize((round(im.width * 480 / im.height), 480))
     patch = center(im, 240, 200).convert("L")
     ridge = ImageChops.subtract(patch.filter(ImageFilter.MaxFilter(5)), patch)
     p, luminance = ridge.load(), patch.load()
@@ -81,8 +87,25 @@ def outline(png, target_box=None):
             strong = [sum(any(p[x, y] > 18 for x in range(max(0, edge - 3), min(patch.width, edge + 4)))
                           for y in range(top, bottom)) / (bottom - top) for edge in (left, right)]
             if min(hits, right_hits) / (bottom - top) >= required and (min(strong) >= required or max(strong) >= .95):
-                return True
-    return False
+                x0, y0 = (im.width - patch.width) // 2, (im.height - patch.height) // 2
+                return ((left + x0) / im.width, (top + y0) / im.height, (right + x0) / im.width, (bottom + y0) / im.height)
+    return None
+
+
+def close_face(box, width, height):
+    return box is not None and box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3] and (box[2] - box[0]) * width >= 180 * height / 480
+
+
+def movement_danger(png):
+    im = image(png)
+    patch = im.crop((int(im.width * .35), int(im.height * .62), int(im.width * .65), int(im.height * .78))).resize((30, 16))
+    r, g, b = patch.split()
+    pixels = list(zip(r.tobytes(), g.tobytes(), b.tobytes()))
+    if sum(r > 170 and 50 < g < 175 and b < 70 and r > 1.2 * g for r, g, b in pixels) / len(pixels) > .18:
+        return "lava_pixel_cue"
+    if sum(b > 110 and b > r * 1.15 and b > g * .9 for r, g, b in pixels) / len(pixels) > .5:
+        return "drop_or_water_pixel_cue"
+    return None
 
 
 _LETTERS = {

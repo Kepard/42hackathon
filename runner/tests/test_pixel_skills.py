@@ -13,6 +13,12 @@ from mc_observatory.vision import center_crop, changes
 from test_holo import FakeAPI, PixelClient, PNG, call, response
 
 
+@pytest.fixture(autouse=True)
+def isolate_hold_loop_from_close_approach(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(ToolExecutor, "approach_close", AsyncMock(return_value=True))
+
+
 def png(color, size=(854, 480)):
     out = io.BytesIO()
     Image.new("RGB", size, color).save(out, format="PNG")
@@ -240,7 +246,7 @@ async def test_mine_up_count_and_notes(monkeypatch):
     ex = ToolExecutor(PixelClient(), 854, 480)
     ex.begin_step(PNG)
     attempts = []
-    async def attack(seconds):
+    async def attack(seconds, walk=True):
         attempts.append(seconds)
         return "no_change"
     monkeypatch.setattr(ex, "attack_until_broken", attack)

@@ -54,3 +54,25 @@ async def test_alias_holds_release_only_after_last_name_and_taps_preserve_holds(
     await ex.key("left_ctrl",False)
     assert not ex.held_keys
     assert client.events == [("key",341,{"pressed":True}),("key",341,{"pressed":False})]
+
+
+async def test_freeze_restore_physically_represses_retained_aliased_keys():
+    class Client(PixelClient):
+        active = set()
+        async def key(self, code, **fields):
+            (self.active.add if fields["pressed"] else self.active.discard)(code)
+            await super().key(code, **fields)
+    client=Client();ex=ToolExecutor(client,640,480)
+    for key in ("w","ctrl","left_ctrl"): await ex.key(key,True)
+    await ex.release(retain=True)
+    assert not client.active and ex.held_keys=={"w","ctrl","left_ctrl"}
+    before=len(client.events)
+    await ex.restore()
+    assert client.active=={87,341}
+    assert len(client.events)-before==2
+    await ex.key("ctrl",False)
+    assert client.active=={87,341}
+    await ex.key("left_ctrl",False)
+    assert client.active=={87}
+    await ex.release()
+    assert not client.active and not ex.held_keys

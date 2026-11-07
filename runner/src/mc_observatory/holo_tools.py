@@ -428,8 +428,8 @@ class ToolExecutor:
                 self.held_keys, self.held_buttons = keys, buttons
 
     async def restore(self):
-        for key in self.held_keys.copy():
-            await self.key(key, True)
+        for key in {keycode(name): name for name in self.held_keys}.values():
+            await self.primitive("key", key=key, pressed=True)
         for button in self.held_buttons.copy():
             await self.button(button, True)
 

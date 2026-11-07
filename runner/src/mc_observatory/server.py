@@ -20,9 +20,11 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .client import MinecraftClient
+from .devin import mount_devin
 from .evaluator import LADDER
 from .holo import HoloAgent, HoloConfig, RunController, utcnow
 from .run import MinecraftRunner, task_definition
+from .user_tasks import definitions
 
 
 ROOT = Path(os.environ.get("OBS_RUNS_DIR", Path(__file__).resolve().parents[3] / "runs"))
@@ -250,7 +252,7 @@ class ObservatoryService:
             self.publish("run_status", {"id": run_id, "status": meta["status"]})
 
 
-def create_app(service=None):
+def create_app(service=None, devin_api=None):
     svc = service or ObservatoryService()
 
     @asynccontextmanager
@@ -273,6 +275,7 @@ def create_app(service=None):
 
     app = FastAPI(title="Minecraft Observatory", lifespan=lifespan)
     app.state.service = svc
+    mount_devin(app, svc, devin_api)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])
 
     @app.middleware("http")
@@ -284,7 +287,7 @@ def create_app(service=None):
     @app.get("/api/status")
     async def status():
         return {"connected": svc.connected, "active_run": svc.active, "phase": svc.phase, "overlay": svc.overlay,
-                "tasks": ["ladder", "get_log", "craft_planks", "craft_table"], "ladder": LADDER}
+                "tasks": ["ladder"] + [task["id"] for task in definitions(app.state.devin.user_file)], "ladder": LADDER}
 
     @app.get("/api/runs")
     async def list_runs(): return [svc.detail(p, False) for p in svc.directories()]
@@ -304,7 +307,7 @@ def create_app(service=None):
         if not svc.connected: raise HTTPException(503, "Minecraft mod is offline")
         if not os.environ.get("HCOMPANY_API_KEY"): raise HTTPException(503, "Server API key is not configured")
         try:
-            task_definition(spec.task)
+            task_definition(spec.task, app.state.devin.user_file)
             config = HoloConfig(**spec.model_dump(exclude={"task"}))
         except ValueError as error:
             raise HTTPException(422, str(error)) from error

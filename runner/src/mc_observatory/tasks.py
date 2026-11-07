@@ -1,12 +1,7 @@
-import json
 import time
-from importlib.resources import files
 
 import cua_bench as cb
-
-
-def definitions():
-    return json.loads(files("mc_observatory").joinpath("subtasks.json").read_text())
+from .user_tasks import definitions
 
 
 @cb.tasks_config(split="train")

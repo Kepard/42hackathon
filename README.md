@@ -4,6 +4,63 @@ Fabric 1.20.4 / Java 17 / Fabric API. Local experimental control endpoint and sc
 
 ## Run
 
+### On-demand Devin engineering
+
+The dashboard's Devin panel works on saved runs only. It does not participate in the
+gameplay loop or send interventions to the running agent. Configure the backend with
+`DEVIN_API_KEY` (v3 service key) and optionally `DEVIN_ORG_ID` (default
+`org-3c2e5fe738364ec3b7f653b263cedafd`). Credentials stay server-side. Restart the
+backend after installing the updated runner (`uv pip install -e 'runner[test]'`).
+
+- **Create Challenge:** describe a task; confirm that Devin may open a PR. The prompt
+  supplies the task schema and a real example, requires validation tests and targets
+  `github.com/Kepard/42hackathon`. **Add locally** independently validates the returned
+  task and saves it to `runs/user-tasks.json`, without changing packaged tasks. The
+  start-run selector refreshes immediately; the CLI and cua-bench tasks also load it.
+  Set `OBS_USER_TASKS_FILE` to override the path. Existing IDs cannot be overwritten.
+- **Investigate Run:** select a finished run in **Runs**, then click Investigate Run.
+  The backend uploads one zip containing summary, steps, interventions and up to 20
+  screenshots: first, last, then failure-tagged steps and their neighbors. Images
+  are capped at 25 MiB. A manifest records missing images and zero-based step numbers.
+  Model reasoning text is removed; declared intents, actions, outcomes and metrics
+  remain. The investigator receives no repo checkout and is instructed to use only
+  the bundle, with no gameplay, source inspection or PR creation. Evidence buttons
+  select the corresponding replay frame (UI step labels are one-based).
+- **Review Fix:** choose a suggested fix in an investigation and explicitly confirm
+  PR creation. A new session verifies it against the repo, adds an offline/mocked
+  regression test, and opens a PR. Neither PR workflow runs automatically.
+
+Sessions are limited to 5 ACUs, with session memory disabled. Status is polled every
+four seconds while the panel is open. Metadata and validated structured results are
+persisted in `runs/devin/<job-id>/job.json`; investigation zips stay alongside them.
+They survive browser/server restarts.
+Some v3 sessions return valid structured output while `waiting_for_user`; the panel
+treats that result as ready while retaining the actual remote status.
+Creation/upload failures are not retried
+automatically (a failed network response might still have created a remote session).
+The UI links directly to Devin for approval requests or manual follow-up.
+
+REST: `POST /api/devin/jobs` with `kind: challenge|investigate|review_fix`, optional
+`description`, `run_id`, `investigation_id` and zero-based `fix_index`;
+`GET /api/devin/jobs[?run_id=...]`; `GET /api/devin/jobs/{id}` polls and persists status;
+`POST /api/devin/jobs/{id}/add-task`; `GET /api/devin/task-schema`.
+All routes inherit the backend's local Host/origin restrictions.
+
+API contracts follow the documented v3 endpoints:
+[create](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions),
+[get](https://docs.devin.ai/api-reference/v3/sessions/get-organizations-session),
+[messages](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions-messages),
+[attachments](https://docs.devin.ai/api-reference/v3/attachments/post-organizations-attachments).
+The adapter uses multipart field `file`, returned `url` in `attachment_urls`, and
+Draft-7 `structured_output_schema` / `structured_output_required` on session creation.
+
+Offline checks: `runner/.venv/bin/pytest runner/tests -m 'not live' -q` and
+`cd dashboard && npm run build`. Explicit live verification (reuses a saved
+investigation if present; never triggers either PR workflow):
+`cd dashboard && DEVIN_LIVE=1 node tests/devin-live.mjs`. Screenshots/results go under
+the ignored `spike/ui/` directory. Use a trusted loopback workspace, not a public
+unauthenticated deployment.
+
 ```sh
 cd ~/repos/mc-observatory/mod
 DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 ./gradlew runClient

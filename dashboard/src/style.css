@@ -10,6 +10,38 @@
   font-synthesis: none;
   font-size: 14px;
 }
+.devin-job {
+  border-top: 1px solid #34445a;
+  padding-top: 18px;
+  margin-top: 22px;
+  overflow-wrap: anywhere;
+}
+.devin-job a {
+  color: #52ddba;
+}
+.devin-prose {
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+.devin-evidence {
+  padding-left: 22px;
+}
+.devin-evidence li {
+  margin: 12px 0;
+  line-height: 1.6;
+}
+.devin-evidence button {
+  white-space: nowrap;
+}
+.devin-fix {
+  border-left: 2px solid #52ddba;
+  padding: 8px 16px;
+  margin: 15px 0;
+}
+.devin-panel pre {
+  max-height: 360px;
+  overflow: auto;
+}
 * {
   box-sizing: border-box;
 }

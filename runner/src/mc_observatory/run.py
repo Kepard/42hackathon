@@ -8,12 +8,12 @@ import os
 import time
 import uuid
 from dataclasses import asdict
-from importlib.resources import files
 from pathlib import Path
 
 from .client import MinecraftClient
 from .evaluator import LadderEvaluator
 from .holo import HoloAPI, HoloAgent, HoloConfig, RunController, utcnow
+from .user_tasks import definitions
 
 
 class FailureDetector:
@@ -60,12 +60,11 @@ class FailureDetector:
         return tags
 
 
-def task_definition(task_id):
+def task_definition(task_id, user_file=None):
     if task_id == "ladder":
         return {"id": "ladder", "description": "Complete these Survival milestones in order: log, crafting table, wooden pickaxe, cobblestone, stone pickaxe, furnace, iron ore, iron ingot, kill a hostile mob, flint and steel, obsidian, light or enter a Nether portal, enter the Nether.",
                 "seed": 12345, "inventory": [], "goal": {"milestone": "enter_nether"}}
-    definitions = json.loads(files("mc_observatory").joinpath("subtasks.json").read_text())
-    for task in definitions:
+    for task in definitions(user_file):
         if task["id"] == task_id:
             return task
     raise ValueError(f"Unknown task {task_id}")

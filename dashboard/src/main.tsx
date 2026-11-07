@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import DevinPanel from "./DevinPanel";
 import "./style.css";
 
 type Call = { name: string; arguments: Record<string, unknown> };
@@ -377,6 +378,12 @@ function App() {
   const [active, setActive] = useState<string | null>(null),
     [phase, setPhase] = useState("IDLE");
   const [runActive, setRunActive] = useState(false);
+  const [availableTasks, setAvailableTasks] = useState([
+    "get_log",
+    "craft_planks",
+    "craft_table",
+    "ladder",
+  ]);
   const [overlay, setOverlay] = useState<Overlay>({});
   const [viewer, setViewer] = useState<string>(),
     [model, setModel] = useState<string>(),
@@ -405,6 +412,13 @@ function App() {
     max_cost_usd: "",
   });
   const refresh = () => {
+    api<{ tasks: string[] }>("/status")
+      .then((data) =>
+        setAvailableTasks(
+          data.tasks ?? ["get_log", "craft_planks", "craft_table", "ladder"],
+        ),
+      )
+      .catch((e) => setError(e.message));
     api<Run[]>("/runs")
       .then(setRuns)
       .catch((e) => setError(e.message));
@@ -465,7 +479,10 @@ function App() {
           setSummary(data);
           refresh();
         }
-        if (type === "error") { setError(data.message); setRunActive(false); }
+        if (type === "error") {
+          setError(data.message);
+          setRunActive(false);
+        }
         if (type === "run_status") {
           setRunActive(data.status === "running");
           setActive(data.id);
@@ -759,13 +776,11 @@ function App() {
                     value={form.task}
                     onChange={(e) => setForm({ ...form, task: e.target.value })}
                   >
-                    {["get_log", "craft_planks", "craft_table", "ladder"].map(
-                      (t) => (
-                        <option key={t} value={t}>
-                          {title(t)}
-                        </option>
-                      ),
-                    )}
+                    {availableTasks.map((t) => (
+                      <option key={t} value={t}>
+                        {title(t)}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label>
@@ -866,18 +881,7 @@ function App() {
                 </p>
                 <button disabled>Connect microphone</button>
               </section>
-              <section className="panel placeholder">
-                <span className="tag">COMING NEXT</span>
-                <h3>Devin engineering copilot</h3>
-                <p>
-                  Turn observations into better tasks and better infrastructure.
-                </p>
-                <div className="button-row">
-                  <button disabled>Create Challenge</button>
-                  <button disabled>Investigate Run</button>
-                  <button disabled>Review Fix</button>
-                </div>
-              </section>
+              <DevinPanel runId={active} onTaskAdded={refresh} />
             </div>
           </>
         )}
@@ -1030,6 +1034,21 @@ function App() {
                   )}
                 </section>
                 <Metrics steps={replay.steps} summary={replay.summary} />
+                <DevinPanel
+                  runId={replay.id}
+                  onTaskAdded={refresh}
+                  onStep={(step) => {
+                    const index = replay.steps.findIndex(
+                      (s) => s.step === step,
+                    );
+                    if (index >= 0) {
+                      setReplayIndex(index);
+                      document
+                        .querySelector(".replay")
+                        ?.scrollIntoView({ behavior: "smooth" });
+                    }
+                  }}
+                />
                 <div className="content-grid">
                   <Timeline steps={replay.steps} />
                   <Ladder steps={replay.steps} summary={replay.summary} />

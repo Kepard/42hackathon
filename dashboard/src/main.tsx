@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  MotionConfig,
+} from "motion/react";
 import { createRoot } from "react-dom/client";
 import DevinPanel from "./DevinPanel";
+import "cal-sans";
 import "./style.css";
+import { Collapse, ease, Panel, rise, stagger, Ticker } from "./ui";
 
 type Call = { name: string; arguments: Record<string, unknown> };
 type Step = {
@@ -150,8 +158,16 @@ function Frame({
         markers &&
         (points.length ? (
           points.map((c, i) => (
-            <span
-              key={i}
+            <motion.span
+              key={`${record?.step}-${i}`}
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{
+                type: "spring",
+                stiffness: 500,
+                damping: 24,
+                delay: i * 0.06,
+              }}
               className="marker click"
               title={`${c.arguments.x}, ${c.arguments.y}`}
               style={{
@@ -160,7 +176,7 @@ function Frame({
               }}
             >
               {i + 1}
-            </span>
+            </motion.span>
           ))
         ) : (
           <span className="marker aim" title="World aim · image center">
@@ -179,7 +195,7 @@ function Latency({ steps }: { steps: Step[] }) {
     )
     .join(" ");
   return (
-    <section className="panel chart">
+    <Panel className="panel chart">
       <div className="section-head">
         <h3>API response time</h3>
         <span>per step · milliseconds</span>
@@ -196,40 +212,56 @@ function Latency({ steps }: { steps: Step[] }) {
               x2="580"
               y1={115 - v * 90}
               y2={115 - v * 90}
-              stroke="#253345"
+              className="grid-line"
             />
-            <text x="0" y={119 - v * 90} fill="#8393a8" fontSize="10">
+            <text x="0" y={119 - v * 90} className="axis" fontSize="10">
               {Math.round(v * max)}
             </text>
           </g>
         ))}
-        <polyline points={pts} fill="none" stroke="#52ddba" strokeWidth="2.5" />
+        {steps.length > 1 && (
+          <polygon className="series-area" points={`40,115 ${pts} 580,115`} />
+        )}
+        <motion.polyline
+          points={pts}
+          fill="none"
+          className="series"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          initial={{ pathLength: 0 }}
+          animate={{ pathLength: 1 }}
+          transition={{ duration: 0.9, ease }}
+        />
         {steps.map((s, i) => (
-          <circle
+          <motion.circle
             key={s.step}
-            cx={40 + (i * 540) / Math.max(1, steps.length - 1)}
-            cy={115 - (s.api_latency_ms / max) * 90}
-            r="3"
-            fill="#52ddba"
+            className="point"
+            initial={{ r: 0 }}
+            animate={{
+              r: 3,
+              cx: 40 + (i * 540) / Math.max(1, steps.length - 1),
+              cy: 115 - (s.api_latency_ms / max) * 90,
+            }}
+            transition={{ duration: 0.35, ease }}
           >
             <title>
               Step {s.step + 1}: {num(s.api_latency_ms)} ms
             </title>
-          </circle>
+          </motion.circle>
         ))}
-        <text x="40" y="140" fill="#8393a8" fontSize="10">
+        <text x="40" y="140" className="axis" fontSize="10">
           Step 1
         </text>
-        <text x="530" y="140" fill="#8393a8" fontSize="10">
+        <text x="530" y="140" className="axis" fontSize="10">
           Step {steps.length}
         </text>
       </svg>
-    </section>
+    </Panel>
   );
 }
 function Timeline({ steps }: { steps: Step[] }) {
   return (
-    <section className="panel">
+    <Panel className="panel">
       <div className="section-head">
         <h3>Decision timeline</h3>
         <span>{steps.length} recorded steps</span>
@@ -241,49 +273,59 @@ function Timeline({ steps }: { steps: Step[] }) {
             and cost.
           </p>
         )}
-        {[...steps].reverse().map((s) => (
-          <details className="step" key={s.step}>
-            <summary>
-              <span className="step-index">
-                {String(s.step + 1).padStart(2, "0")}
-              </span>
-              <span className="step-intent">
-                {s.intent.join(" / ") || "No tool call"}
-                <small>
-                  {s.tool_calls.map((c) => c.name).join(" → ") ||
-                    s.errors.join(" · ")}
-                </small>
-              </span>
-              <span className="step-time">{num(s.api_latency_ms)} ms</span>
-              <span className="chevron">⌄</span>
-            </summary>
-            <div className="step-detail">
-              <div className="tags">
-                {s.failure_tags.map((t) => (
-                  <span className="tag danger" key={t}>
-                    {t}
-                  </span>
+        <AnimatePresence initial={false}>
+          {[...steps].reverse().map((s) => (
+            <motion.details
+              className="step"
+              key={s.step}
+              layout="position"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, ease }}
+            >
+              <summary>
+                <span className="step-index">
+                  {String(s.step + 1).padStart(2, "0")}
+                </span>
+                <span className="step-intent">
+                  {s.intent.join(" / ") || "No tool call"}
+                  <small>
+                    {s.tool_calls.map((c) => c.name).join(" → ") ||
+                      s.errors.join(" · ")}
+                  </small>
+                </span>
+                <span className="step-time">{num(s.api_latency_ms)} ms</span>
+                <span className="chevron">⌄</span>
+              </summary>
+              <div className="step-detail">
+                <div className="tags">
+                  {s.failure_tags.map((t) => (
+                    <span className="tag danger" key={t}>
+                      {t}
+                    </span>
+                  ))}
+                </div>
+                <p>
+                  Input {num(s.tokens.in)} · cached {num(s.tokens.cached)} ·
+                  output {num(s.tokens.out)} · reasoning{" "}
+                  {num(s.tokens.reasoning)} · {usd(s.cost_usd)} · action{" "}
+                  {num(s.action_duration_ms)} ms
+                </p>
+                <h4>Tool calls</h4>
+                <pre>{JSON.stringify(s.tool_calls, null, 2)}</pre>
+                <h4>Executed inputs</h4>
+                <pre>{JSON.stringify(s.executed_actions, null, 2)}</pre>
+                {s.errors.map((e, i) => (
+                  <p className="error" key={i}>
+                    {e}
+                  </p>
                 ))}
               </div>
-              <p>
-                Input {num(s.tokens.in)} · cached {num(s.tokens.cached)} ·
-                output {num(s.tokens.out)} · reasoning {num(s.tokens.reasoning)}{" "}
-                · {usd(s.cost_usd)} · action {num(s.action_duration_ms)} ms
-              </p>
-              <h4>Tool calls</h4>
-              <pre>{JSON.stringify(s.tool_calls, null, 2)}</pre>
-              <h4>Executed inputs</h4>
-              <pre>{JSON.stringify(s.executed_actions, null, 2)}</pre>
-              {s.errors.map((e, i) => (
-                <p className="error" key={i}>
-                  {e}
-                </p>
-              ))}
-            </div>
-          </details>
-        ))}
+            </motion.details>
+          ))}
+        </AnimatePresence>
       </div>
-    </section>
+    </Panel>
   );
 }
 function Metrics({
@@ -322,15 +364,15 @@ function Metrics({
     ],
   ];
   return (
-    <div className="metrics">
+    <motion.div className="metrics" variants={stagger}>
       {cards.map(([label, value, sub]) => (
-        <div className="metric" key={label}>
+        <motion.div className="metric" key={label} variants={rise}>
           <span>{label}</span>
-          <strong>{value}</strong>
+          <Ticker value={value} />
           <small>{sub}</small>
-        </div>
+        </motion.div>
       ))}
-    </div>
+    </motion.div>
   );
 }
 function Ladder({
@@ -344,7 +386,7 @@ function Ladder({
     steps.at(-1)?.evaluator?.completed ??
     Object.keys(summary?.milestones ?? {});
   return (
-    <section className="panel">
+    <Panel className="panel">
       <div className="section-head">
         <h3>The Survival ladder</h3>
         <span>{completed.length}/13</span>
@@ -360,9 +402,15 @@ function Ladder({
               className={`rung ${completed.includes(r) ? "done" : i === completed.length ? "next" : ""}`}
               key={r}
             >
-              <span className="rung-dot">
+              <motion.span
+                className="rung-dot"
+                key={completed.includes(r) ? "done" : "todo"}
+                initial={completed.includes(r) ? { scale: 0.4 } : false}
+                animate={{ scale: 1 }}
+                transition={{ type: "spring", stiffness: 420, damping: 18 }}
+              >
                 {completed.includes(r) ? "✓" : i + 1}
-              </span>
+              </motion.span>
               <span>{title(r)}</span>
               <small>
                 {time == null
@@ -375,41 +423,131 @@ function Ladder({
           );
         })}
       </div>
-    </section>
+    </Panel>
   );
 }
 function BenchmarkComparison({ board }: { board: Board[] }) {
-  const [left, setLeft] = useState("baseline"), [right, setRight] = useState("after-fix");
-  const labels = [...new Set(["baseline", "after-fix", ...board.map(b => b.label)])];
+  const [left, setLeft] = useState("baseline"),
+    [right, setRight] = useState("after-fix");
+  const labels = [
+    ...new Set(["baseline", "after-fix", ...board.map((b) => b.label)]),
+  ];
   const setups = new Map<string, Board[]>();
-  for (const row of board.filter(b => b.label === left || b.label === right)) {
+  for (const row of board.filter(
+    (b) => b.label === left || b.label === right,
+  )) {
     const key = JSON.stringify([row.task, row.model, row.tier, row.timing]);
     setups.set(key, [...(setups.get(key) || []), row]);
   }
   function cell(row?: Board) {
-    return row ? <>
-      <strong>{row.success_rate == null ? "—" : `${num(row.success_rate * 100, 1)}% success`}</strong>
-      <small>n={row.runs} · {row.valid_runs} eligible · {row.infrastructure_failures} infrastructure failures</small>
-      <small>Median success time {row.median_time_seconds == null ? "—" : `${num(row.median_time_seconds, 1)}s`} · steps {row.median_steps ?? "—"}</small>
-      <small>{usd(row.cost_per_run)} / run · p50 API {row.p50_api_latency_ms == null ? "—" : `${num(row.p50_api_latency_ms)}ms`}</small>
-      <small>{Object.entries(row.failure_counts).slice(0, 3).map(([tag, n]) => `${tag} ×${n}`).join(" · ") || "No failure tags"}</small>
-    </> : <span className="muted">No trials for this label yet</span>;
+    return row ? (
+      <>
+        <strong>
+          {row.success_rate == null
+            ? "—"
+            : `${num(row.success_rate * 100, 1)}% success`}
+        </strong>
+        <small>
+          n={row.runs} · {row.valid_runs} eligible ·{" "}
+          {row.infrastructure_failures} infrastructure failures
+        </small>
+        <small>
+          Median success time{" "}
+          {row.median_time_seconds == null
+            ? "—"
+            : `${num(row.median_time_seconds, 1)}s`}{" "}
+          · steps {row.median_steps ?? "—"}
+        </small>
+        <small>
+          {usd(row.cost_per_run)} / run · p50 API{" "}
+          {row.p50_api_latency_ms == null
+            ? "—"
+            : `${num(row.p50_api_latency_ms)}ms`}
+        </small>
+        <small>
+          {Object.entries(row.failure_counts)
+            .slice(0, 3)
+            .map(([tag, n]) => `${tag} ×${n}`)
+            .join(" · ") || "No failure tags"}
+        </small>
+      </>
+    ) : (
+      <span className="muted">No trials for this label yet</span>
+    );
   }
-  return <section className="panel" aria-label="Matched benchmark comparison">
-    <div className="section-head"><h3>Baseline vs after-fix</h3><span>identical setups side by side</span></div>
-    <div className="table-scroll"><table><thead><tr><th>Task / model / tier / timing</th>
-      <th><select aria-label="First benchmark label" value={left} onChange={e => setLeft(e.target.value)}>{labels.map(l => <option key={l}>{l}</option>)}</select></th>
-      <th><select aria-label="Second benchmark label" value={right} onChange={e => setRight(e.target.value)}>{labels.map(l => <option key={l}>{l}</option>)}</select></th>
-    </tr></thead><tbody>{[...setups.entries()].map(([key, rows]) => <tr key={key}>
-      <td><strong>{title(rows[0].task)}</strong><small>{rows[0].model} · {rows[0].tier} · {rows[0].timing}</small></td>
-      <td>{cell(rows.find(r => r.label === left))}</td><td>{cell(rows.find(r => r.label === right))}</td>
-    </tr>)}</tbody></table></div>
-    {!setups.size && <p className="muted">Run a labelled benchmark to populate the comparison.</p>}
-  </section>;
+  return (
+    <Panel className="panel" aria-label="Matched benchmark comparison">
+      <div className="section-head">
+        <h3>Baseline vs after-fix</h3>
+        <span>identical setups side by side</span>
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Task / model / tier / timing</th>
+              <th>
+                <select
+                  aria-label="First benchmark label"
+                  value={left}
+                  onChange={(e) => setLeft(e.target.value)}
+                >
+                  {labels.map((l) => (
+                    <option key={l}>{l}</option>
+                  ))}
+                </select>
+              </th>
+              <th>
+                <select
+                  aria-label="Second benchmark label"
+                  value={right}
+                  onChange={(e) => setRight(e.target.value)}
+                >
+                  {labels.map((l) => (
+                    <option key={l}>{l}</option>
+                  ))}
+                </select>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...setups.entries()].map(([key, rows]) => (
+              <tr key={key}>
+                <td>
+                  <strong>{title(rows[0].task)}</strong>
+                  <small>
+                    {rows[0].model} · {rows[0].tier} · {rows[0].timing}
+                  </small>
+                </td>
+                <td>{cell(rows.find((r) => r.label === left))}</td>
+                <td>{cell(rows.find((r) => r.label === right))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!setups.size && (
+        <p className="muted">
+          Run a labelled benchmark to populate the comparison.
+        </p>
+      )}
+    </Panel>
+  );
 }
 
 function App() {
   const [page, setPage] = useState("Live");
+  const [theme, setTheme] = useState(() =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    try {
+      localStorage.setItem("observatory-theme", theme);
+    } catch {
+      // Storage may be blocked; the theme still applies for this session.
+    }
+  }, [theme]);
   const [connected, setConnected] = useState(false),
     [wsConnected, setWsConnected] = useState(false);
   const [active, setActive] = useState<string | null>(null),
@@ -597,589 +735,695 @@ function App() {
   const current = steps.find((s) => s.step === modelStep);
   const replayStep = replay?.steps[replayIndex];
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
-          <span className="brand-symbol">◈</span>
-          <span>
-            OBSERVATORY<small>MINECRAFT · AGENT LAB</small>
-          </span>
-        </a>
-        <p className="nav-label">WORKSPACE</p>
-        <nav>
-          {["Live", "Runs", "Leaderboard"].map((p, i) => (
-            <button
-              className={page === p ? "active" : ""}
-              key={p}
-              onClick={() => {
-                setPage(p);
-                refresh();
-              }}
-            >
-              <span>{["◉", "▤", "▥"][i]}</span>
-              {p}
-              {p === "Live" && <i className={running ? "pulse" : ""} />}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <span
-            className={`connection-dot ${connected && wsConnected ? "online" : ""}`}
-          />
-          {connected && wsConnected
-            ? "Minecraft connected"
-            : "Connection pending"}
-          <small>
-            Local client · 640 × 480
-            <br />
-            Pixels in. Actions out.
-          </small>
-        </div>
-      </aside>
-      <main>
-        <header>
-          <div>
-            <p className="eyebrow">MINECRAFT AGENT OBSERVATORY</p>
-            <h1>
-              {page === "Live"
-                ? "A window into the agent’s world"
-                : page === "Runs"
-                  ? "Every run, every decision"
-                  : "From trials to evidence"}
-            </h1>
-            <p className="subtitle">
-              {page === "Live"
-                ? "Watch the model think, act and make progress."
-                : page === "Runs"
-                  ? "Replay exact model observations and inspect the actions behind them."
-                  : "Compare outcomes by model, tool tier and task. Smoke trials are not controlled rankings."}
-            </p>
-          </div>
-          <span className="status-pill">
-            <span className="connection-dot online" />
-            {page === "Live" ? (overlay.badges ?? phase) : "LOCAL WORKSPACE"}
-          </span>
-        </header>
-        {error && (
-          <div className="error-banner" role="alert">
-            {error}
-            <button onClick={() => setError("")}>Dismiss</button>
-          </div>
-        )}
-        {page === "Live" && (
-          <>
-            <div className="live-grid">
-              <section className="panel viewer">
-                <div className="section-head">
-                  <h3>
-                    <span className="live-dot" />
-                    Live world
-                  </h3>
-                  <span>VIEWER · JPEG · ~5 FPS</span>
-                </div>
-                <Frame src={viewer} label="Spectator view · includes overlay" />
-                <div className="viewer-caption">
-                  <span className="tag">{form.model}</span>
-                  <span>
-                    {overlay.objective ?? "Ready for a new objective"}
-                  </span>
-                </div>
-              </section>
-              <section className="panel model">
-                <div className="section-head">
-                  <h3>Model’s view</h3>
-                  <span>EXACT API INPUT</span>
-                </div>
-                <Frame
-                  src={model}
-                  record={current}
-                  markers
-                  label="Model observation · overlay excluded"
-                />
-                <div className="intent">
-                  <span className="eyebrow">
-                    DECLARED INTENT{" "}
-                    {modelStep >= 0 ? `· STEP ${modelStep + 1}` : ""}
-                  </span>
-                  <p>
-                    {current?.intent.join(" / ") ||
-                      overlay.intent ||
-                      "The agent will explain each action here."}
-                  </p>
-                  <small>
-                    Cross = world aim. Numbered circles = GUI clicks. No
-                    evaluator feedback reaches the model.
-                  </small>
-                </div>
-              </section>
-            </div>
-            <Metrics steps={steps} summary={summary} />
-            <div className="content-grid">
-              <div>
-                <Latency steps={steps} />
-                <Timeline steps={steps} />
-                <section className="panel">
-                  <div className="section-head">
-                    <h3>Interventions</h3>
-                    <span>timestamped · source attributed</span>
-                  </div>
-                  {interventions.length ? (
-                    interventions.map((v, i) => (
-                      <div className="intervention" key={i}>
-                        <time>
-                          {new Date(v.timestamp).toLocaleTimeString()}
-                        </time>
-                        <span className="tag">{v.source}</span>
-                        <strong>{title(v.action)}</strong>
-                        <span>{v.text}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="muted">
-                      No interventions. The agent is working independently.
-                    </p>
-                  )}
-                </section>
-              </div>
-              <div>
-                <Ladder steps={steps} summary={summary} />
-                <section className="panel controls">
-                  <div className="section-head">
-                    <h3>Run controls</h3>
-                    <span>between steps</span>
-                  </div>
-                  <div className="button-row">
-                    <button
-                      disabled={!running}
-                      onClick={() => control("pause")}
-                    >
-                      Ⅱ Pause
-                    </button>
-                    <button
-                      disabled={!running}
-                      onClick={() => control("resume")}
-                    >
-                      ▷ Resume
-                    </button>
-                    <button
-                      className="stop"
-                      disabled={!running}
-                      onClick={() => control("stop")}
-                    >
-                      □ Stop
-                    </button>
-                  </div>
-                  <label>
-                    Change objective{" "}
-                    <small>Scoring target stays unchanged</small>
-                    <textarea
-                      value={goal}
-                      onChange={(e) => {
-                        setGoal(e.target.value);
-                        setConfirmation(null);
-                      }}
-                      placeholder="Give the model a new instruction…"
-                    />
-                  </label>
-                  <button
-                    disabled={!running || !goal.trim()}
-                    onClick={() => control("set_goal")}
-                  >
-                    Review new goal →
-                  </button>
-                  {confirmation && (
-                    <div className="confirm">
-                      <strong>Confirm objective change</strong>
-                      <p>{confirmation.text}</p>
-                      <button onClick={confirmGoal}>Confirm & apply</button>
-                      <button onClick={() => setConfirmation(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                </section>
-              </div>
-            </div>
-            <section className="panel start-panel">
-              <div className="section-head">
-                <h3>Launch a new run</h3>
-                <span>one active run at a time</span>
-              </div>
-              <form onSubmit={start}>
-                <label>
-                  Task
-                  <select
-                    aria-label="Task"
-                    value={form.task}
-                    onChange={(e) => setForm({ ...form, task: e.target.value })}
-                  >
-                    {availableTasks.map((t) => (
-                      <option key={t} value={t}>
-                        {title(t)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Model
-                  <input
-                    aria-label="Model"
-                    value={form.model}
-                    onChange={(e) =>
-                      setForm({ ...form, model: e.target.value })
-                    }
-                    list="models"
-                  />
-                  <datalist id="models">
-                    <option value="holo4-27b" />
-                    <option value="holo4-35b-a3b" />
-                  </datalist>
-                </label>
-                <label>
-                  Tool tier
-                  <select
-                    aria-label="Tool tier"
-                    value={form.tier}
-                    onChange={(e) => setForm({ ...form, tier: e.target.value })}
-                  >
-                    <option>skills</option>
-                    <option>raw</option>
-                  </select>
-                </label>
-                <label>
-                  Timing
-                  <select
-                    aria-label="Timing"
-                    value={form.timing}
-                    onChange={(e) =>
-                      setForm({ ...form, timing: e.target.value })
-                    }
-                  >
-                    <option>freeze</option>
-                    <option>realtime</option>
-                  </select>
-                </label>
-                <label>
-                  Step limit
-                  <input
-                    aria-label="Step limit"
-                    type="number"
-                    min="1"
-                    max="10000"
-                    value={form.max_steps}
-                    onChange={(e) =>
-                      setForm({ ...form, max_steps: Number(e.target.value) })
-                    }
-                  />
-                </label>
-                <label>
-                  Seconds
-                  <input
-                    aria-label="Seconds"
-                    type="number"
-                    min="1"
-                    max="10800"
-                    value={form.time_budget}
-                    onChange={(e) =>
-                      setForm({ ...form, time_budget: Number(e.target.value) })
-                    }
-                  />
-                </label>
-                <label>
-                  Cost cap ($)
-                  <input
-                    aria-label="Cost cap"
-                    type="number"
-                    min="0.0001"
-                    step="0.01"
-                    placeholder="Optional"
-                    value={form.max_cost_usd}
-                    onChange={(e) =>
-                      setForm({ ...form, max_cost_usd: e.target.value })
-                    }
-                  />
-                </label>
-                <button
-                  className="primary"
-                  disabled={busy || running || !connected}
-                  type="submit"
+    <MotionConfig reducedMotion="user">
+      <div className="app">
+        <aside className="sidebar">
+          <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
+            <span className="brand-symbol" aria-hidden />
+            <span>
+              Observatory<small>Minecraft agent lab</small>
+            </span>
+          </a>
+          <p className="nav-label">Workspace</p>
+          <LayoutGroup>
+            <nav>
+              {["Live", "Runs", "Leaderboard"].map((p, i) => (
+                <motion.button
+                  className={page === p ? "active" : ""}
+                  key={p}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => {
+                    setPage(p);
+                    refresh();
+                  }}
                 >
-                  {busy ? "Starting…" : "Start run ↗"}
-                </button>
-              </form>
-            </section>
-            <div className="integrations">
-              <section className="panel placeholder">
-                <span className="tag">COMING NEXT</span>
-                <h3>Voice · Gladia</h3>
-                <p>
-                  Speak an intervention. Live transcription and confirmation
-                  will appear here.
-                </p>
-                <button disabled>Connect microphone</button>
-              </section>
-              <DevinPanel runId={active} onTaskAdded={refresh} />
+                  {page === p && (
+                    <motion.span
+                      className="nav-active"
+                      layoutId="nav-active"
+                      transition={{
+                        type: "spring",
+                        stiffness: 500,
+                        damping: 38,
+                      }}
+                    />
+                  )}
+                  <span className="nav-icon" aria-hidden>
+                    {["◉", "▤", "▥"][i]}
+                  </span>
+                  <span>{p}</span>
+                  {p === "Live" && <i className={running ? "pulse" : ""} />}
+                </motion.button>
+              ))}
+            </nav>
+          </LayoutGroup>
+          <div className="sidebar-bottom">
+            <div className="sidebar-status">
+              <span
+                className={`connection-dot ${connected && wsConnected ? "online" : ""}`}
+              />
+              {connected && wsConnected
+                ? "Minecraft connected"
+                : "Connection pending"}
+              <small>
+                Local client · 640 × 480
+                <br />
+                Pixels in. Actions out.
+              </small>
             </div>
-          </>
-        )}
-        {page === "Runs" && (
-          <>
-            <section className="panel">
-              <div className="section-head">
-                <h3>Run archive</h3>
-                <span>{runs.length} runs · select to replay</span>
-              </div>
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Run</th>
-                      <th>Model / tier</th>
-                      <th>Task</th>
-                      <th>Outcome</th>
-                      <th>Score</th>
-                      <th>Cost</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {runs.map((r) => (
-                      <tr key={r.id}>
-                        <td>
-                          <code>{r.id}</code>
-                        </td>
-                        <td>
-                          {r.summary?.config.model ?? r.metadata.model}
-                          <small>
-                            {r.summary?.config.tier ?? r.metadata.tier}
-                          </small>
-                        </td>
-                        <td>
-                          {title(
-                            r.summary?.task ?? r.metadata.task ?? "unknown",
-                          )}
-                        </td>
-                        <td>
-                          <span
-                            className={`tag ${r.summary?.success ? "success" : ""}`}
-                          >
-                            {r.summary
-                              ? r.summary.success
-                                ? "SUCCESS"
-                                : "NOT REACHED"
-                              : r.status.toUpperCase()}
-                          </span>
-                        </td>
-                        <td>{num((r.summary?.score ?? 0) * 100, 1)}%</td>
-                        <td>{usd(r.summary?.total_cost_usd)}</td>
-                        <td>
-                          <button onClick={() => selectRun(r.id)}>
-                            Replay →
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {runs.length === 0 && (
-                  <p className="muted">
-                    No runs yet. Start a trial on the Live page.
-                  </p>
-                )}
-              </div>
-            </section>
-            {replay && (
-              <>
-                <section className="panel replay">
-                  <div className="section-head">
-                    <h3>Replay · {replay.id}</h3>
-                    <span>{replay.steps.length} observations</span>
-                  </div>
-                  {replayStep ? (
-                    <>
-                      <div className="replay-grid">
-                        <Frame
-                          src={`/api/runs/${replay.id}/screenshots/${replayStep.step}`}
-                          record={replayStep}
-                          markers
-                          label={`Exact model frame · step ${replayStep.step + 1}`}
-                        />
-                        <div>
-                          <span className="eyebrow">DECLARED INTENT</span>
-                          <h2>
-                            {replayStep.intent.join(" / ") || "No tool call"}
-                          </h2>
-                          <p>
-                            {num(replayStep.api_latency_ms)} ms ·{" "}
-                            {usd(replayStep.cost_usd)}
-                          </p>
-                          <pre>
-                            {JSON.stringify(replayStep.tool_calls, null, 2)}
-                          </pre>
-                          <h4>Executed inputs</h4>
-                          <pre>
-                            {JSON.stringify(
-                              replayStep.executed_actions,
-                              null,
-                              2,
-                            )}
-                          </pre>
-                          <div className="tags">
-                            {replayStep.failure_tags.map((t) => (
-                              <span className="tag danger" key={t}>
-                                {t}
-                              </span>
-                            ))}
-                          </div>
-                          {replayStep.errors.map((e, i) => (
-                            <p className="error" key={i}>
-                              {e}
-                            </p>
-                          ))}
-                        </div>
+            <button
+              className="theme-toggle"
+              aria-label="Toggle dark mode"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              <span>{theme === "dark" ? "Dark" : "Light"} theme</span>
+              <span aria-hidden>{theme === "dark" ? "☾" : "☀"}</span>
+            </button>
+          </div>
+        </aside>
+        <main>
+          <header>
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={page}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.25, ease }}
+              >
+                <p className="eyebrow">Minecraft agent observatory</p>
+                <h1>
+                  {page === "Live"
+                    ? "A window into the agent’s world"
+                    : page === "Runs"
+                      ? "Every run, every decision"
+                      : "From trials to evidence"}
+                </h1>
+                <p className="subtitle">
+                  {page === "Live"
+                    ? "Watch the model think, act and make progress."
+                    : page === "Runs"
+                      ? "Replay exact model observations and inspect the actions behind them."
+                      : "Compare outcomes by model, tool tier and task. Smoke trials are not controlled rankings."}
+                </p>
+              </motion.div>
+            </AnimatePresence>
+            <span className="status-pill">
+              <span className="connection-dot online" />
+              {page === "Live" ? (overlay.badges ?? phase) : "LOCAL WORKSPACE"}
+            </span>
+          </header>
+          <Collapse show={!!error}>
+            <div className="error-banner" role="alert">
+              {error}
+              <button onClick={() => setError("")}>Dismiss</button>
+            </div>
+          </Collapse>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={page}
+              variants={stagger}
+              initial="hidden"
+              animate="show"
+              exit={{ opacity: 0, y: -8, transition: { duration: 0.15 } }}
+            >
+              {page === "Live" && (
+                <>
+                  <div className="live-grid">
+                    <Panel className="panel viewer">
+                      <div className="section-head">
+                        <h3>
+                          <span className="live-dot" />
+                          Live world
+                        </h3>
+                        <span>VIEWER · JPEG · ~5 FPS</span>
                       </div>
-                      <div className="playback">
+                      <Frame
+                        src={viewer}
+                        label="Spectator view · includes overlay"
+                      />
+                      <div className="viewer-caption">
+                        <span className="tag">{form.model}</span>
+                        <span>
+                          {overlay.objective ?? "Ready for a new objective"}
+                        </span>
+                      </div>
+                    </Panel>
+                    <Panel className="panel model">
+                      <div className="section-head">
+                        <h3>Model’s view</h3>
+                        <span>EXACT API INPUT</span>
+                      </div>
+                      <Frame
+                        src={model}
+                        record={current}
+                        markers
+                        label="Model observation · overlay excluded"
+                      />
+                      <div className="intent">
+                        <span className="eyebrow">
+                          Declared intent{" "}
+                          {modelStep >= 0 ? `· step ${modelStep + 1}` : ""}
+                        </span>
+                        <p>
+                          {current?.intent.join(" / ") ||
+                            overlay.intent ||
+                            "The agent will explain each action here."}
+                        </p>
+                        <small>
+                          Cross = world aim. Numbered circles = GUI clicks. No
+                          evaluator feedback reaches the model.
+                        </small>
+                      </div>
+                    </Panel>
+                  </div>
+                  <Metrics steps={steps} summary={summary} />
+                  <div className="content-grid">
+                    <div>
+                      <Latency steps={steps} />
+                      <Timeline steps={steps} />
+                      <Panel className="panel">
+                        <div className="section-head">
+                          <h3>Interventions</h3>
+                          <span>timestamped · source attributed</span>
+                        </div>
+                        {interventions.length ? (
+                          interventions.map((v, i) => (
+                            <div className="intervention" key={i}>
+                              <time>
+                                {new Date(v.timestamp).toLocaleTimeString()}
+                              </time>
+                              <span className="tag">{v.source}</span>
+                              <strong>{title(v.action)}</strong>
+                              <span>{v.text}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="muted">
+                            No interventions. The agent is working
+                            independently.
+                          </p>
+                        )}
+                      </Panel>
+                    </div>
+                    <div>
+                      <Ladder steps={steps} summary={summary} />
+                      <Panel className="panel controls">
+                        <div className="section-head">
+                          <h3>Run controls</h3>
+                          <span>between steps</span>
+                        </div>
+                        <div className="button-row">
+                          <button
+                            disabled={!running}
+                            onClick={() => control("pause")}
+                          >
+                            Ⅱ Pause
+                          </button>
+                          <button
+                            disabled={!running}
+                            onClick={() => control("resume")}
+                          >
+                            ▷ Resume
+                          </button>
+                          <button
+                            className="stop"
+                            disabled={!running}
+                            onClick={() => control("stop")}
+                          >
+                            □ Stop
+                          </button>
+                        </div>
+                        <label>
+                          Change objective{" "}
+                          <small>Scoring target stays unchanged</small>
+                          <textarea
+                            value={goal}
+                            onChange={(e) => {
+                              setGoal(e.target.value);
+                              setConfirmation(null);
+                            }}
+                            placeholder="Give the model a new instruction…"
+                          />
+                        </label>
                         <button
-                          disabled={replayIndex === 0}
-                          onClick={() => setReplayIndex((i) => i - 1)}
+                          disabled={!running || !goal.trim()}
+                          onClick={() => control("set_goal")}
                         >
-                          ← Previous
+                          Review new goal →
                         </button>
-                        <input
-                          aria-label="Replay step"
-                          type="range"
-                          min="0"
-                          max={replay.steps.length - 1}
-                          value={replayIndex}
+                        <Collapse show={!!confirmation}>
+                          {confirmation && (
+                            <div className="confirm">
+                              <strong>Confirm objective change</strong>
+                              <p>{confirmation.text}</p>
+                              <button onClick={confirmGoal}>
+                                Confirm & apply
+                              </button>
+                              <button onClick={() => setConfirmation(null)}>
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </Collapse>
+                      </Panel>
+                    </div>
+                  </div>
+                  <Panel className="panel start-panel">
+                    <div className="section-head">
+                      <h3>Launch a new run</h3>
+                      <span>one active run at a time</span>
+                    </div>
+                    <form onSubmit={start}>
+                      <label>
+                        Task
+                        <select
+                          aria-label="Task"
+                          value={form.task}
                           onChange={(e) =>
-                            setReplayIndex(Number(e.target.value))
+                            setForm({ ...form, task: e.target.value })
+                          }
+                        >
+                          {availableTasks.map((t) => (
+                            <option key={t} value={t}>
+                              {title(t)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Model
+                        <input
+                          aria-label="Model"
+                          value={form.model}
+                          onChange={(e) =>
+                            setForm({ ...form, model: e.target.value })
+                          }
+                          list="models"
+                        />
+                        <datalist id="models">
+                          <option value="holo4-27b" />
+                          <option value="holo4-35b-a3b" />
+                        </datalist>
+                      </label>
+                      <label>
+                        Tool tier
+                        <select
+                          aria-label="Tool tier"
+                          value={form.tier}
+                          onChange={(e) =>
+                            setForm({ ...form, tier: e.target.value })
+                          }
+                        >
+                          <option>skills</option>
+                          <option>raw</option>
+                        </select>
+                      </label>
+                      <label>
+                        Timing
+                        <select
+                          aria-label="Timing"
+                          value={form.timing}
+                          onChange={(e) =>
+                            setForm({ ...form, timing: e.target.value })
+                          }
+                        >
+                          <option>freeze</option>
+                          <option>realtime</option>
+                        </select>
+                      </label>
+                      <label>
+                        Step limit
+                        <input
+                          aria-label="Step limit"
+                          type="number"
+                          min="1"
+                          max="10000"
+                          value={form.max_steps}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              max_steps: Number(e.target.value),
+                            })
                           }
                         />
-                        <span>
-                          Step {replayIndex + 1} / {replay.steps.length}
-                        </span>
-                        <button
-                          disabled={replayIndex === replay.steps.length - 1}
-                          onClick={() => setReplayIndex((i) => i + 1)}
-                        >
-                          Next →
-                        </button>
+                      </label>
+                      <label>
+                        Seconds
+                        <input
+                          aria-label="Seconds"
+                          type="number"
+                          min="1"
+                          max="10800"
+                          value={form.time_budget}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              time_budget: Number(e.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Cost cap ($)
+                        <input
+                          aria-label="Cost cap"
+                          type="number"
+                          min="0.0001"
+                          step="0.01"
+                          placeholder="Optional"
+                          value={form.max_cost_usd}
+                          onChange={(e) =>
+                            setForm({ ...form, max_cost_usd: e.target.value })
+                          }
+                        />
+                      </label>
+                      <motion.button
+                        className="primary"
+                        disabled={busy || running || !connected}
+                        type="submit"
+                        whileTap={{ scale: 0.97 }}
+                      >
+                        {busy ? "Starting…" : "Start run ↗"}
+                      </motion.button>
+                    </form>
+                  </Panel>
+                  <div className="integrations">
+                    <Panel className="panel placeholder">
+                      <span className="tag">COMING NEXT</span>
+                      <h3>Voice · Gladia</h3>
+                      <p>
+                        Speak an intervention. Live transcription and
+                        confirmation will appear here.
+                      </p>
+                      <button disabled>Connect microphone</button>
+                    </Panel>
+                    <DevinPanel runId={active} onTaskAdded={refresh} />
+                  </div>
+                </>
+              )}
+              {page === "Runs" && (
+                <>
+                  <Panel className="panel">
+                    <div className="section-head">
+                      <h3>Run archive</h3>
+                      <span>{runs.length} runs · select to replay</span>
+                    </div>
+                    <div className="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Run</th>
+                            <th>Model / tier</th>
+                            <th>Task</th>
+                            <th>Outcome</th>
+                            <th>Score</th>
+                            <th>Cost</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {runs.map((r) => (
+                            <tr key={r.id}>
+                              <td>
+                                <code>{r.id}</code>
+                              </td>
+                              <td>
+                                {r.summary?.config.model ?? r.metadata.model}
+                                <small>
+                                  {r.summary?.config.tier ?? r.metadata.tier}
+                                </small>
+                              </td>
+                              <td>
+                                {title(
+                                  r.summary?.task ??
+                                    r.metadata.task ??
+                                    "unknown",
+                                )}
+                              </td>
+                              <td>
+                                <span
+                                  className={`tag ${r.summary?.success ? "success" : ""}`}
+                                >
+                                  {r.summary
+                                    ? r.summary.success
+                                      ? "SUCCESS"
+                                      : "NOT REACHED"
+                                    : r.status.toUpperCase()}
+                                </span>
+                              </td>
+                              <td>{num((r.summary?.score ?? 0) * 100, 1)}%</td>
+                              <td>{usd(r.summary?.total_cost_usd)}</td>
+                              <td>
+                                <button onClick={() => selectRun(r.id)}>
+                                  Replay →
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {runs.length === 0 && (
+                        <p className="muted">
+                          No runs yet. Start a trial on the Live page.
+                        </p>
+                      )}
+                    </div>
+                  </Panel>
+                  {replay && (
+                    <>
+                      <Panel className="panel replay">
+                        <div className="section-head">
+                          <h3>Replay · {replay.id}</h3>
+                          <span>{replay.steps.length} observations</span>
+                        </div>
+                        {replayStep ? (
+                          <>
+                            <div className="replay-grid">
+                              <Frame
+                                src={`/api/runs/${replay.id}/screenshots/${replayStep.step}`}
+                                record={replayStep}
+                                markers
+                                label={`Exact model frame · step ${replayStep.step + 1}`}
+                              />
+                              <div>
+                                <span className="eyebrow">Declared intent</span>
+                                <motion.h2
+                                  key={replayStep.step}
+                                  initial={{ opacity: 0, y: 6 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ duration: 0.25, ease }}
+                                >
+                                  {replayStep.intent.join(" / ") ||
+                                    "No tool call"}
+                                </motion.h2>
+                                <p>
+                                  {num(replayStep.api_latency_ms)} ms ·{" "}
+                                  {usd(replayStep.cost_usd)}
+                                </p>
+                                <pre>
+                                  {JSON.stringify(
+                                    replayStep.tool_calls,
+                                    null,
+                                    2,
+                                  )}
+                                </pre>
+                                <h4>Executed inputs</h4>
+                                <pre>
+                                  {JSON.stringify(
+                                    replayStep.executed_actions,
+                                    null,
+                                    2,
+                                  )}
+                                </pre>
+                                <div className="tags">
+                                  {replayStep.failure_tags.map((t) => (
+                                    <span className="tag danger" key={t}>
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                                {replayStep.errors.map((e, i) => (
+                                  <p className="error" key={i}>
+                                    {e}
+                                  </p>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="playback">
+                              <button
+                                disabled={replayIndex === 0}
+                                onClick={() => setReplayIndex((i) => i - 1)}
+                              >
+                                ← Previous
+                              </button>
+                              <input
+                                aria-label="Replay step"
+                                type="range"
+                                min="0"
+                                max={replay.steps.length - 1}
+                                value={replayIndex}
+                                onChange={(e) =>
+                                  setReplayIndex(Number(e.target.value))
+                                }
+                              />
+                              <span>
+                                Step {replayIndex + 1} / {replay.steps.length}
+                              </span>
+                              <button
+                                disabled={
+                                  replayIndex === replay.steps.length - 1
+                                }
+                                onClick={() => setReplayIndex((i) => i + 1)}
+                              >
+                                Next →
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="muted">
+                            No completed steps in this run.
+                          </p>
+                        )}
+                      </Panel>
+                      <Metrics steps={replay.steps} summary={replay.summary} />
+                      <DevinPanel
+                        runId={replay.id}
+                        onTaskAdded={refresh}
+                        onStep={(step) => {
+                          const index = replay.steps.findIndex(
+                            (s) => s.step === step,
+                          );
+                          if (index >= 0) {
+                            setReplayIndex(index);
+                            document
+                              .querySelector(".replay")
+                              ?.scrollIntoView({ behavior: "smooth" });
+                          }
+                        }}
+                      />
+                      <div className="content-grid">
+                        <Timeline steps={replay.steps} />
+                        <Ladder steps={replay.steps} summary={replay.summary} />
                       </div>
                     </>
-                  ) : (
-                    <p className="muted">No completed steps in this run.</p>
                   )}
-                </section>
-                <Metrics steps={replay.steps} summary={replay.summary} />
-                <DevinPanel
-                  runId={replay.id}
-                  onTaskAdded={refresh}
-                  onStep={(step) => {
-                    const index = replay.steps.findIndex(
-                      (s) => s.step === step,
-                    );
-                    if (index >= 0) {
-                      setReplayIndex(index);
-                      document
-                        .querySelector(".replay")
-                        ?.scrollIntoView({ behavior: "smooth" });
-                    }
-                  }}
-                />
-                <div className="content-grid">
-                  <Timeline steps={replay.steps} />
-                  <Ladder steps={replay.steps} summary={replay.summary} />
-                </div>
-              </>
-            )}
-          </>
-        )}
-        {page === "Leaderboard" && (
-          <>
-            <BenchmarkComparison board={board} />
-            <div className="board-intro">
-              <span className="tag">STATE-VERIFIED OUTCOMES</span>
-              <p>
-                Matched task × model × tier × timing, with labels adjacent for baseline / after-fix comparison.
-                Time is median successful-trial time; steps include unsuccessful trials. Infrastructure failures are excluded from success rate and medians, not hidden from n or cost.
-              </p>
-            </div>
-            <section className="panel">
-              <div className="section-head">
-                <h3>Trial results</h3>
-                <span>{board.length} configurations</span>
-              </div>
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Model / tier</th>
-                      <th>Task</th>
-                      <th>Timing / label</th>
-                      <th>Runs</th>
-                      <th>Success rate</th>
-                      <th>Median time / steps</th>
-                      <th>p50 API latency</th>
-                      <th>Cost / run</th>
-                      <th>Infrastructure failures</th>
-                      <th>Failure tags</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {board.map((b, i) => (
-                      <tr key={i}>
-                        <td>
-                          <strong>{b.model}</strong>
-                          <small>{b.tier}</small>
-                        </td>
-                        <td>{title(b.task)}</td>
-                        <td><strong>{b.label}</strong><small>{b.timing}</small></td>
-                        <td>{b.runs}<small>{b.valid_runs} eligible</small></td>
-                        <td>
-                          <div className="rate">
-                            <span
-                              style={{ width: `${(b.success_rate ?? 0) * 100}%` }}
-                            />
-                          </div>
-                          {b.success_rate == null ? "—" : `${num(b.success_rate * 100, 1)}%`}
-                        </td>
-                        <td>{b.median_time_seconds == null ? "—" : `${num(b.median_time_seconds, 1)}s`} / {b.median_steps == null ? "—" : num(b.median_steps, 1)}</td>
-                        <td>
-                          {b.p50_api_latency_ms == null ? "—" : `${num(b.p50_api_latency_ms)} ms`}
-                        </td>
-                        <td>{usd(b.cost_per_run)}</td>
-                        <td>
-                          {b.infrastructure_failures}
-                        </td>
-                        <td>
-                          {Object.entries(b.failure_counts).slice(0, 4).map(([t, n]) => (
-                            <small className="failure-count" key={t}>
-                              {t} ×{n}
-                            </small>
+                </>
+              )}
+              {page === "Leaderboard" && (
+                <>
+                  <BenchmarkComparison board={board} />
+                  <motion.div className="board-intro" variants={rise}>
+                    <span className="tag">STATE-VERIFIED OUTCOMES</span>
+                    <p>
+                      Matched task × model × tier × timing, with labels adjacent
+                      for baseline / after-fix comparison. Time is median
+                      successful-trial time; steps include unsuccessful trials.
+                      Infrastructure failures are excluded from success rate and
+                      medians, not hidden from n or cost.
+                    </p>
+                  </motion.div>
+                  <Panel className="panel">
+                    <div className="section-head">
+                      <h3>Trial results</h3>
+                      <span>{board.length} configurations</span>
+                    </div>
+                    <div className="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Model / tier</th>
+                            <th>Task</th>
+                            <th>Timing / label</th>
+                            <th>Runs</th>
+                            <th>Success rate</th>
+                            <th>Median time / steps</th>
+                            <th>p50 API latency</th>
+                            <th>Cost / run</th>
+                            <th>Infrastructure failures</th>
+                            <th>Failure tags</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {board.map((b, i) => (
+                            <tr key={i}>
+                              <td>
+                                <strong>{b.model}</strong>
+                                <small>{b.tier}</small>
+                              </td>
+                              <td>{title(b.task)}</td>
+                              <td>
+                                <strong>{b.label}</strong>
+                                <small>{b.timing}</small>
+                              </td>
+                              <td>
+                                {b.runs}
+                                <small>{b.valid_runs} eligible</small>
+                              </td>
+                              <td>
+                                <div className="rate">
+                                  <motion.span
+                                    initial={{ width: 0 }}
+                                    animate={{
+                                      width: `${(b.success_rate ?? 0) * 100}%`,
+                                    }}
+                                    transition={{ duration: 0.7, ease }}
+                                  />
+                                </div>
+                                {b.success_rate == null
+                                  ? "—"
+                                  : `${num(b.success_rate * 100, 1)}%`}
+                              </td>
+                              <td>
+                                {b.median_time_seconds == null
+                                  ? "—"
+                                  : `${num(b.median_time_seconds, 1)}s`}{" "}
+                                /{" "}
+                                {b.median_steps == null
+                                  ? "—"
+                                  : num(b.median_steps, 1)}
+                              </td>
+                              <td>
+                                {b.p50_api_latency_ms == null
+                                  ? "—"
+                                  : `${num(b.p50_api_latency_ms)} ms`}
+                              </td>
+                              <td>{usd(b.cost_per_run)}</td>
+                              <td>{b.infrastructure_failures}</td>
+                              <td>
+                                {Object.entries(b.failure_counts)
+                                  .slice(0, 4)
+                                  .map(([t, n]) => (
+                                    <small className="failure-count" key={t}>
+                                      {t} ×{n}
+                                    </small>
+                                  ))}
+                              </td>
+                            </tr>
                           ))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {board.length === 0 && (
-                  <p className="muted">
-                    Finish a run to populate the leaderboard.
-                  </p>
-                )}
-              </div>
-            </section>
-          </>
-        )}
-        <footer>
-          OBSERVATORY{" "}
-          <span>
-            Local Minecraft Java · screenshot-only agents · privileged scoring
-            stays server-side
-          </span>
-        </footer>
-      </main>
-    </div>
+                        </tbody>
+                      </table>
+                      {board.length === 0 && (
+                        <p className="muted">
+                          Finish a run to populate the leaderboard.
+                        </p>
+                      )}
+                    </div>
+                  </Panel>
+                </>
+              )}
+            </motion.div>
+          </AnimatePresence>
+          <footer>
+            Observatory{" "}
+            <span>
+              Local Minecraft Java · screenshot-only agents · privileged scoring
+              stays server-side
+            </span>
+          </footer>
+        </main>
+      </div>
+    </MotionConfig>
   );
 }
 

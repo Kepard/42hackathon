@@ -171,7 +171,7 @@ public class Observatory implements ClientModInitializer {
     private static volatile Reset reset;
     private int readyTicks;
     private static double cursorX, cursorY;
-    private static boolean syntheticShift;
+    private static final SyntheticKeys syntheticKeys = new SyntheticKeys();
 
     private record Capture(WebSocket socket, JsonElement id, AtomicBoolean done) {}
     private record PortalAttempt(ServerWorld world, BlockPos position, UUID player) {}
@@ -191,7 +191,7 @@ public class Observatory implements ClientModInitializer {
         MinecraftClient mc = MinecraftClient.getInstance();
         return syntheticMouse.cursorLocked(physical, mc.world != null && mc.currentScreen == null && reset == null);
     }
-    public static boolean isShiftHeld() { return syntheticShift; }
+    public static boolean isKeyHeld(int code) { return syntheticKeys.held(code); }
     public static void touchPortal(ServerPlayerEntity player) {
         if (reset == null && player.getServer() == MinecraftClient.getInstance().getServer()) portalTouched = true;
     }
@@ -496,15 +496,15 @@ public class Observatory implements ClientModInitializer {
     }
 
     private static void setKey(int code, boolean pressed) {
-        if (code == GLFW.GLFW_KEY_LEFT_SHIFT || code == GLFW.GLFW_KEY_RIGHT_SHIFT) syntheticShift = pressed;
+        syntheticKeys.set(code, pressed);
         MinecraftClient mc = MinecraftClient.getInstance();
         mc.keyboard.onKey(mc.getWindow().getHandle(), code, GLFW.glfwGetKeyScancode(code),
-                pressed ? GLFW.GLFW_PRESS : GLFW.GLFW_RELEASE, 0);
+                pressed ? GLFW.GLFW_PRESS : GLFW.GLFW_RELEASE, syntheticKeys.modifiers());
     }
 
     private static void releaseInputs() {
         syntheticMouse.release();
-        syntheticShift = false;
+        syntheticKeys.clear();
         MinecraftClient mc = MinecraftClient.getInstance(); KeyBinding.unpressAll();
         if (mc.currentScreen != null) for (int button : guiButtons) mc.currentScreen.mouseReleased(cursorX, cursorY, button);
         guiButtons.clear();
@@ -598,17 +598,19 @@ public class Observatory implements ClientModInitializer {
                     int code = request.get("code").getAsInt(); boolean pressed = !request.has("pressed") || request.get("pressed").getAsBoolean();
                     long ms = request.has("duration_ms") ? request.get("duration_ms").getAsLong() : -1;
                     if (ms < -1 || ms > 60000) throw new IllegalArgumentException("duration_ms must be 0..60000");
-                    if (code == GLFW.GLFW_KEY_LEFT_SHIFT || code == GLFW.GLFW_KEY_RIGHT_SHIFT) syntheticShift = pressed;
-                    if (mc.currentScreen != null) {
-                        if (pressed) mc.currentScreen.keyPressed(code, GLFW.glfwGetKeyScancode(code), 0);
-                        else mc.currentScreen.keyReleased(code, GLFW.glfwGetKeyScancode(code), 0);
-                    } else { setKey(code, pressed); }
+                    setKey(code, pressed);
                     releases.remove(code);
                     if (pressed && ms >= 0) releases.put(code, System.nanoTime() + ms * 1_000_000L);
                 }
                 case "mouse" -> {
                     if (paused || reset != null) { result.addProperty("ignored", true); break; }
                     if (mc.player == null) throw new IllegalStateException("Not in world");
+                    if (request.has("scroll_x") || request.has("scroll_y")) {
+                        double horizontal = request.has("scroll_x") ? request.get("scroll_x").getAsDouble() : 0;
+                        double vertical = request.has("scroll_y") ? request.get("scroll_y").getAsDouble() : 0;
+                        if (!Double.isFinite(horizontal) || !Double.isFinite(vertical) || Math.abs(horizontal) > 100 || Math.abs(vertical) > 100) throw new IllegalArgumentException("Scroll out of range");
+                        ((dev.observatory.mixin.MouseInvoker) mc.mouse).observatoryScroll(mc.getWindow().getHandle(), horizontal, vertical);
+                    }
                     if ((request.has("x") || request.has("y")) && mc.currentScreen == null) {
                         throw new IllegalArgumentException("Coordinate clicks require an open GUI; in-world clicks target the crosshair. Use look to aim, or omit coordinates.");
                     }
@@ -616,13 +618,16 @@ public class Observatory implements ClientModInitializer {
                         if (request.has("x") && request.has("y")) {
                             double x = request.get("x").getAsDouble(), y = request.get("y").getAsDouble();
                             if (x < 0 || y < 0 || x >= mc.getWindow().getFramebufferWidth() || y >= mc.getWindow().getFramebufferHeight()) throw new IllegalArgumentException("Cursor outside framebuffer");
+                            double oldX = cursorX, oldY = cursorY;
                             cursorX = x * mc.getWindow().getScaledWidth() / mc.getWindow().getFramebufferWidth();
                             cursorY = y * mc.getWindow().getScaledHeight() / mc.getWindow().getFramebufferHeight();
                             GLFW.glfwSetCursorPos(mc.getWindow().getHandle(), x * mc.getWindow().getWidth() / mc.getWindow().getFramebufferWidth(), y * mc.getWindow().getHeight() / mc.getWindow().getFramebufferHeight());
+                            ((dev.observatory.mixin.MouseInvoker) mc.mouse).observatoryCursor(mc.getWindow().getHandle(), x * mc.getWindow().getWidth() / mc.getWindow().getFramebufferWidth(), y * mc.getWindow().getHeight() / mc.getWindow().getFramebufferHeight());
                             mc.currentScreen.mouseMoved(cursorX, cursorY);
+                            for (int button : guiButtons) mc.currentScreen.mouseDragged(cursorX, cursorY, button, cursorX - oldX, cursorY - oldY);
                         }
                         if (request.has("button")) {
-                            int button = request.get("button").getAsInt(); if (button < 0 || button > 1) throw new IllegalArgumentException("button must be 0 or 1");
+                            int button = request.get("button").getAsInt(); if (button < 0 || button > 2) throw new IllegalArgumentException("button must be0..2");
                             syntheticMouse.button(button, false);
                             if (request.get("pressed").getAsBoolean()) { mc.currentScreen.mouseClicked(cursorX, cursorY, button); guiButtons.add(button); }
                             else { mc.currentScreen.mouseReleased(cursorX, cursorY, button); guiButtons.remove(button); }
@@ -631,7 +636,7 @@ public class Observatory implements ClientModInitializer {
                         double dx = request.has("dx") ? request.get("dx").getAsDouble() : 0, dy = request.has("dy") ? request.get("dy").getAsDouble() : 0;
                         mc.player.changeLookDirection(dx, dy);
                         if (request.has("button")) {
-                            int button = request.get("button").getAsInt(); if (button < 0 || button > 1) throw new IllegalArgumentException("button must be 0 or 1");
+                            int button = request.get("button").getAsInt(); if (button < 0 || button > 2) throw new IllegalArgumentException("button must be0..2");
                             InputUtil.Key key = InputUtil.Type.MOUSE.createFromCode(button); boolean pressed = request.get("pressed").getAsBoolean();
                             syntheticMouse.button(button, pressed);
                             KeyBinding.setKeyPressed(key, pressed); if (pressed) KeyBinding.onKeyPressed(key);

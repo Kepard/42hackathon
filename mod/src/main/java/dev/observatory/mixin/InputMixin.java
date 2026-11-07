@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(InputUtil.class)
 public class InputMixin {
     @Inject(method = "isKeyPressed", at = @At("HEAD"), cancellable = true)
-    private static void syntheticShift(long window, int key, CallbackInfoReturnable<Boolean> ci) {
-        if ((key == 340 || key == 344) && Observatory.isShiftHeld()) ci.setReturnValue(true);
+    private static void syntheticKeys(long window, int key, CallbackInfoReturnable<Boolean> ci) {
+        if (Observatory.isKeyHeld(key)) ci.setReturnValue(true);
     }
 }

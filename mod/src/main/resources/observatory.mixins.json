@@ -1,1 +1,1 @@
-{"required":true,"package":"dev.observatory.mixin","compatibilityLevel":"JAVA_17","mixins":["PortalMixin","ServerPlayerMixin"],"client":["HudMixin","FrameMixin","PlayerMixin","KeyboardMixin","MouseMixin","InputMixin"],"injectors":{"defaultRequire":1}}
+{"required":true,"package":"dev.observatory.mixin","compatibilityLevel":"JAVA_17","mixins":["PortalMixin","ServerPlayerMixin"],"client":["HudMixin","FrameMixin","PlayerMixin","KeyboardMixin","MouseMixin","InputMixin","MouseInvoker","CommandGuardMixin"],"injectors":{"defaultRequire":1}}

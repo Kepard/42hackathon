@@ -8,7 +8,15 @@ from .evaluator import LadderEvaluator
 
 KEYS = {"escape": 256, "esc": 256, "enter": 257, "return": 257,
         "tab": 258, "backspace": 259, "space": 32, "shift": 340,
-        "ctrl": 341, "left": 263, "right": 262, "up": 265, "down": 264, "f3": 292}
+        "ctrl": 341, "left": 263, "right": 262, "up": 265, "down": 264,
+        "world_1": 161, "world_2": 162, "insert": 260, "delete": 261, "page_up": 266, "page_down": 267, "home": 268, "end": 269,
+        "caps_lock": 280, "scroll_lock": 281, "num_lock": 282, "print_screen": 283, "pause": 284,
+        "left_shift": 340, "left_ctrl": 341, "alt": 342, "left_alt": 342, "super": 343, "left_super": 343,
+        "right_shift": 344, "right_ctrl": 345, "right_alt": 346, "right_super": 347, "menu": 348,
+        "kp_decimal": 330, "kp_divide": 331, "kp_multiply": 332, "kp_subtract": 333, "kp_add": 334,
+        "kp_enter": 335, "kp_equal": 336,
+        **{f"f{i}": 289 + i for i in range(1, 26)}, **{f"kp_{i}": 320 + i for i in range(10)},
+        **{c: ord(c) for c in "'`,-./;=[\\]"}}
 
 
 def keycode(name):

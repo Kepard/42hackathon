@@ -5,7 +5,7 @@ import json
 import math
 import time
 
-from .session import keycode
+from .session import KEYS, keycode
 from .vision import changes, outline, broken_caption, hotbar_change
 
 
@@ -22,21 +22,24 @@ def choice(*values):
 
 
 XY = {"x": number(0, 1000), "y": number(0, 1000)}
-BUTTON = choice("left", "right")
-KEY = choice(*list("wasd") + ["space", "shift", "ctrl", "e", "esc", "enter", "t", "q", "f", "tab", "f3"] + list("123456789"))
+BUTTON = choice("left", "right", "middle")
+KEY = choice(*sorted(set(KEYS) | set("abcdefghijklmnopqrstuvwxyz0123456789")))
 RAW = {
-    "key_down": ("Hold a Minecraft key until key_up. Use wait to allow ticks.", {"key": KEY}),
+    "key_down": ("Hold any keyboard key until key_up; hold modifiers/F3 first for combos (Ctrl+Q drops a stack, F swaps offhand, F1/F2/F5/F11, L/P/T/Tab). Use wait for ticks. Commands are blocked; no cheats. Smooth camera/unbound actions can be bound in vanilla Controls.", {"key": KEY}),
     "key_up": ("Release a held key.", {"key": KEY}),
     "key_press": ("Press and release a key for ms milliseconds.", {"key": KEY, "ms": number(0, 10000)}),
     "mouse_move": ("Relative look units: 0.15 degrees/unit; positive dx right, dy down.", {"dx": number(-2400, 2400), "dy": number(-1200, 1200)}),
-    "mouse_down": ("Hold mouse button; left mines/attacks, right uses.", {"button": BUTTON}),
+    "mouse_down": ("Hold left mine/attack, right use/place or middle pick-block. In GUIs combine mouse_move_to then mouse_up for drag splitting; modifiers work.", {"button": BUTTON}),
     "mouse_up": ("Release mouse button.", {"button": BUTTON}),
     "mouse_click": ("Press and release mouse button.", {"button": BUTTON}),
-    "click_at": ("Click GUI only; screenshot coordinates normalized 0..1000, top-left origin.", XY),
+    "mouse_move_to": ("Move GUI cursor to normalized screenshot coordinates; dragging held mouse buttons distributes slots. No world coordinate input.", XY),
+    "scroll": ("Scroll wheel: hotbar/spectator selection in world or scroll open GUI. Positive vertical scrolls up.", {"vertical": number(-100, 100), "horizontal": {**number(-100, 100), "default": 0}}),
+    "click_at": ("Click GUI at normalized screenshot coordinates. button left/right/middle; count2 double-clicks to gather a stack. Hold Shift/Ctrl/Alt or number keys over slots using key tools.", {**XY, "button": {**BUTTON, "default": "left"}, "count": {"type": "integer", "minimum": 1, "maximum": 2, "default": 1}}),
     "type_text": ("Type into an already open text field.", {"text": {"type": "string", "maxLength": 2000}}),
     "wait": ("Let the game run for ms milliseconds.", {"ms": number(0, 10000)}),
 }
 SKILLS = {
+    **RAW,
     "approach_until_outline": ("Pixel reflex: walk toward the crosshair, checking thin dark rectangular selection edges every 0.2s; stop on an outline cue, two unchanged views, or max_s. False negatives/positives are possible; inspect returned frame. No game state.", {"max_s": number(.2, 10), "sprint": {"type": "boolean", "default": False}}),
     "mine": ("Pixel reflex: hold attack; release on a NEW vanilla English Block broken subtitle plus strong center change, or no visible progress after 0.8s, or max_s. A pixel cue is not semantic proof: verify bark/target and drops. Uses screenshots only.", {"max_s": number(.2, 30)}),
     "collect": ("Pixel reflex: step forward in 0.2s chunks, stop when hotbar slot pixels gain an item-like foreground or at max_s. Returns hotbar_changed, not item identity; visually confirm the log. Do not use near cliffs. No inventory lookup.", {"max_s": number(.2, 3)}),
@@ -430,19 +433,24 @@ class ToolExecutor:
         elif name == "mouse_move":
             await self.primitive("mouse", dx=args["dx"], dy=args["dy"])
         elif name in ("mouse_down", "mouse_up", "mouse_click"):
-            button = 0 if args["button"] == "left" else 1
+            button = {"left": 0, "right": 1, "middle": 2}[args["button"]]
             if name == "mouse_click":
                 await self.click(button)
             else:
                 await self.button(button, name == "mouse_down")
-        elif name in ("click_at", "shift_click_at"):
-            if name == "shift_click_at":
+        elif name == "scroll":
+            await self.primitive("mouse", scroll_y=args["vertical"], scroll_x=args.get("horizontal", 0))
+        elif name in ("click_at", "shift_click_at", "mouse_move_to"):
+            add_shift = name == "shift_click_at" and not any(keycode(k) in (340, 344) for k in self.held_keys)
+            if add_shift:
                 await self.key("shift", True)
             try:
                 await self.primitive("mouse", x=round(args["x"] * (self.width - 1) / 1000), y=round(args["y"] * (self.height - 1) / 1000))
-                await self.click()
+                if name != "mouse_move_to":
+                    for _ in range(args.get("count", 1)):
+                        await self.click({"left": 0, "right": 1, "middle": 2}[args.get("button", "left")])
             finally:
-                if name == "shift_click_at":
+                if add_shift:
                     await self.key("shift", False)
         elif name == "type_text":
             await self.primitive("type", text=args["text"])

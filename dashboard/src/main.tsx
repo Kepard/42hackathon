@@ -570,7 +570,7 @@ function App() {
   const viewerImage = useRef<HTMLImageElement>(null);
   const [viewerStarted, setViewerStarted] = useState(false);
   const [viewerFps, setViewerFps] = useState<number>();
-  const viewerStats = useRef({ started: performance.now(), frames: 0, ready: false });
+  const viewerStats = useRef({ started: performance.now(), lastFrame: 0, frames: 0, ready: false });
   const [model, setModel] = useState<string>(),
     [modelStep, setModelStep] = useState(-1);
   const [steps, setSteps] = useState<Step[]>([]),
@@ -622,6 +622,7 @@ function App() {
       socket.onopen = () => setWsConnected(true);
       socket.onclose = () => {
         setWsConnected(false);
+        setViewerFps(0);
         if (!closed) retry = setTimeout(connect, 1500);
       };
       socket.onmessage = (e) => {
@@ -641,7 +642,10 @@ function App() {
               })
               .catch((e) => setError(e.message));
         }
-        if (type === "connection") setConnected(data.connected);
+        if (type === "connection") {
+          setConnected(data.connected);
+          if (!data.connected) setViewerFps(0);
+        }
         if (type === "frame") {
           viewer.current = `data:image/jpeg;base64,${data.jpeg_base64}`;
           if (viewerImage.current) viewerImage.current.src = viewer.current;
@@ -650,6 +654,7 @@ function App() {
             setViewerStarted(true);
           }
           const now = performance.now(), stats = viewerStats.current;
+          stats.lastFrame = now;
           stats.frames++;
           if (now - stats.started >= 1000) {
             setViewerFps(stats.frames * 1000 / (now - stats.started));
@@ -698,8 +703,17 @@ function App() {
     }
     connect();
     refresh();
+    const staleViewer = setInterval(() => {
+      const now = performance.now(), stats = viewerStats.current;
+      if (now - stats.lastFrame >= 2000) {
+        setViewerFps(0);
+        stats.frames = 0;
+        stats.started = now;
+      }
+    }, 500);
     return () => {
       closed = true;
+      clearInterval(staleViewer);
       clearTimeout(retry);
       socket?.close();
     };

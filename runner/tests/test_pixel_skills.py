@@ -69,6 +69,15 @@ async def test_move_holds_concurrently_then_releases(flags, codes):
     assert ex.results[-1]["stuck"] and ex.results[-1]["frame_change"] == 0
 
 
+@pytest.mark.parametrize("point,warns", [((500, 500), False), ((900, 900), True)])
+async def test_aim_corner_warning_is_not_an_object_classification(point, warns):
+    ex = ToolExecutor(PixelClient(), 854, 480)
+    ex.begin_step(PNG)
+    result = await ex.execute(parsed("aim_at", x=point[0], y=point[1]), "skills")
+    assert ("warning" in result) == warns
+    assert result["block_gone"] is None and result["item_collected"] is None
+
+
 @pytest.mark.parametrize("x,y", [(500, 500), (1000, 0), (0, 1000)])
 async def test_aim_fov_geometry(x, y):
     c = PixelClient()

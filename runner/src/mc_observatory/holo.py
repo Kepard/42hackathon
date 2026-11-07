@@ -158,26 +158,27 @@ class RunController:
 
 
 PRIMER = """Minecraft Java Survival, screenshots and input tools only. Goal: {goal}
-CHECK -> EXPLAIN -> ACT: compare frames; intent states visible outcome, failure hypothesis,
-next subgoal, not hidden reasoning. Goal overrides route. Notes: visible inventory/lessons.
+CHECK -> EXPLAIN -> ACT: intent names visible outcome, failure hypothesis, next subgoal.
+CURRENT pixels override old frames/notes. After milestones update_notes: inventory,
+completed subgoals, next waypoint. Don't recraft visible tools. Goal overrides route.
 
-REACH: crosshair aims; visible black block selection outline confirms reach (~4.5 blocks). Absence is
-ambiguous: very close faces have edges offscreen. Cracks appear within ~0.3s; swinging
-alone isn't progress. Inspect 2x crop. At height480/FOV70, a face at reach is ~76px high
-(16%); trunk width >=85px is usually in reach. Travel sprint+jump; sneak near cliffs.
-TREE: find vertical streaked brown trunk, NOT speckled dirt -> approach -> clear intervening
-green leaves (~0.35s each; hold ~0.6s) -> OBSERVE -> re-aim at exposed bark -> steady hold
-use mine(max_s=4) (log ~3.3s by hand) -> collect(max_s=0.8) -> confirm LOG icon/count.
-approach_until_outline checks pixels while walking; mine releases on fresh break cues;
-collect checks hotbar pixels. All are fallible: verify frames. Get 4 logs, not just one.
-A leaf vanishing is progress, NOT a log. Don't retreat just because leaves fill the view.
-No cracks: change ONE variable per retry (closer/re-aim/pitch/short strafe), check GUI.
+REACH: visible black block selection outline confirms ~4.5-block reach; absence is ambiguous
+when edges are offscreen. Cracks appear within ~0.3s; swinging isn't progress.
+At854x480/FOV70, trunk width >=85px usually means reach. Sprint+jump; sneak near cliffs.
+TREE: streaked brown bark, NOT speckled dirt -> approach -> clear intervening green leaves
+(~0.35s; hold ~0.6s) -> OBSERVE -> re-aim bark -> mine(max_s=4), ~3.3s/log by hand ->
+collect(max_s=0.8) -> confirm LOG icon/count. Leaf gone is progress, NOT a log.
+Reflex outline/break/hotbar pixel cues are fallible, not semantic guarantees. Get4 logs.
+No cracks: change ONE variable (closer/re-aim/pitch/strafe); don't blindly retreat from leaves.
 
 CONTROLS: WASD, space jump, shift sneak, E inventory, Escape closes GUI (opens menu if none),
 1-9 hotbar, left mine, right use. Look is RELATIVE: yaw right, pitch down. click_at is GUI-only;
-aim_at x/y=0..1000 on FULL screen, not crop. F3 via raw key_press/skills toggle_debug:
+aim_at x/y=0..1000 on CURRENT FULL screen, not crop. Lower-right cube is your HELD ITEM,
+not a world block: select EMPTY hotbar slot before locating stations.
+F3 via raw key_press/skills toggle_debug:
 read XYZ/Facing/Targeted Block only from pixels then close. Target up to20 blocks is NOT reach;
-compare eye/target coordinates. Skills scene_changed/stuck are pixel heuristics, NOT
+use yaw NUMBER, not just cardinal Facing: relative turn=desired yaw-current yaw.
+Skills scene_changed/stuck are pixel heuristics, NOT
 block-gone or item-collected; raw has no computed feedback. Check frames.
 SKILLS BATCHING: GUI clicks/typing and look->move may batch. Stop after mining/attack,
 reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe before mining.
@@ -226,7 +227,7 @@ class HoloAgent(BaseAgent):
         history = self.records[-self.config.history_steps:] if self.config.history_steps else []
         summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "skipped_tool_calls": r.get("skipped_tool_calls", []), "errors": r["errors"], "tool_results": r.get("tool_results", [])} for r in history]
         content = [{"type": "text", "text": "Your recent actions and visible effects you reported; skills pixel estimates are heuristics: " + json.dumps(summaries)},
-                   {"type": "text", "text": "Your scratchpad: " + (notes or "(empty)")}]
+                   {"type": "text", "text": "Your scratchpad (may be stale; reconcile with CURRENT pixels): " + (notes or "(empty)")}]
         selected = images[-min(3, self.config.history_images):]
         observations = [(f"Full screen from step {idx}", png) for idx, png in selected[:-1]]
         observations += [(f"Previous action pixel-evidence frame {idx}", png) for idx, png in enumerate(feedback_images)]

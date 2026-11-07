@@ -49,7 +49,7 @@ SKILLS = {
     "open_inventory": ("Tap E. Only use if inventory is currently closed.", {}),
     "close_screen": ("Tap Escape. Only use if a GUI is open; otherwise it opens pause menu.", {}),
     "toggle_debug": ("Tap F3 to toggle Minecraft's vanilla debug screen; read it only from screenshots.", {}),
-    "aim_at": ("Aim the crosshair at a full-screen point (0..1000) using FOV70 camera geometry, not game state. Approximate at steep pitch; check the next frame.", XY),
+    "aim_at": ("Aim at a full-screen point (0..1000) using FOV70 geometry, not game state. Approximate at steep pitch. Lower-right points warn about possible held-item confusion, not object identification. Check next frame.", XY),
     "set_pitch": ("Set pitch -90 up .. +90 down by clamping with mouse input, then rotating back. Reads no orientation state.", {"deg": number(-90, 90)}),
     "mine_up": ("Look straight up, attempt count overhead blocks (up to 4 seconds each). Pixel-change heuristic only; verify drops visually.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
     "attack_until_broken": ("Legacy full-duration attack. Prefer mine for closed-loop stopping. Returns scene_changed/no_change, NOT proof of break/pickup. Captures are saved; only representative frames fit the model image budget.", {"max_s": number(.35, 10)}),
@@ -280,6 +280,8 @@ class ToolExecutor:
                           hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
+        if call["name"] == "aim_at" and call["arguments"]["x"] >= 700 and call["arguments"]["y"] >= 700:
+            result["warning"] = "Aim point overlaps the usual held-item corner, not necessarily a world block. Select an EMPTY hotbar slot to check whether the object disappears before aiming again."
         self.results.append(result)
         return result
 

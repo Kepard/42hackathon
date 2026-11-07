@@ -163,23 +163,30 @@ class ToolExecutor:
         reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
         probe = {"used": self.jev is not None and not outline(reference), "succeeded": None}
         self.mining_probes.append(probe)
-        deadline = time.monotonic() + (max(seconds, .8) if probe["used"] else seconds)
+        if probe["used"] and seconds <= 0:
+            probe.update(succeeded=False, error="no_time_budget")
+            return "not_in_reach"
+        caption = broken_caption(reference) if probe["used"] else 0
+        def target_broke(frame, delta):
+            return (delta["center_changed_fraction"] >= .7 and delta["center_change"] >= .08) or (
+                delta["center_changed_fraction"] > .3 and delta["center_change"] > .04 and broken_caption(frame) > caption + 8)
+        deadline = time.monotonic() + seconds
         scene_changed = False
         center_progress = 0
         await self.button(0, True)
         try:
             if probe["used"]:
-                await self.primitive("wait", ms=600)
+                await self.primitive("wait", ms=min(.6, max(0, deadline - time.monotonic() - .1)) * 1000)
                 try:
-                    frame = await asyncio.wait_for(self.observe(), .2)
+                    frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
                     observed = changes(reference, frame)
                     center_progress = observed["center_change"]
                     probe.update(succeeded=center_progress >= .002 and observed["center_changed_fraction"] >= .01,
                                  center_change=center_progress, center_changed_fraction=observed["center_changed_fraction"],
-                                 frame_index=len(self.frames) - 1)
+                                 frame_index=len(self.frames) - 1, broke_pixel_cue=target_broke(frame, observed))
                 except asyncio.TimeoutError:
                     probe.update(succeeded=False, error="capture_timeout")
-            while probe["succeeded"] is not False and (remaining := deadline - time.monotonic()) > 0:
+            while probe["succeeded"] is not False and not probe.get("broke_pixel_cue") and (remaining := deadline - time.monotonic()) > 0:
                 await self.primitive("wait", ms=min(.35, remaining) * 1000)
                 try:
                     frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
@@ -188,11 +195,13 @@ class ToolExecutor:
                 observed = changes(reference, frame)
                 center_progress = max(center_progress, observed["center_change"])
                 scene_changed |= observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08
+                if probe["used"]:
+                    probe["broke_pixel_cue"] = target_broke(frame, observed)
         finally:
             await self.button(0, False)
         settled = changes(reference, await self.observe())
         center_progress = max(center_progress, settled["center_change"])
-        scene_changed |= settled["frame_change"] >= .002
+        scene_changed |= settled["frame_change"] >= .002 or probe.get("broke_pixel_cue", False)
         self.failed_mining_frame = reference if seconds >= .35 and center_progress < .01 and probe["succeeded"] is not True else None
         if probe["succeeded"] is False:
             return "not_in_reach"

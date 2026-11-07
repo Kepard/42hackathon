@@ -265,13 +265,39 @@ async def test_real_bark_probe_continues_only_on_target_progress(monkeypatch, mo
     result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": 4}}, "skills")
     assert result["mining_probes"][0]["used"]
     assert result["mining_probes"][0]["succeeded"] is (mode == "cracks")
-    assert clock[0] == pytest.approx(4 if mode == "cracks" else .6)
+    assert .6 <= clock[0] <= 4 if mode == "cracks" else clock[0] == pytest.approx(.6)
     assert not fake.inputs and not ex.held_buttons
     if mode == "cracks":
         assert result["outcome"] == "scene_changed"
     else:
         assert result["outcome"] == "not_in_reach"
         assert result["next_action"] == "call seek(<target>) first"
+
+
+@pytest.mark.parametrize("seconds", [.35, .6, 4.])
+@pytest.mark.parametrize("broke", [False, True])
+async def test_probe_respects_max_s_and_releases_on_immediate_break(monkeypatch, seconds, broke):
+    from test_pixel_skills import png
+    before, after = png("green",(640,480)), png("white",(640,480))
+    clock = [0.]
+    monkeypatch.setattr("mc_observatory.holo_tools.time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
+    class Client(PixelClient):
+        async def screenshot(self):
+            return after if broke and clock[0] > 0 else before
+    class Executor(ToolExecutor):
+        async def primitive(self, kind, **args):
+            if kind == "wait":
+                clock[0] += args["ms"] / 1000
+            else:
+                await super().primitive(kind, **args)
+    ex = Executor(Client(),640,480,JevVision(FakeJev()))
+    result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": seconds}}, "skills")
+    assert clock[0] == pytest.approx(min(.6, seconds - .1))
+    assert clock[0] <= seconds and not ex.held_buttons
+    assert result["outcome"] == ("scene_changed" if broke else "not_in_reach")
+    assert result["mining_probes"][0]["succeeded"] is broke
+    assert result["mining_probes"][0]["broke_pixel_cue"] is broke
 
 
 async def test_absent_outline_probes_then_releases_without_progress_or_jev_decision(monkeypatch):
@@ -293,7 +319,7 @@ async def test_mining_checks_fresh_pixels_after_model_latency(monkeypatch, actua
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(dark if actual_reachable else light)
     assert await ex.attack_until_broken(0) == ("no_change" if actual_reachable else "not_in_reach")
-    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions)
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is actual_reachable
     assert ex.mining_probes[0]["used"] is (not actual_reachable)
 
 
@@ -312,7 +338,7 @@ async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhe
     ex.attack_until_broken = lambda _, *args: ToolExecutor.attack_until_broken(ex, 0)
     result = await ex.execute({"name": "mine_up", "arguments": {"count": 1}}, "skills")
     assert result["outcome"] == (["no_change"] if overhead_outline else ["not_in_reach"])
-    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions)
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is overhead_outline
     assert result["mining_probes"][0]["used"] is (not overhead_outline)
 
 

@@ -345,7 +345,7 @@ class HoloAgent(BaseAgent):
                         if jev is not None:
                             jev.calls = []
                         payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop), "tools": tool_schemas(config.tier, config.reflex),
-                                   "temperature": config.temperature, "max_tokens": 2048}
+                                   "temperature": config.temperature, "max_tokens": 4096}
                         if config.reasoning_effort is not None:
                             payload["reasoning_effort"] = config.reasoning_effort
                         if config.seed is not None:
@@ -370,7 +370,12 @@ class HoloAgent(BaseAgent):
                         record["tokens"], record["cost_usd"] = usage_cost(response.get("usage") or {}, config.model)
                         if config.max_cost_usd is not None and cost + (record["cost_usd"] or 0) >= config.max_cost_usd:
                             record["failure_tags"].append("budget_exhausted")
-                        message = response["choices"][0]["message"]
+                        choice = response["choices"][0]
+                        record["finish_reason"] = choice.get("finish_reason")
+                        if record["finish_reason"] == "length":
+                            record["failure_tags"].append("completion_truncated")
+                            record["errors"].append("Completion token budget exhausted; choose one short tool action next turn.")
+                        message = choice["message"]
                         record["reasoning"] = message.get("reasoning_content") or message.get("reasoning") or ""
                         record["raw_tool_calls"] = message.get("tool_calls") or []
                         record["skipped_tool_calls"] = []

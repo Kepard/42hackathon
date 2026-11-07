@@ -138,6 +138,21 @@ async def test_realtime_never_pauses_and_multiple_tools(tmp_path):
     assert [a["action"] for a in records[0]["executed_actions"]] == ["key", "wait", "key", "mouse"]
 
 
+@pytest.mark.parametrize("finish,calls,tag",[("tool_calls",[call(seconds=0)],None),("length",[],"no_tool_call"),("length",[call(seconds=-1)],"invalid_tool_args"),(None,[call(seconds=0)],None)])
+async def test_completion_budget_and_finish_reason(tmp_path,finish,calls,tag):
+    client=PixelClient();result=response(calls)
+    result["choices"][0]["finish_reason"]=finish
+    api=FakeAPI(client,result);config=HoloConfig(max_steps=1)
+    records=[r async for r in HoloAgent(config,api).steps(client,"Craft a table",tmp_path)]
+    r=records[0]
+    assert api.payloads[0]["max_tokens"]==4096
+    assert config.api_timeout==15
+    assert r["finish_reason"]==finish
+    assert ("completion_truncated" in r["failure_tags"]) is (finish=="length")
+    if tag: assert tag in r["failure_tags"]
+    if finish=="length": assert "Completion token budget exhausted" in r["errors"][0]
+
+
 @pytest.mark.parametrize("result,error,tag", [(response([]), None, "no_tool_call"),
                                              (response([call(seconds=-2)]), None, "invalid_tool_args"),
                                              (None, RuntimeError("unavailable"), "api_error")])

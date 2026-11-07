@@ -56,6 +56,7 @@ SKILLS = {
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
     "shift_click_at": ("Shift-click a GUI slot at normalized screenshot coordinates.", XY),
+    "type_text": RAW["type_text"],
     "wait": ("Let game ticks run for seconds.", {"seconds": number(0, 10)}),
 }
 
@@ -102,6 +103,20 @@ def parse_calls(message, tier):
         except (KeyError, TypeError, ValueError) as error:
             raise InvalidToolArgs(f"Malformed tool call: {error}") from error
     return parsed
+
+
+def observation_prefix(calls):
+    if not isinstance(calls, list):
+        return calls, []
+    for index, raw in enumerate(calls):
+        try:
+            call = parse_calls({"tool_calls": [raw]}, "skills")[0]
+        except InvalidToolArgs:
+            return calls[:index + 1], calls[index + 1:]
+        if call["name"] in {"attack", "mine", "attack_until_broken", "mine_up", "approach_until_outline", "collect"} or (
+                call["name"] == "move" and call["arguments"]["seconds"] > .5):
+            return calls[:index + 1], calls[index + 1:]
+    return calls, []
 
 
 class ToolExecutor:

@@ -530,10 +530,11 @@ semantic guarantees. Internal reflex screenshots are recorded, not all sent to H
 The log milestone now requires inventory/pickup/crafting evidence, never mining alone;
 other rung scoring and the created-obsidian exception are unchanged.
 
-Skills enforce an observation barrier after the first non-notes tool in each turn.
+Skills batch GUI clicks/typing and look/aim followed by movement. An observation
+barrier ends the turn after attacks/mining, closed-loop movement, or a move >0.5s.
 Later requested calls are **discarded**, recorded in `skipped_tool_calls`, and shown
 in history as unexecuted; they are not queued for later. Raw batching is unchanged.
-This prevents aim/approach/mining chains through unseen foliage. The prompt explicitly
+This prevents approach/mining chains through unseen foliage. The prompt explicitly
 distinguishes leaves, vertical bark and dirt, and treats leaf clearing as progress,
 not task success. No blind tree-chopping macro bypasses this barrier.
 

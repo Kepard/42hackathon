@@ -11,7 +11,7 @@ from pathlib import Path
 
 import aiohttp
 
-from .holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
+from .holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas, observation_prefix
 from .vision import center_crop
 
 try:
@@ -179,12 +179,12 @@ aim_at x/y=0..1000 on FULL screen, not crop. F3 via raw key_press/skills toggle_
 read XYZ/Facing/Targeted Block only from pixels then close. Target up to20 blocks is NOT reach;
 compare eye/target coordinates. Skills scene_changed/stuck are pixel heuristics, NOT
 block-gone or item-collected; raw has no computed feedback. Check frames.
-SKILLS OBSERVATION BARRIER: one scene action per turn (notes may precede it). Later batched
-calls are discarded, not queued. Aim -> observe; approach -> observe; mine -> observe.
+SKILLS BATCHING: GUI clicks/typing and look->move may batch. Stop after mining/attack,
+reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe before mining.
 
 ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
-1 log: log icon/count. Full ladder: ~6 logs -> planks (4/log), table (4 planks),
-sticks; recipe-book craftable filter, click recipe then shift-click output.
+1 log: log icon/count. Full ladder: 4 logs -> planks (4/log), table (4 planks), sticks.
+Craft by recipe-book SEARCH, never remembered icon positions; shift-click output.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
 4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
 Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.
@@ -317,12 +317,8 @@ class HoloAgent(BaseAgent):
                         record["raw_tool_calls"] = message.get("tool_calls") or []
                         record["skipped_tool_calls"] = []
                         pending = record["raw_tool_calls"]
-                        if config.tier == "skills" and isinstance(pending, list):
-                            barrier = next((i + 1 for i, call in enumerate(pending)
-                                            if not isinstance(call, dict) or not isinstance(call.get("function"), dict)
-                                            or call["function"].get("name") != "update_notes"), len(pending))
-                            record["skipped_tool_calls"] = pending[barrier:]
-                            pending = pending[:barrier]
+                        if config.tier == "skills":
+                            pending, record["skipped_tool_calls"] = observation_prefix(pending)
                         calls = parse_calls({"tool_calls": pending}, config.tier)
                         record["tool_calls"] = calls
                         record["intent"] = [call["arguments"]["intent"] for call in calls]

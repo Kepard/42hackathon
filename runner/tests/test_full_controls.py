@@ -98,6 +98,24 @@ async def test_cancelled_and_renewed_leases_do_not_release_new_hold():
     assert not ex.held_keys and not ex.hold_timers
 
 
+@pytest.mark.parametrize("hold_ms,press_ms,check_s,minimum_s",[(50,1000,.1,.95),(200,20,.08,.18)])
+async def test_press_on_leased_key_keeps_the_later_end_time(hold_ms,press_ms,check_s,minimum_s):
+    import time
+    client=PixelClient();ex=ToolExecutor(client,640,480)
+    await ex.bounded_hold("key","w",hold_ms)
+    started=time.monotonic()
+    pressing=asyncio.create_task(ex.execute_inputs({"name":"key_press","arguments":{"key":"w","ms":press_ms}},"skills"))
+    await asyncio.sleep(check_s)
+    assert ex.held_keys=={"w"}
+    assert ("key",87,{"pressed":False}) not in client.events
+    await pressing
+    await ex.finish_turn()
+    assert time.monotonic()-started>=minimum_s
+    assert not ex.held_keys and not ex.hold_timers
+    assert sum(e==("key",87,{"pressed":True}) for e in client.events)==1
+    assert sum(e==("key",87,{"pressed":False}) for e in client.events)==1
+
+
 async def test_freeze_restore_physically_represses_retained_aliased_keys():
     class Client(PixelClient):
         active = set()

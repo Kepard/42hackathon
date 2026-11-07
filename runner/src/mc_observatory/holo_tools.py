@@ -397,8 +397,8 @@ class ToolExecutor:
             await self.client.type_text(args["text"])
 
     def cancel_hold(self, kind, value):
-        task = self.hold_tasks.pop((kind,value),None)
-        if task is not None and task is not asyncio.current_task(): task.cancel()
+        lease = self.hold_tasks.pop((kind,value),None)
+        if lease is not None and lease[0] is not asyncio.current_task(): lease[0].cancel()
 
     def held_inputs(self):
         return {"keys":sorted(self.held_keys),"buttons":sorted(self.held_buttons)}
@@ -407,11 +407,12 @@ class ToolExecutor:
         self.cancel_hold(kind,value)
         dispatch = self.key if kind=="key" else self.button
         await dispatch(value,True)
+        deadline=time.monotonic()+min(1000,max(0,ms))/1000
         async def expire():
-            await asyncio.sleep(min(1000,max(0,ms))/1000)
+            await asyncio.sleep(max(0,deadline-time.monotonic()))
             await dispatch(value,False)
         task=asyncio.create_task(expire())
-        self.hold_tasks[kind,value]=task
+        self.hold_tasks[kind,value]=(task,deadline)
         self.hold_timers.add(task)
 
     async def finish_turn(self):
@@ -440,6 +441,9 @@ class ToolExecutor:
 
     async def tap(self, key, ms=100):
         already_held = key in self.held_keys
+        lease = self.hold_tasks.get(("key",key))
+        if lease is not None:
+            await self.bounded_hold("key",key,max(ms,(lease[1]-time.monotonic())*1000))
         await self.key(key, True)
         try:
             await self.primitive("wait", ms=ms)

@@ -117,3 +117,13 @@ async def test_empty_world_inputs_and_time_limits():
         await client.resume()
         with pytest.raises(ModError, match="Typing requires"):
             await client.type_text("no screen")
+
+
+async def test_coordinate_click_requires_gui():
+    async with MinecraftClient() as client:
+        await client.resume()
+        assert not (await client.state())["screen_open"]
+        with pytest.raises(ModError, match="crosshair"):
+            await client.click(100, 100)
+        await client.mouse(button=0, pressed=True)
+        await client.mouse(button=0, pressed=False)

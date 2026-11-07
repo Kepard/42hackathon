@@ -349,6 +349,9 @@ public class Observatory implements ClientModInitializer {
                 case "mouse" -> {
                     if (paused || reset != null) { result.addProperty("ignored", true); break; }
                     if (mc.player == null) throw new IllegalStateException("Not in world");
+                    if ((request.has("x") || request.has("y")) && mc.currentScreen == null) {
+                        throw new IllegalArgumentException("Coordinate clicks require an open GUI; in-world clicks target the crosshair. Use look to aim, or omit coordinates.");
+                    }
                     if (mc.currentScreen != null) {
                         if (request.has("x") && request.has("y")) {
                             double x = request.get("x").getAsDouble(), y = request.get("y").getAsDouble();

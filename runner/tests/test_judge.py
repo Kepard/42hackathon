@@ -31,6 +31,15 @@ def test_world_setup_does_not_consume_later_rung_budget():
     assert verdict([r],agent_elapsed(meta,[r],now+2))["rung_age_s"]==301
 
 
+def test_common_failure_is_not_hidden_by_changing_secondary_tags():
+    rows=[row(i) for i in range(4)]
+    for r,extra in zip(rows,["invalid_tool_args",None,None,"no_tool_call"]):
+        r["failure_tags"]=["gui_stuck"]+([extra] if extra else [])
+    assert verdict(rows,60)["reason"]=="same_failure_four_times: gui_stuck"
+    rows[-1]["failure_tags"]=[]
+    assert verdict(rows,60) is None
+
+
 def test_repeated_failures_and_api_errors():
     rows=[row(i,outcome="not_close") for i in range(4)]
     assert verdict(rows,40)["reason"]=="same_failure_four_times: not_close"

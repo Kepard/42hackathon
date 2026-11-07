@@ -41,6 +41,10 @@ def verdict(records, elapsed):
     recent = [failure(row) for row in records[-4:]]
     if len(recent)==4 and recent[0] and len(set(recent))==1:
         reason = "same_failure_four_times: " + recent[0]
+    if len(records)>=4:
+        common=set(records[-1].get("failure_tags") or [])-{"scene_change","realtime_motion_unobserved"}
+        for row in records[-4:-1]: common.intersection_update(row.get("failure_tags") or [])
+        if common: reason = "same_failure_four_times: " + "+".join(sorted(common))
     actions = []
     for row in records[-6:]:
         calls = [{"name": call["name"], "arguments": {k:v for k,v in call.get("arguments",{}).items() if k!="intent"}}

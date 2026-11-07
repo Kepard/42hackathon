@@ -33,7 +33,7 @@ async def test_reset_freeze_gui_crafting_and_stream():
         width = (await client.call("screenshot"))["width"]
         shift = (width - 640) / 2
         assert initial["in_world"] and not initial["creative"]
-        assert initial["seed"] == 12345 and initial["dimension"] == "minecraft:overworld"
+        assert initial["seed"] == 7941 and initial["dimension"] == "minecraft:overworld"
         assert initial["world_id"].startswith("observatory-") and initial["world_id"] != "observatory-spike"
         assert initial["inventory"] == [{"slot": 0, "id": "minecraft:oak_log", "count": 4}]
         assert await evaluate(task, session) == [0.0]
@@ -106,7 +106,7 @@ async def test_reset_freeze_gui_crafting_and_stream():
         assert (await client.state())["in_world"]  # Responses interleaved with push events.
         await client.unsubscribe()
         (EVIDENCE / "states.json").write_text(json.dumps({"initial": initial, "frozen": frozen, "still": still, "crafted": crafted, "events": event_counts}, indent=2))
-        print("LIVE reset seed=12345 logs=4; pause stable; hidden-HUD capture; GUI crafted oak_planks=4; typing; frame/state stream=4+4; reward=1.0")
+        print("LIVE reset seed=7941 logs=4; pause stable; hidden-HUD capture; GUI crafted oak_planks=4; typing; frame/state stream=4+4; reward=1.0")
 
         fresh = await client.reset(54321)
         session.evaluator.update(fresh)

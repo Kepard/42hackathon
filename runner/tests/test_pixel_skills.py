@@ -91,7 +91,7 @@ async def test_set_pitch_clamps_without_reading_state(degrees):
 
 
 @pytest.mark.parametrize("changed", [False, True])
-async def test_attack_heuristic_stops_and_exposes_every_source_frame(monkeypatch, changed):
+async def test_attack_observes_without_early_release_or_semantic_claims(monkeypatch, changed):
     clock = [0.0]
     monkeypatch.setattr("mc_observatory.holo_tools.time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}))
     class Client(PixelClient):
@@ -106,12 +106,54 @@ async def test_attack_heuristic_stops_and_exposes_every_source_frame(monkeypatch
     ex = Executor(Client(), 854, 480)
     ex.begin_step(png("black"))
     result = await ex.execute(parsed("attack_until_broken", max_s=1.4), "skills")
-    assert result["outcome"] == ("broke" if changed else "no change")
-    assert clock[0] == pytest.approx(.7 if changed else 1.4)
-    assert len(ex.frames) == (3 if changed else 5)
+    assert result["outcome"] == ("scene_changed" if changed else "no_change")
+    assert result["scene_changed"] is changed
+    assert result["block_gone"] is None and result["item_collected"] is None
+    assert clock[0] == pytest.approx(1.4)
+    assert len(ex.frames) == 5
     assert ex.actions[0] == {"action": "mouse", "button": 0, "pressed": True}
     assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
     assert not ex.held_buttons
+
+
+@pytest.mark.parametrize("tier", ["raw", "skills"])
+async def test_observation_barrier_discards_dependent_calls_and_explains_history(tmp_path, tier):
+    client = PixelClient()
+    tools = ([call("update_notes", text="Observe after aiming"), call("aim_at", x=500, y=500),
+              call("move", direction="forward", seconds=0), call("attack", seconds=0)] if tier == "skills"
+             else [call("mouse_move", dx=0, dy=0), call("key_press", key="w", ms=0)])
+    api = FakeAPI(client, response(tools))
+    agent = HoloAgent(HoloConfig(max_steps=2, tier=tier), api)
+    records = [r async for r in agent.steps(client, "get log", tmp_path)]
+    assert len(records[0]["raw_tool_calls"]) == len(tools)
+    assert [c["name"] for c in records[0]["tool_calls"]] == (["update_notes", "aim_at"] if tier == "skills" else ["mouse_move", "key_press"])
+    assert [c["name"] for c in records[0]["skipped_tool_calls"]] == (["move", "attack"] if tier == "skills" else [])
+    assert any(e[0] == "key" for e in client.events if isinstance(e, tuple)) is (tier == "raw")
+    history = json.loads(api.payloads[1]["messages"][1]["content"][0]["text"].split(": ", 1)[1])
+    assert history[0]["actions"] == records[0]["tool_calls"]
+    assert history[0]["skipped_tool_calls"] == records[0]["skipped_tool_calls"]
+
+
+async def test_observation_barrier_empty_completion_does_not_invent_actions(tmp_path):
+    agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(PixelClient(), response([])))
+    records = [r async for r in agent.steps(PixelClient(), "get log", tmp_path)]
+    assert records[0]["tool_calls"] == records[0]["skipped_tool_calls"] == records[0]["executed_actions"] == []
+
+
+async def test_attack_screenshot_error_releases_mouse():
+    class Client(PixelClient):
+        async def screenshot(self):
+            raise OSError("capture failed")
+    class Executor(ToolExecutor):
+        async def primitive(self, name, **args):
+            if name != "wait":
+                await super().primitive(name, **args)
+    ex = Executor(Client(), 854, 480)
+    ex.begin_step(PNG)
+    with pytest.raises(OSError, match="capture failed"):
+        await ex.execute(parsed("attack_until_broken", max_s=1), "skills")
+    assert not ex.held_buttons
+    assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
 
 
 @pytest.mark.parametrize("name,args", [("move", {"direction": "forward", "seconds": 1, "jump": True}), ("attack_until_broken", {"max_s": 1})])
@@ -134,10 +176,10 @@ async def test_mine_up_count_and_notes(monkeypatch):
     attempts = []
     async def attack(seconds):
         attempts.append(seconds)
-        return "no change"
+        return "no_change"
     monkeypatch.setattr(ex, "attack_until_broken", attack)
     result = await ex.execute(parsed("mine_up", count=3), "skills")
-    assert attempts == [4, 4, 4] and result["outcome"] == ["no change"] * 3
+    assert attempts == [4, 4, 4] and result["outcome"] == ["no_change"] * 3
     assert ex.actions[:2] == [{"action": "mouse", "dx": 0, "dy": 1200}, {"action": "mouse", "dx": 0, "dy": -1200}]
     for text in ("I saw a trunk; try jumping.", ""):
         await ex.execute(parsed("update_notes", text=text), "skills")

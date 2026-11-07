@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from mc_observatory.bench import run_batch
+from mc_observatory.run import task_definition
 from mc_observatory.server import leaderboard
 from mc_observatory.user_tasks import definitions, validate_task
 
@@ -106,8 +107,17 @@ def test_leaderboard_labels_timing_medians_and_infrastructure():
 
 def test_builtin_spawn_schema_and_invalid_spawn():
     task = definitions()[0]
-    assert task["seed"] == 12345 and task["inventory"] == []
+    assert task["seed"] == 7941 and task["inventory"] == []
+    assert task["spawn"] == {"x": .5, "y": 69, "z": .5, "yaw": 109, "pitch": -3, "time_of_day": 6000}
     assert validate_task(task)["spawn"]["time_of_day"] == 6000
     for change in [{"pitch": 100}, {"x": "bad"}, {"time_of_day": -1}]:
         with pytest.raises(ValueError):
             validate_task({**task, "spawn": {**task["spawn"], **change}})
+
+
+def test_ladder_and_short_tasks_share_development_seed_and_camera():
+    development = task_definition("get_log")
+    for name in ("ladder", "craft_planks", "craft_table"):
+        task = task_definition(name)
+        assert task["seed"] == 7941
+        assert task["spawn"] == development["spawn"]

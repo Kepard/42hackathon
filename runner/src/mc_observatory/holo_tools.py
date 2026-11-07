@@ -49,7 +49,7 @@ SKILLS = {
     "aim_at": ("Aim the crosshair at a full-screen point (0..1000) using FOV70 camera geometry, not game state. Approximate at steep pitch; check the next frame.", XY),
     "set_pitch": ("Set pitch -90 up .. +90 down by clamping with mouse input, then rotating back. Reads no orientation state.", {"deg": number(-90, 90)}),
     "mine_up": ("Look straight up, attempt count overhead blocks (up to 4 seconds each). Pixel-change heuristic only; verify drops visually.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
-    "attack_until_broken": ("Hold attack up to max_s, sampling screenshots every 0.35s. Stop on a strong center-pixel change; returns broke/no change as a heuristic, NOT proof of a block break or pickup. All sampled frames are shown next turn.", {"max_s": number(.35, 10)}),
+    "attack_until_broken": ("Legacy name: hold attack steadily for the FULL max_s, sampling screenshots every 0.35s; pixel changes never release it early. Use >=3.5s for a log by hand, ~0.5s for one leaf. Returns scene_changed/no_change, NOT block-gone or item-collected. Verify those from the next frame. All sampled frames are shown next turn.", {"max_s": number(.35, 10)}),
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
     "shift_click_at": ("Shift-click a GUI slot at normalized screenshot coordinates.", XY),
@@ -128,7 +128,7 @@ class ToolExecutor:
     async def attack_until_broken(self, seconds):
         reference = self.current_frame or await self.observe()
         deadline = time.monotonic() + seconds
-        changed_twice = 0
+        scene_changed = False
         await self.button(0, True)
         try:
             while (remaining := deadline - time.monotonic()) > 0:
@@ -136,12 +136,10 @@ class ToolExecutor:
                 try:
                     frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
                 except asyncio.TimeoutError:
-                    return "no change"
+                    break
                 observed = changes(reference, frame)
-                changed_twice = changed_twice + 1 if observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08 else 0
-                if changed_twice >= 2:
-                    return "broke"
-            return "no change"
+                scene_changed |= observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08
+            return "scene_changed" if scene_changed else "no_change"
         finally:
             await self.button(0, False)
 
@@ -206,6 +204,8 @@ class ToolExecutor:
         elif delta["frame_change"] >= .002:
             self.unchanged_moves = 0
         result = {"name": call["name"], **delta, "stuck": call["name"] == "move" and self.unchanged_moves >= 2}
+        result.update(scene_changed=delta["frame_change"] >= .002 or outcome == "scene_changed",
+                      block_gone=None, item_collected=None)
         if outcome is not None:
             result["outcome"] = outcome
         self.results.append(result)

@@ -123,51 +123,50 @@ class RunController:
 
 
 PRIMER = """Minecraft Java Survival, screenshots and input tools only. Goal: {goal}
-CHECK -> EXPLAIN -> ACT: compare recent frames; state last action's visible effect,
-a failure hypothesis if needed, and next subgoal in your intent.
-Describe observable outcomes, not hidden reasoning. Current goal overrides the route.
-Use update_notes for visible inventory, rung, landmarks and lessons.
+CHECK -> EXPLAIN -> ACT: compare frames; intent states visible outcome, failure hypothesis,
+next subgoal, not hidden reasoning. Goal overrides route. Notes: visible inventory/lessons.
 
-REACH: crosshair aims; a black block selection outline means within 4.5 blocks. No outline:
-approach/re-aim. Cracks should appear within ~0.3s; arm swinging
-without cracks is not progress. Inspect the 2x center crop. At vertical FOV70 and height480,
-a front-facing one-block face at reach is about 76px high (16% of height); smaller usually
-means farther. Approximate only. Aim at bark, not green leaves.
-Walk ~4.3 blocks/s. Short steps near cliffs; sneak at edges.
-Keep aim steady while mining; logs by hand take ~3s. Walk onto drops; verify hotbar icon/count.
+REACH: crosshair aims; visible black block selection outline confirms reach (~4.5 blocks). Absence is
+ambiguous: very close faces have edges offscreen. Cracks appear within ~0.3s; swinging
+alone isn't progress. Inspect 2x crop. At height480/FOV70, a face at reach is ~76px high
+(16%); smaller usually farther, approximate. Walk ~4.3 blocks/s; short sneaking steps at cliffs.
+TREE: find vertical streaked brown trunk, NOT speckled dirt -> approach -> clear intervening
+green leaves (~0.35s each; hold ~0.6s) -> OBSERVE -> re-aim at exposed bark -> steady hold
+3.5-4s (log ~3s by hand) -> walk into drop -> confirm LOG icon/count in hotbar.
+A leaf vanishing is progress, NOT a log. Don't retreat just because leaves fill the view.
+No cracks: change ONE variable per retry (closer/re-aim/pitch/short strafe), check GUI.
 
-CONTROLS: WASD move, space jump, shift sneak, E inventory, Escape closes GUI (opens menu
-if none), 1-9 hotbar, left hold mine/attack, right use/place. Look is RELATIVE: yaw right,
-pitch down. GUI click_at is not world aiming. Skills aim_at takes a full-screen point;
-all x/y are 0..1000 on the FULL frame, not the crop. F3 via raw key_press or skills
-toggle_debug: read XYZ/Facing and Targeted Block only from pixels, then close it.
-F3 targets up to20 blocks: a name is NOT reach. Compare eye/target coordinates.
-Skills change scores/stuck/broke are disclosed pixel heuristics, not proof of mining or
-pickup; raw has no computed feedback. Check source frames.
+CONTROLS: WASD, space jump, shift sneak, E inventory, Escape closes GUI (opens menu if none),
+1-9 hotbar, left mine, right use. Look is RELATIVE: yaw right, pitch down. click_at is GUI-only;
+aim_at x/y=0..1000 on FULL screen, not crop. F3 via raw key_press/skills toggle_debug:
+read XYZ/Facing/Targeted Block only from pixels then close. Target up to20 blocks is NOT reach;
+compare eye/target coordinates. Skills scene_changed/stuck are pixel heuristics, NOT
+block-gone or item-collected; raw has no computed feedback. Check frames.
+SKILLS OBSERVATION BARRIER: one scene action per turn (notes may precede it). Later batched
+calls are discarded, not queued. Aim -> observe; approach -> observe; mine -> observe.
 
-ROUTE / VISIBLE CHECKLIST (evidence may happen early; don't skip missing prerequisites):
-1 log: log icon/count. For full ladder gather ~6 logs -> planks (4/log), table (4 planks),
+ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
+1 log: log icon/count. Full ladder: ~6 logs -> planks (4/log), table (4 planks),
 sticks; recipe-book craftable filter, click recipe then shift-click output.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
 4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
 Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.
-7 raw iron icon: search exposed cliffs/caves for tan-speckled iron, not copper; mine with
-stone pick. Fallback staircase toward Y16; never dig straight down. Get ~7 iron.
-8 ingot icon: furnace raw iron + coal/planks fuel, wait, take output. Budget iron:
+7 raw iron icon: cliffs/caves, tan-speckled iron, not copper; mine with
+stone pick. Staircase toward Y16, never straight down; ~7 iron.
+8 ingot icon: furnace raw iron + coal/planks fuel; take output. Iron:
 bucket3, iron pick3, flint-and-steel1. Coal smelts8, a plank1.5.
-9 hostile kill: zombie/spider in a cave; death smoke/drop, not merely a hit. Avoid creepers
+9 hostile kill: cave zombie/spider, death smoke/drop, not a hit. Avoid creepers
 and skeletons; shelter/pillar, retreat below5 hearts. At fixed noon don't wait for night.
 10 flint-and-steel icon: gravel -> flint + ingot; ruined-portal/village chests help.
 11 obsidian: item OR create black-purple obsidian with water over lava SOURCE (flowing lava
 gives cobble). Casting counts. Chest loot also works; mining requires diamond pick, ~10s/block.
 12 portal: finish/repair a 2x3 interior, 10-obsidian frame; no crying obsidian. Cast missing
 blocks with bucket/mold if needed; light inner bottom with flint-and-steel; purple fill.
-13 enter Nether: portal ~4s, verify red terrain/dimension in F3.
+13 Nether: portal ~4s, verify red terrain/dimension in F3.
 
 STUCK: two unchanged moves -> jump+forward or strafe/turn, not repeated forward.
-Never repeat a failed action >2 times: change distance, aim or subgoal. Close unexpected
-GUI first. No cracks -> move closer. Wrong tool/no drops -> change tool. Use short action
-chunks; only tools listed, each with intent. {timing}
+Never repeat failure >2 times: change one variable/subgoal. Close unexpected GUI.
+Wrong tool/no drops -> change tool. Short actions; each with intent. {timing}
 """
 
 
@@ -188,7 +187,7 @@ class HoloAgent(BaseAgent):
         timing = ("The game is frozen during deliberation; actions run with ticks enabled. Held inputs carry across steps only during action execution."
                   if self.config.timing == "freeze" else "The game runs during deliberation. Release held controls explicitly.")
         history = self.records[-self.config.history_steps:] if self.config.history_steps else []
-        summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "errors": r["errors"], "tool_results": r.get("tool_results", [])} for r in history]
+        summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "skipped_tool_calls": r.get("skipped_tool_calls", []), "errors": r["errors"], "tool_results": r.get("tool_results", [])} for r in history]
         content = [{"type": "text", "text": "Your recent actions and visible effects you reported; skills pixel estimates are heuristics: " + json.dumps(summaries)},
                    {"type": "text", "text": "Your scratchpad: " + (notes or "(empty)")}]
         selected = images[-self.config.history_images:]
@@ -278,6 +277,11 @@ class HoloAgent(BaseAgent):
                         record["reasoning"] = message.get("reasoning_content") or message.get("reasoning") or ""
                         record["raw_tool_calls"] = message.get("tool_calls") or []
                         calls = parse_calls(message, config.tier)
+                        record["skipped_tool_calls"] = []
+                        if config.tier == "skills":
+                            barrier = next((i + 1 for i, call in enumerate(calls) if call["name"] != "update_notes"), len(calls))
+                            record["skipped_tool_calls"] = calls[barrier:]
+                            calls = calls[:barrier]
                         record["tool_calls"] = calls
                         record["intent"] = [call["arguments"]["intent"] for call in calls]
                         if not calls:

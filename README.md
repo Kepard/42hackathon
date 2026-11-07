@@ -133,8 +133,13 @@ changing worlds; Minecraft's registry remains authoritative for item IDs and sta
 ### Repeatable benchmarks
 
 Built-in tasks contain a `spawn` object (`x`, `y`, `z`, `yaw`, `pitch`,
-`time_of_day`). On seed 12345, get-log starts at `(96.5, 128, -16.5)`, yaw 0,
-pitch 10, facing an oak tree about 9 blocks away. Reset clears inventory before
+`time_of_day`). The development ladder and short tasks now use seed **7941**,
+natural-spawn position `(0.5, 69, 0.5)`, yaw **109**, pitch **-3**, time **6000**.
+This faces exposed oak bark about 9.5 blocks away (F3 target `-9,71,-3`), across
+gently rising grass rather than the old cliff/leaf barrier. No waypoint hints or
+privileged state are included in the model prompt. Historical baseline and `p1`
+runs used seed 12345, `(96.5,128,-16.5)`, yaw0/pitch10; do not treat the new
+start as a controlled prompt-only comparison. Reset clears inventory before
 granting any task-specified starting items, restores health/hunger, clears weather,
 fixes daylight/weather cycling, teleports, and freezes the server. It waits for
 terrain rendering to finish before replying. HUD, first-person view, FOV 70 and
@@ -491,7 +496,7 @@ The client uses 854x480, GUI scale 2, FOV 70, brightness 1.0, no view bob/FOV,
 distortion/darkness/damage tilt effects, no clouds/entity shadows, advanced tooltips,
 subtitles, and no tutorial toasts. Auto-jump is enabled for skills and disabled for raw
 by the harness before each run. Mouse sensitivity stays 0.5. Mesa calibration at the
-fixed get_log spawn required render distance **2**: 854x480 measured 41/49/48 FPS
+former seed12345 spawn required render distance **2**: 854x480 measured 41/49/48 FPS
 across three views; distances 8/6/4 dipped below 30 (8 also timed out a fresh reset).
 The recipe book and inventory grid fit side by side at this resolution.
 
@@ -502,12 +507,28 @@ high; the prompt treats that as an approximate cue, not a distance sensor.
 Skills add concurrent sprint/jump/sneak movement, FOV-based `aim_at`, mouse-clamped
 `set_pitch`, `mine_up`, `attack_until_broken`, and model-authored `update_notes`.
 Every skills action reports normalized frame/center pixel changes, plus a heuristic
-stuck flag after two almost-unchanged moves. Attack samples every0.35s and reports
-`broke` only after two strong center changes; that can false-positive or miss a break.
+stuck flag after two almost-unchanged moves. The legacy `attack_until_broken` name
+now holds for the **full** requested duration, sampling every0.35s; pixel changes
+never end a log hold early. It reports `scene_changed`/`no_change`, not a break.
+`block_gone` and `item_collected` remain explicitly unknown (`null`); the model must
+verify removal and the log icon/count from pixels. Use ~0.6s for a blocking leaf,
+then observe/re-aim, and 3.5–4s for exposed wood by hand.
 It never checks a block ID, inventory, coordinates, or evaluator result. All source
 screenshots are attached on the next model turn and saved in `feedback_image_refs`;
 `input_image_refs` records the exact ordered image payload including the crop.
 Extra evidence frames increase token cost. Raw receives no computed feedback.
+
+Skills enforce an observation barrier after the first non-notes tool in each turn.
+Later requested calls are **discarded**, recorded in `skipped_tool_calls`, and shown
+in history as unexecuted; they are not queued for later. Raw batching is unchanged.
+This prevents aim/approach/mining chains through unseen foliage. The prompt explicitly
+distinguishes leaves, vertical bark and dirt, and treats leaf clearing as progress,
+not task success. No blind tree-chopping macro bypasses this barrier.
+
+The virtual mouse permits held synthetic attacks without an OS cursor grab, so
+mining works while Minecraft is unfocused. It never steals desktop focus, and is
+inactive in GUIs, after button release, pause/reset, or disconnect. The harness-only
+`cursor_locked` state field is diagnostic and is never sent to the model.
 
 Created obsidian is scoring-only: a successful water-bucket stat increment opens a
 200-tick window. Newly appearing obsidian within6 blocks of both the water-use origin

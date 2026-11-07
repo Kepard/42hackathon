@@ -237,7 +237,7 @@ async def test_runner_scores_without_exposing_state_and_emits(tmp_path, timing):
     assert "minecraft:oak_log" not in json.dumps(api.payloads)
     assert (tmp_path / "summary.json").exists()
     initial = json.loads((tmp_path / "initial_state.json").read_text())
-    assert client.reset_args == (12345, [], initial["task"]["spawn"])
+    assert client.reset_args == (7941, [], initial["task"]["spawn"])
     assert client.settings == {"auto_jump": True}
     assert initial["state"] == {"world_id": "fresh"}
     assert client.events[0] == ("pause" if timing == "freeze" else "resume")

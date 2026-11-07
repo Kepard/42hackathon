@@ -61,12 +61,14 @@ def outline(png):
                 continue
             if left < 8 or right > patch.width - 8 or (right - left) / (bottom - top) > 1.65:
                 continue
-            hits = sum(any(p[x, y] > 18 for x in range(max(0, left - 3), min(patch.width, left + 4)))
+            hits = sum(any(p[x, y] > 14 for x in range(max(0, left - 3), min(patch.width, left + 4)))
                        for y in range(top, bottom))
-            right_hits = sum(any(p[x, y] > 18 for x in range(max(0, right - 3), min(patch.width, right + 4)))
+            right_hits = sum(any(p[x, y] > 14 for x in range(max(0, right - 3), min(patch.width, right + 4)))
                              for y in range(top, bottom))
             required = .9 if (right - left) / (bottom - top) < .55 else .7
-            if min(hits, right_hits) / (bottom - top) >= required:
+            strong = [sum(any(p[x, y] > 18 for x in range(max(0, edge - 3), min(patch.width, edge + 4)))
+                          for y in range(top, bottom)) / (bottom - top) for edge in (left, right)]
+            if min(hits, right_hits) / (bottom - top) >= required and (min(strong) >= required or max(strong) >= .95):
                 return True
     return False
 

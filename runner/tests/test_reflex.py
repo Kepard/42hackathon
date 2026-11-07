@@ -1,5 +1,6 @@
 import io
 import asyncio
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -49,6 +50,11 @@ def test_screenshot_cues():
         hotbar_change(empty, PNG)
     with pytest.raises(OSError):
         outline(b"bad")
+
+
+@pytest.mark.parametrize("name,expected", [("outline_bark_oblique.png", True), ("outline_leaves.png", False), ("outline_distant_tree.png", False)])
+def test_real_outline_frames(name, expected):
+    assert outline((Path(__file__).parent / "fixtures" / name).read_bytes()) is expected
 
 
 @pytest.mark.parametrize("box", [(399, 209, 542, 277), (383, 162, 546, 302)])

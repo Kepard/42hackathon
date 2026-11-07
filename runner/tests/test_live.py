@@ -30,6 +30,8 @@ async def test_reset_freeze_gui_crafting_and_stream():
         task = next(task for task in tasks() if task.task_id == "craft_planks")
         await setup(task, session)
         initial = await session.state()
+        width = (await client.call("screenshot"))["width"]
+        shift = (width - 640) / 2
         assert initial["in_world"] and not initial["creative"]
         assert initial["seed"] == 12345 and initial["dimension"] == "minecraft:overworld"
         assert initial["world_id"].startswith("observatory-") and initial["world_id"] != "observatory-spike"
@@ -72,11 +74,11 @@ async def test_reset_freeze_gui_crafting_and_stream():
         opened = await session.state()
         assert opened["screen"] == "InventoryScreen" and opened["screen_open"]
         (EVIDENCE / "inventory-before.png").write_bytes(await session.screenshot())
-        await session.execute_action(cb.ClickAction(176, 374))  # Hotbar slot 0, with 4 logs.
-        await session.execute_action(cb.ClickAction(356, 126))  # Top-left 2x2 crafting slot.
+        await session.execute_action(cb.ClickAction(176 + shift, 374))  # Hotbar slot 0, with 4 logs.
+        await session.execute_action(cb.ClickAction(356 + shift, 126))  # Top-left 2x2 crafting slot.
         await asyncio.sleep(0.3)
-        await session.execute_action(cb.ClickAction(468, 146))  # Take the four oak planks.
-        await session.execute_action(cb.ClickAction(212, 374))  # Place planks into hotbar slot 1.
+        await session.execute_action(cb.ClickAction(468 + shift, 146))  # Take the four oak planks.
+        await session.execute_action(cb.ClickAction(212 + shift, 374))  # Place planks into hotbar slot 1.
         await asyncio.sleep(0.8)
         crafted = await session.state()
         (EVIDENCE / "inventory-after.png").write_bytes(await session.screenshot())
@@ -99,7 +101,7 @@ async def test_reset_freeze_gui_crafting_and_stream():
             assert event["event"] in event_counts
             event_counts[event["event"]] += 1
             if event["event"] == "frame":
-                assert event["data"]["width"] == 640
+                assert event["data"]["width"] == width
         assert event_counts == {"frame": 4, "state": 4}
         assert (await client.state())["in_world"]  # Responses interleaved with push events.
         await client.unsubscribe()
@@ -147,8 +149,9 @@ async def test_shift_click_macro_moves_stack():
     async with MinecraftClient() as client:
         await client.reset(12345, [{"id": "minecraft:oak_log", "count": 4}])
         await tap(client, 69)
-        executor = ToolExecutor(client, 640, 480)
-        await executor.execute({"name": "shift_click_at", "arguments": {"x": 176 * 1000 / 639, "y": 374 * 1000 / 479, "intent": "Move logs to the main inventory."}}, "skills")
+        width = (await client.call("screenshot"))["width"]
+        executor = ToolExecutor(client, width, 480)
+        await executor.execute({"name": "shift_click_at", "arguments": {"x": (176 + (width - 640) / 2) * 1000 / (width - 1), "y": 374 * 1000 / 479, "intent": "Move logs to the main inventory."}}, "skills")
         await asyncio.sleep(.3)
         inventory = (await client.state())["inventory"]
         assert any(stack["id"] == "minecraft:oak_log" and stack["slot"] >= 9 and stack["count"] == 4 for stack in inventory)

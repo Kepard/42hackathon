@@ -11,6 +11,7 @@ from pathlib import Path
 import aiohttp
 
 from .holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
+from .vision import center_crop
 
 try:
     from cua_bench.agents.base import BaseAgent
@@ -44,7 +45,7 @@ class HoloConfig:
     max_steps: int = 30
     time_budget: float = 180
     history_steps: int = 8
-    history_images: int = 1
+    history_images: int = 3
     temperature: float = 0.2
     seed: int | None = None
     max_cost_usd: float | None = None
@@ -121,20 +122,52 @@ class RunController:
                 await result
 
 
-PRIMER = """You control Minecraft Java Survival through screenshots and input tools only.
-Goal: {goal}
-W/A/S/D move, space jumps, shift sneaks, E toggles inventory, Escape closes GUIs (opens menu if none).
-Hotbar keys 1-9 select slots. Hold left mouse to break a block within ~4 blocks; keep aim steady
-until it breaks, then walk close to collect the drop. The crosshair is your aim; a visible
-block selection outline shows the targeted block within reach. Right mouse uses/places.
-Obtain a log by mining a tree trunk, not leaves. Screenshots include the vanilla HUD:
-crosshair, hotbar, health, and the F3 debug screen when toggled. F3/key_press or toggle_debug
-toggles debug information; read it only from pixels. Observatory telemetry is never shown.
-Look is RELATIVE, positive yaw/dx right, pitch/dy down. GUI click coordinates are normalized
-0..1000 from the screenshot's top-left; click_at is ONLY for visible GUIs, not world aiming.
-Every tool requires a short intent sentence. You may call several tools; they run sequentially.
-Use only the tools provided. Do not invent observations or claim completion without pixels.
-{timing}
+PRIMER = """Minecraft Java Survival, screenshots and input tools only. Goal: {goal}
+CHECK -> EXPLAIN -> ACT: compare recent frames; state last action's visible effect,
+a failure hypothesis if needed, and next subgoal in your intent.
+Describe observable outcomes, not hidden reasoning. Current goal overrides the route.
+Use update_notes for visible inventory, rung, landmarks and lessons.
+
+REACH: crosshair aims; a black block selection outline means within 4.5 blocks. No outline:
+approach/re-aim. Cracks should appear within ~0.3s; arm swinging
+without cracks is not progress. Inspect the 2x center crop. At vertical FOV70 and height480,
+a front-facing one-block face at reach is about 76px high (16% of height); smaller usually
+means farther. Approximate only. Aim at bark, not green leaves.
+Walk ~4.3 blocks/s. Short steps near cliffs; sneak at edges.
+Keep aim steady while mining; logs by hand take ~3s. Walk onto drops; verify hotbar icon/count.
+
+CONTROLS: WASD move, space jump, shift sneak, E inventory, Escape closes GUI (opens menu
+if none), 1-9 hotbar, left hold mine/attack, right use/place. Look is RELATIVE: yaw right,
+pitch down. GUI click_at is not world aiming. Skills aim_at takes a full-screen point;
+all x/y are 0..1000 on the FULL frame, not the crop. F3 via raw key_press or skills
+toggle_debug: read XYZ/Facing and Targeted Block only from pixels, then close it.
+F3 targets up to20 blocks: a name is NOT reach. Compare eye/target coordinates.
+Skills change scores/stuck/broke are disclosed pixel heuristics, not proof of mining or
+pickup; raw has no computed feedback. Check source frames.
+
+ROUTE / VISIBLE CHECKLIST (evidence may happen early; don't skip missing prerequisites):
+1 log: log icon/count. For full ladder gather ~6 logs -> planks (4/log), table (4 planks),
+sticks; recipe-book craftable filter, click recipe then shift-click output.
+2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
+4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
+Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.
+7 raw iron icon: search exposed cliffs/caves for tan-speckled iron, not copper; mine with
+stone pick. Fallback staircase toward Y16; never dig straight down. Get ~7 iron.
+8 ingot icon: furnace raw iron + coal/planks fuel, wait, take output. Budget iron:
+bucket3, iron pick3, flint-and-steel1. Coal smelts8, a plank1.5.
+9 hostile kill: zombie/spider in a cave; death smoke/drop, not merely a hit. Avoid creepers
+and skeletons; shelter/pillar, retreat below5 hearts. At fixed noon don't wait for night.
+10 flint-and-steel icon: gravel -> flint + ingot; ruined-portal/village chests help.
+11 obsidian: item OR create black-purple obsidian with water over lava SOURCE (flowing lava
+gives cobble). Casting counts. Chest loot also works; mining requires diamond pick, ~10s/block.
+12 portal: finish/repair a 2x3 interior, 10-obsidian frame; no crying obsidian. Cast missing
+blocks with bucket/mold if needed; light inner bottom with flint-and-steel; purple fill.
+13 enter Nether: portal ~4s, verify red terrain/dimension in F3.
+
+STUCK: two unchanged moves -> jump+forward or strafe/turn, not repeated forward.
+Never repeat a failed action >2 times: change distance, aim or subgoal. Close unexpected
+GUI first. No cracks -> move closer. Wrong tool/no drops -> change tool. Use short action
+chunks; only tools listed, each with intent. {timing}
 """
 
 
@@ -151,14 +184,20 @@ class HoloAgent(BaseAgent):
     def name():
         return "holo-minecraft"
 
-    def messages(self, images):
+    def messages(self, images, feedback_images=(), notes="", crop=None):
         timing = ("The game is frozen during deliberation; actions run with ticks enabled. Held inputs carry across steps only during action execution."
                   if self.config.timing == "freeze" else "The game runs during deliberation. Release held controls explicitly.")
         history = self.records[-self.config.history_steps:] if self.config.history_steps else []
-        summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "errors": r["errors"]} for r in history]
-        content = [{"type": "text", "text": "Recent input history (not game-state feedback): " + json.dumps(summaries)}]
-        for idx, png in images[-self.config.history_images:]:
-            content += [{"type": "text", "text": f"Screenshot from step {idx} (last image is current):"},
+        summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "errors": r["errors"], "tool_results": r.get("tool_results", [])} for r in history]
+        content = [{"type": "text", "text": "Your recent actions and visible effects you reported; skills pixel estimates are heuristics: " + json.dumps(summaries)},
+                   {"type": "text", "text": "Your scratchpad: " + (notes or "(empty)")}]
+        selected = images[-self.config.history_images:]
+        observations = [(f"Full screen from step {idx}", png) for idx, png in selected[:-1]]
+        observations += [(f"Previous action pixel-evidence frame {idx}", png) for idx, png in enumerate(feedback_images)]
+        observations += [(f"CURRENT full screen from step {selected[-1][0]}", selected[-1][1])]
+        observations += [("2x CURRENT center crop; coordinates still refer to the full screen", crop or center_crop(selected[-1][1]))]
+        for label, png in observations:
+            content += [{"type": "text", "text": label},
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]
         return [{"role": "system", "content": PRIMER.format(goal=self.controller.goal, timing=timing)}, {"role": "user", "content": content}]
 
@@ -171,6 +210,7 @@ class HoloAgent(BaseAgent):
         self.controller.goal = goal
         start, cost = time.monotonic(), 0.0
         images, executor = [], None
+        feedback_images, feedback_refs = [], []
         try:
             for idx in range(config.max_steps):
                 remaining = config.time_budget - (time.monotonic() - start)
@@ -193,7 +233,7 @@ class HoloAgent(BaseAgent):
                 api_start = None
                 action_start = None
                 if executor is not None:
-                    executor.actions = []
+                    executor.begin_step()
                 try:
                     async with asyncio.timeout(max(0.001, config.time_budget - (time.monotonic() - start))):
                         png = await client.screenshot()
@@ -203,11 +243,16 @@ class HoloAgent(BaseAgent):
                         images.append((idx, png))
                         images = images[-config.history_images:]
                         record["image_refs"] = [f"screenshots/{image_idx:05d}.png" for image_idx, _ in images]
+                        crop = center_crop(png)
+                        record["crop_ref"] = f"screenshots/{idx:05d}-center.png"
+                        (out / record["crop_ref"]).write_bytes(crop)
+                        record["input_image_refs"] = record["image_refs"][:-1] + feedback_refs + record["image_refs"][-1:] + [record["crop_ref"]]
                         width, height = struct.unpack(">II", png[16:24])
                         if executor is None:
                             executor = ToolExecutor(client, width, height)
                         executor.width, executor.height, executor.actions = width, height, []
-                        payload = {"model": config.model, "messages": self.messages(images), "tools": tool_schemas(config.tier),
+                        executor.begin_step(png)
+                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop), "tools": tool_schemas(config.tier),
                                    "temperature": config.temperature, "max_tokens": 2048}
                         if config.seed is not None:
                             payload["seed"] = config.seed
@@ -260,6 +305,15 @@ class HoloAgent(BaseAgent):
                     record["errors"].append(f"{type(error).__name__}: {error}")
                 if executor is not None:
                     record["executed_actions"] = executor.actions.copy()
+                    record["tool_results"] = executor.results.copy()
+                    record["notes"] = executor.notes
+                    feedback_images = executor.frames.copy()
+                    feedback_refs = []
+                    for frame_idx, frame in enumerate(feedback_images):
+                        ref = f"screenshots/{idx:05d}-action-{frame_idx:03d}.png"
+                        (out / ref).write_bytes(frame)
+                        feedback_refs.append(ref)
+                    record["feedback_image_refs"] = feedback_refs.copy()
                 record["finished_at"] = utcnow()
                 record["elapsed_seconds"] = time.monotonic() - start
                 cost += record["cost_usd"] or 0
@@ -278,6 +332,7 @@ class HoloAgent(BaseAgent):
     async def perform_task(self, task_description, session, logging_dir=None, tracer=None):
         from cua_bench.agents.base import AgentResult, FailureMode
 
+        await session.client.call("configure", auto_jump=self.config.tier == "skills")
         out = Path(logging_dir or "runs/base-agent")
         async for record in self.steps(session.client, task_description, out):
             with (out / "steps.jsonl").open("a") as stream:

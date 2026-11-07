@@ -1,7 +1,9 @@
 import asyncio
 import base64
 import json
-import struct
+import io
+
+from PIL import Image
 
 import pytest
 
@@ -11,7 +13,9 @@ from mc_observatory.run import FailureDetector, MinecraftRunner, summarize
 from mc_observatory.evaluator import LadderEvaluator
 
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + struct.pack(">II", 640, 480)
+_buffer = io.BytesIO()
+Image.new("RGB", (640, 480), (90, 100, 110)).save(_buffer, format="PNG")
+PNG = _buffer.getvalue()
 
 
 def call(name="wait", **args):
@@ -88,7 +92,7 @@ async def test_f3_is_pixel_only_keyboard_input(tier, name, args):
     await executor.execute(parsed[0], tier)
     assert executor.actions[0] == {"action": "key", "key": "f3", "pressed": True}
     assert executor.actions[-1] == {"action": "key", "key": "f3", "pressed": False}
-    assert client.events[0] == ("key", 292, {"pressed": True})
+    assert ("key", 292, {"pressed": True}) in client.events
     with pytest.raises(InvalidToolArgs):
         parse_calls({"tool_calls": [call("toggle_debug", read_text=True)]}, "skills")
 
@@ -97,7 +101,8 @@ def test_realtime_default_and_hud_prompt():
     from mc_observatory.holo import PRIMER
     from mc_observatory.server import StartRun
     assert HoloConfig().timing == StartRun().timing == "realtime"
-    assert "block selection outline" in PRIMER and "read it only from pixels" in PRIMER
+    assert HoloConfig().history_images == 3
+    assert "block selection outline" in PRIMER and "only from pixels" in PRIMER
 
 
 async def test_freeze_order_pixels_only_and_history(tmp_path):
@@ -115,10 +120,12 @@ async def test_freeze_order_pixels_only_and_history(tmp_path):
     assert records[0]["tokens"]["reasoning"] == 30
     payload_text = json.dumps(api.payloads)
     assert "never send score" not in payload_text and "1234567" not in payload_text
-    for payload in api.payloads:
+    for index, payload in enumerate(api.payloads):
         images = [part for part in payload["messages"][1]["content"] if part["type"] == "image_url"]
-        assert len(images) == 1
+        assert len(images) == (2 if index == 0 else 4)
         assert base64.b64decode(images[0]["image_url"]["url"].split(",")[1]) == PNG
+        crop = Image.open(io.BytesIO(base64.b64decode(images[-1]["image_url"]["url"].split(",")[1])))
+        assert crop.size == (320, 240)
     assert (tmp_path / records[0]["screenshot_ref"]).read_bytes() == PNG
 
 
@@ -173,10 +180,11 @@ async def test_macros_use_only_inputs_and_shift_coordinates():
     calls = parse_calls({"tool_calls": [call("look", yaw_deg=15, pitch_deg=-15), call("shift_click_at", x=1000, y=1000)]}, "skills")
     for item in calls:
         await executor.execute(item, "skills")
-    assert client.events[0] == ("mouse", {"dx": 100, "dy": -100})
+    assert ("mouse", {"dx": 100, "dy": -100}) in client.events
     assert ("mouse", {"x": 639, "y": 479}) in client.events
-    assert client.events[1] == ("key", 340, {"pressed": True})
-    assert client.events[-1] == ("key", 340, {"pressed": False})
+    inputs = [event for event in client.events if isinstance(event, tuple)]
+    assert inputs[1] == ("key", 340, {"pressed": True})
+    assert inputs[-1] == ("key", 340, {"pressed": False})
 
 
 async def test_controller_pause_stop_goal_and_events():

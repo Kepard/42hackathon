@@ -281,7 +281,7 @@ uv pip install -e '.[test]'
 Each invocation creates a unique run directory. **Do not commit runs, screenshots, logs or
 traces**; `runs/` and spike outputs are ignored. `--no-trace` runs without cua-bench installed.
 Otherwise install the optional local cua-bench integration as above. Available options include
-`--history-steps` (default 8 text summaries), `--history-images` (default 1, includes current),
+`--history-steps` (default 8 text summaries), `--history-images` (default 3, includes current),
 `--temperature`, model sampling `--seed`, `--time-budget` (seconds, default 180),
 `--max-cost-usd`, `--failure-window` (default 5) and `--url`. Task definitions determine the
 world seed and inventory independently of model sampling seed. The run time budget is explicit;
@@ -292,8 +292,9 @@ it defaults to the get-log task's three-minute budget, but may be overridden for
 also works without cua-bench. It calls only screenshot/input/pause APIs. `MinecraftRunner`
 separately reads state for grading/diagnostics, appends it to records, and never feeds it into
 the model. Prompts contain a concise controls primer, current goal, previous input summaries
-and only the configured screenshots. They contain no inventory, coordinates, health, GUI flags,
-milestone feedback or other state telemetry. The image files are the exact PNGs sent as data URLs.
+and configured screenshots, plus disclosed screenshot-derived skills estimates. No privileged
+inventory, coordinates, health, GUI flags or milestone telemetry enters prompts. Visible HUD/F3
+pixels and model-authored notes remain allowed. Image files are the exact PNGs sent as data URLs.
 
 - **raw:** named key down/up/press, relative mouse look, mouse button down/up/click, GUI
   `click_at`, text and millisecond waits. Multiple calls run sequentially; no parallel actions.
@@ -483,6 +484,35 @@ BUILD SUCCESSFUL in 3s
 Warnings are upstream cua-bench `Tracing`'s deprecated `datetime.utcnow()` call; its dataset
 and PNG export succeeded. Outputs: `spike/core-tests.log`, `spike/core-live-final.log`,
 `spike/core-build.log`. Inventory-before/after and typed-chat PNGs were visually inspected.
+
+## Phase 1 survival skills
+
+The client uses 854x480, GUI scale 2, FOV 70, brightness 1.0, no view bob/FOV,
+distortion/darkness/damage tilt effects, no clouds/entity shadows, advanced tooltips,
+subtitles, and no tutorial toasts. Auto-jump is enabled for skills and disabled for raw
+by the harness before each run. Mouse sensitivity stays 0.5. Mesa calibration at the
+fixed get_log spawn required render distance **2**: 854x480 measured 41/49/48 FPS
+across three views; distances 8/6/4 dipped below 30 (8 also timed out a fresh reset).
+The recipe book and inventory grid fit side by side at this resolution.
+
+Both tiers receive the last three full frames and a nearest-neighbor 2x crosshair crop
+(160x120 source pixels). At height480/FOV70, a face-on block at4.5 blocks is about76px
+high; the prompt treats that as an approximate cue, not a distance sensor.
+
+Skills add concurrent sprint/jump/sneak movement, FOV-based `aim_at`, mouse-clamped
+`set_pitch`, `mine_up`, `attack_until_broken`, and model-authored `update_notes`.
+Every skills action reports normalized frame/center pixel changes, plus a heuristic
+stuck flag after two almost-unchanged moves. Attack samples every0.35s and reports
+`broke` only after two strong center changes; that can false-positive or miss a break.
+It never checks a block ID, inventory, coordinates, or evaluator result. All source
+screenshots are attached on the next model turn and saved in `feedback_image_refs`;
+`input_image_refs` records the exact ordered image payload including the crop.
+Extra evidence frames increase token cost. Raw receives no computed feedback.
+
+Created obsidian is scoring-only: a successful water-bucket stat increment opens a
+200-tick window. Newly appearing obsidian within6 blocks of both the water-use origin
+and the current player counts; preexisting blocks, failed uses, distant blocks and
+expired windows do not. Evidence is world-scoped and never enters model history.
 
 ## Probe / evidence
 

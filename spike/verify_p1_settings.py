@@ -24,7 +24,7 @@ async def main():
         await client.call("configure", auto_jump=True, width=854, render_distance=8)
         results = []
         await client.resume()
-        for distance in (8, 6, 4):
+        for distance in (8, 6, 4, 2):
             await client.call("configure", render_distance=distance)
             samples = []
             for turn in range(3):

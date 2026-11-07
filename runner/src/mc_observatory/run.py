@@ -200,7 +200,7 @@ def main():
     run.add_argument("--max-steps", type=int, default=30)
     run.add_argument("--time-budget", type=float, default=180)
     run.add_argument("--history-steps", type=int, default=8)
-    run.add_argument("--history-images", type=int, default=1)
+    run.add_argument("--history-images", type=int, default=3)
     run.add_argument("--temperature", type=float, default=.2)
     run.add_argument("--seed", type=int)
     run.add_argument("--max-cost-usd", type=float)

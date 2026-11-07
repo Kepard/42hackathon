@@ -213,7 +213,7 @@ class ToolExecutor:
             x, y = (l + r) / 2, (t + b) / 2
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
             previous_miss = self.failed_mining_frame is not None and changes(self.failed_mining_frame, frame)["center_change"] < .01
-            if previous_miss and l <= .5 <= r and t <= .5 <= b and (r - l) * self.width >= 180 * self.height / 480:
+            if previous_miss and centered and (r - l) * self.width >= 180 * self.height / 480:
                 decision.update(decision="stuck", reason="unchanged_mining_target_too_close")
                 return "stuck"
             if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame):

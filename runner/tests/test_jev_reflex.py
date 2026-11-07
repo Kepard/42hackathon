@@ -177,6 +177,18 @@ async def test_failed_mining_at_close_face_reports_stuck_with_recovery(monkeypat
     assert not any(a["action"] in ("mouse", "key") for a in ex.actions)
 
 
+async def test_different_off_center_target_can_steer_after_failed_mining(monkeypatch):
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    ex = executor(FakeJev(box=(.4,.3,.9,.7)))
+    assert await ex.attack_until_broken(.35) == "no_change"
+    ex.begin_step(PNG)
+    result = await ex.execute({"name": "seek", "arguments": {"target": "stone", "max_s": .01}}, "skills")
+    assert result["outcome"] == "timeout" and not result["stuck"]
+    assert ex.jev.calls[0]["decision"] == "steer"
+    assert ex.jev.calls[0]["yaw_deg"] > 0
+    assert not ex.held_keys and not ex.held_buttons
+
+
 @pytest.mark.parametrize("use_jev", [False, True])
 async def test_attack_footer_change_has_consistent_scene_feedback_but_no_target_progress(monkeypatch, use_jev):
     from test_pixel_skills import png

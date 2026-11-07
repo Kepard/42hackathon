@@ -523,7 +523,8 @@ public class Observatory implements ClientModInitializer {
                     if (payload.has("completed")) payload.addProperty("completed", Math.max(0, Math.min(13, payload.get("completed").getAsInt())));
                     long now = System.nanoTime();
                     if (!Objects.equals(payload.get("objective"), overlay.get("objective"))
-                            || (payload.has("badges") && payload.get("badges").getAsString().contains("STARTING")
+                            || (payload.has("badges") && !payload.get("badges").isJsonNull()
+                            && payload.get("badges").getAsString().contains("STARTING")
                             && !label("badges", "").contains("STARTING"))) objectiveUntil = now + 3_000_000_000L;
                     if (payload.has("completed") && payload.get("completed").getAsInt()
                             > (overlay.has("completed") ? overlay.get("completed").getAsInt() : 0)) completionUntil = now + 2_000_000_000L;

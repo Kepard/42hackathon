@@ -164,6 +164,22 @@ async def test_completion_budget_and_finish_reason(tmp_path,finish,calls,tag):
     if finish=="length": assert "Completion token budget exhausted" in r["errors"][0]
 
 
+@pytest.mark.parametrize("finish",["length","tool_calls"])
+async def test_action_error_is_recorded_alongside_truncated_completion(tmp_path,finish):
+    class RejectedGUIClient(PixelClient):
+        async def mouse(self,**args):
+            raise RuntimeError("GUI coordinates require an open screen")
+    client=RejectedGUIClient()
+    result=response([call("click_at",x=200,y=300)])
+    result["choices"][0]["finish_reason"]=finish
+    records=[r async for r in HoloAgent(HoloConfig(max_steps=1),FakeAPI(client,result)).steps(client,"Craft",tmp_path)]
+    tags=records[0]["failure_tags"]
+    assert tags.count("action_error")==1
+    assert ("completion_truncated" in tags) is (finish=="length")
+    assert records[0]["tool_calls"][0]["name"]=="click_at"
+    assert "GUI coordinates require an open screen" in records[0]["errors"][-1]
+
+
 @pytest.mark.parametrize("result,error,tag", [(response([]), None, "no_tool_call"),
                                              (response([call(seconds=-2)]), None, "invalid_tool_args"),
                                              (None, RuntimeError("unavailable"), "api_error")])

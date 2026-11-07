@@ -413,8 +413,9 @@ class HoloAgent(BaseAgent):
                 except Exception as error:
                     if isinstance(error, HoloAPIError):
                         record["api_errors"] = error.errors
-                    if not record["failure_tags"]:
-                        record["failure_tags"].append("api_error" if api_start is not None and action_start is None else "action_error")
+                    error_tag = "api_error" if api_start is not None and action_start is None else "action_error"
+                    if error_tag not in record["failure_tags"]:
+                        record["failure_tags"].append(error_tag)
                     record["errors"].append(f"{type(error).__name__}: {error}")
                 if executor is not None:
                     record["executed_actions"] = executor.actions.copy()

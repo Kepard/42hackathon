@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Panel } from "./ui";
 
 type Task = Record<string, unknown>;
 type Investigation = {
@@ -156,10 +157,7 @@ export default function DevinPanel({
     }
   }
   return (
-    <section
-      className="panel devin-panel"
-      aria-label="Devin engineering copilot"
-    >
+    <Panel className="panel devin-panel" aria-label="Devin engineering copilot">
       <div className="section-head">
         <h3>Devin engineering copilot</h3>
         <span>ON DEMAND · RECORDED EVIDENCE ONLY</span>
@@ -310,6 +308,6 @@ export default function DevinPanel({
           )}
         </article>
       ))}
-    </section>
+    </Panel>
   );
 }

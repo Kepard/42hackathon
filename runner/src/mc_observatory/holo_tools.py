@@ -57,8 +57,8 @@ SKILLS = {
     "toggle_debug": ("Tap F3 to toggle Minecraft's vanilla debug screen; read it only from screenshots.", {}),
     "aim_at": ("Aim at a full-screen point (0..1000) using FOV70 geometry, not game state. Approximate at steep pitch. Lower-right points warn about possible held-item confusion, not object identification. Check next frame.", XY),
     "set_pitch": ("Set pitch -90 up .. +90 down by clamping with mouse input, then rotating back. Reads no orientation state.", {"deg": number(-90, 90)}),
-    "mine_up": ("Mine at exactly -90 pitch, without close/outline/Jev gates. Set break_s from the VISIBLE tool and block: woodpick stone~1.15s, bare-hand log~3s; adds0.35s margin. Retry once without hotbar pickup (grass/seam). Reports screen/hotbar change, NOT semantic break proof. Inspect ceiling first.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}, "break_s": {**number(.1,10),"default":1.5}}),
-    "mine_down": ("Mine at exactly +90 pitch, without close/outline/Jev gates. DANGEROUS: inspect supporting floor first. Set break_s from VISIBLE tool/block: dirt~0.75s, woodpick stone~1.15s; adds0.35s margin. Retry once without hotbar pickup (grass/seam). Reports screen/hotbar change, NOT semantic break proof.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}, "break_s": {**number(.1,10),"default":1.5}}),
+    "mine_up": ("Mine at exactly -90 pitch, without close/outline/Jev gates. Set break_s from the VISIBLE tool and block: woodpick stone~1.15s, bare-hand log~3s; adds0.35s margin. Retry once only if neither pickup nor break-level pixel change. Reports screen/hotbar change, NOT semantic break proof. Inspect ceiling first.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}, "break_s": {**number(.1,10),"default":1.5}}),
+    "mine_down": ("Mine at exactly +90 pitch, without close/outline/Jev gates. DANGEROUS: inspect supporting floor first. Set break_s from VISIBLE tool/block: dirt~0.75s, woodpick stone~1.15s; adds0.35s margin. Retry once only if neither pickup nor break-level pixel change. Reports screen/hotbar change, NOT semantic break proof.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}, "break_s": {**number(.1,10),"default":1.5}}),
     "attack_until_broken": ("Always walk right up to the block before mining (~1.5–2blocks, centred face width scaled by frame height). First take short forward steps up to4s; stuck/danger/uncertain target returns not_close. Then hold at most max_s. Scene change is NOT break/pickup proof.", {"max_s": number(.35, 10)}),
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
@@ -184,10 +184,11 @@ class ToolExecutor:
                 after = await self.observe()
                 delta = changes(before,after)
                 pickup = hotbar_change(before,after)
+                broke = delta["frame_change"] >= .08 or (delta["center_changed_fraction"] >= .7 and delta["center_change"] >= .08)
                 changed |= delta["frame_change"] >= .002
                 self.vertical_mining.append({"block":block,"attempt":attempt,"break_s":break_s,"margin_s":.35,
-                                             **delta,"scene_changed":delta["frame_change"]>=.002,"hotbar_changed":pickup})
-                if pickup: break
+                                             **delta,"scene_changed":delta["frame_change"]>=.002,"hotbar_changed":pickup,"break_pixel_cue":broke})
+                if pickup or broke: break
             outcomes.append("scene_changed" if changed else "no_change")
         return outcomes
 

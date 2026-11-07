@@ -1,7 +1,9 @@
+import io
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from PIL import Image, ImageDraw
 
 from mc_observatory.holo_tools import ToolExecutor
 from mc_observatory.vision import outline, outline_box
@@ -46,3 +48,21 @@ async def test_vertical_hold_releases_attack_on_error(monkeypatch):
         await ex.execute({"name":"mine_down","arguments":{"count":1}},"skills")
     assert not ex.held_buttons
     assert ("mouse",{"button":0,"pressed":False}) in client.events
+
+
+@pytest.mark.parametrize("region",["centre","screen"])
+async def test_break_level_change_without_pickup_never_mines_a_second_block(monkeypatch,region):
+    monkeypatch.setattr("mc_observatory.holo_tools.asyncio.sleep",AsyncMock())
+    before=png("black",(854,480))
+    im=Image.new("RGB",(854,480),"black");draw=ImageDraw.Draw(im)
+    if region=="centre": draw.rectangle((395,208,458,271),fill="white")
+    else:
+        draw.rectangle((0,0,853,399),fill="white")
+        draw.rectangle((395,208,458,271),fill="black")
+    out=io.BytesIO();im.save(out,format="PNG");after=out.getvalue()
+    client=PixelClient();client.screenshot=AsyncMock(side_effect=[before,after])
+    ex=ToolExecutor(client,854,480);ex.begin_step(before)
+    result=await ex.execute({"name":"mine_down","arguments":{"count":1}},"skills")
+    assert not result["hotbar_changed"] and len(result["vertical_mining"])==1
+    assert result["vertical_mining"][0]["break_pixel_cue"]
+    assert sum(a.get("button")==0 and a.get("pressed") is True for a in ex.actions)==1

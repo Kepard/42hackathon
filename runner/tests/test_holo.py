@@ -230,3 +230,14 @@ async def test_stop_during_setup_is_honored(tmp_path):
     api = FakeAPI(client)
     summary = await MinecraftRunner(HoloAgent(HoloConfig(), api, controller), client, tmp_path, tracing=False).run("get_log")
     assert summary["steps"] == 0 and not api.payloads
+
+
+@pytest.mark.parametrize("calls,tag", [([], "no_tool_call"), ([call(seconds=-1)], "invalid_tool_args")])
+async def test_cost_cap_applies_to_unusable_completions(tmp_path, calls, tag):
+    client = PixelClient()
+    api = FakeAPI(client, response(calls))
+    agent = HoloAgent(HoloConfig(max_steps=5, max_cost_usd=.000001), api)
+    rows = [r async for r in agent.steps(client, "Observe", tmp_path)]
+    assert len(api.payloads) == len(rows) == 1
+    assert {tag, "budget_exhausted"} <= set(rows[0]["failure_tags"])
+    assert rows[0]["executed_actions"] == []

@@ -220,6 +220,8 @@ class HoloAgent(BaseAgent):
                         finally:
                             record["api_latency_ms"] = (time.monotonic() - api_start) * 1000
                         record["tokens"], record["cost_usd"] = usage_cost(response.get("usage") or {}, config.model)
+                        if config.max_cost_usd is not None and cost + (record["cost_usd"] or 0) >= config.max_cost_usd:
+                            record["failure_tags"].append("budget_exhausted")
                         message = response["choices"][0]["message"]
                         record["reasoning"] = message.get("reasoning_content") or message.get("reasoning") or ""
                         record["raw_tool_calls"] = message.get("tool_calls") or []
@@ -228,9 +230,7 @@ class HoloAgent(BaseAgent):
                         record["intent"] = [call["arguments"]["intent"] for call in calls]
                         if not calls:
                             record["failure_tags"].append("no_tool_call")
-                        elif config.max_cost_usd is not None and cost + (record["cost_usd"] or 0) >= config.max_cost_usd:
-                            record["failure_tags"].append("budget_exhausted")
-                        else:
+                        elif "budget_exhausted" not in record["failure_tags"]:
                             action_start = time.monotonic()
                             try:
                                 if config.timing == "freeze":

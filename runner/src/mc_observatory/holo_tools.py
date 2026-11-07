@@ -207,7 +207,7 @@ class ToolExecutor:
             l, t, r, b = decision["box"]
             x, y = (l + r) / 2, (t + b) / 2
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
-            if centered and outline(frame):
+            if l <= .5 <= r and t <= .5 <= b and outline(frame):
                 await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
                 if outline(await self.observe()):
                     decision["decision"] = "in_reach"

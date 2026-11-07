@@ -144,6 +144,14 @@ async def test_seek_does_not_report_transient_outline_as_settled_reach(monkeypat
     assert not ex.held_keys and not ex.held_buttons
 
 
+async def test_seek_confirms_reachable_off_center_face_without_steering(monkeypatch):
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    ex = executor(FakeJev(box=(.49,.3,.79,.7)))
+    assert await ex.seek("oak log trunk", .01) == "in_reach"
+    assert ex.jev.calls[0]["decision"] == "in_reach"
+    assert not any(a["action"] in ("mouse", "key") for a in ex.actions)
+
+
 async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
     fake = FakeJev()

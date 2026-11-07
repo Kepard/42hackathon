@@ -41,10 +41,8 @@ import org.java_websocket.server.WebSocketServer;
 import org.lwjgl.glfw.GLFW;
 
 import java.net.InetSocketAddress;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.awt.image.BufferedImage;
-import javax.imageio.ImageIO;
+import java.awt.image.DataBufferInt;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -52,6 +50,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class Observatory implements ClientModInitializer {
     private static JsonObject overlay = new JsonObject();
     private static boolean overlayDrawn;
+    private static boolean modelCapturedThisFrame;
+    private static final ViewerEncoder viewer = new ViewerEncoder();
+    private static long lastViewerState;
+    private static long viewerSequence;
     private static long objectiveUntil;
     private static long completionUntil;
     private static boolean autoJump = true;
@@ -166,7 +168,6 @@ public class Observatory implements ClientModInitializer {
     private static volatile JsonObject serverState = new JsonObject();
     private static long frames;
     private static long started = System.nanoTime();
-    private static long lastPush;
     private boolean worldStarted;
     private static volatile Reset reset;
     private int readyTicks;
@@ -198,6 +199,7 @@ public class Observatory implements ClientModInitializer {
 
     public static void beginFrame() {
         overlayDrawn = false;
+        modelCapturedThisFrame = false;
     }
 
     public static void endFrame() {
@@ -205,31 +207,43 @@ public class Observatory implements ClientModInitializer {
         boolean cleanFallback = !overlayDrawn && !captures.isEmpty();
         Capture pending;
         if (!overlayDrawn) while ((pending = captures.poll()) != null) capture(pending, "end_frame_fallback");
-        if (cleanFallback || subscribers.isEmpty() || System.nanoTime() - lastPush < 200_000_000L) return;
-        lastPush = System.nanoTime();
+        long now = System.nanoTime();
+        if (cleanFallback || modelCapturedThisFrame || subscribers.isEmpty() || !viewer.acquire(now)) return;
         try {
-            JsonObject frame = viewerImage();
-            JsonObject state = state();
-            for (WebSocket socket : subscribers) {
-                if (socket.hasBufferedData()) continue;
-                push(socket, "frame", frame); push(socket, "state", state);
-            }
+            JsonObject snapshot = now - lastViewerState >= 1_000_000_000L ? state() : null;
+            if (snapshot != null) lastViewerState = now;
+            long sequence = ++viewerSequence;
+            NativeImage pixels = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer());
+            viewer.submit(() -> {
+                try (pixels) { return viewerPixels(pixels); }
+            }, encoded -> {
+                JsonObject frame = new JsonObject();
+                frame.addProperty("jpeg_base64", Base64.getEncoder().encodeToString(encoded.jpeg()));
+                frame.addProperty("width", encoded.width()); frame.addProperty("height", encoded.height());
+                frame.addProperty("capture_point", "end_frame_viewer"); frame.addProperty("sequence", sequence);
+                frame.addProperty("capture_ns", now); frame.addProperty("encode_ms", encoded.nanos() / 1_000_000.0);
+                for (WebSocket socket : subscribers) {
+                    if (socket.hasBufferedData()) continue;
+                    push(socket, "frame", frame);
+                    if (snapshot != null) push(socket, "state", snapshot);
+                }
+            }, Observatory::viewerError);
         } catch (Exception error) {
-            for (WebSocket socket : subscribers) push(socket, "stream_error", new JsonPrimitive(error.toString()));
+            viewer.release(); viewerError(error);
         }
     }
 
-    private static JsonObject viewerImage() throws Exception {
-        try (NativeImage image = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer())) {
-            BufferedImage source = ImageIO.read(new ByteArrayInputStream(image.getBytes()));
-            BufferedImage rgb = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_RGB);
-            var graphics = rgb.createGraphics(); graphics.drawImage(source, 0, 0, null); graphics.dispose();
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); ImageIO.write(rgb, "jpeg", bytes);
-            JsonObject result = new JsonObject();
-            result.addProperty("jpeg_base64", Base64.getEncoder().encodeToString(bytes.toByteArray()));
-            result.addProperty("width", source.getWidth()); result.addProperty("height", source.getHeight());
-            result.addProperty("capture_point", "end_frame_viewer"); return result;
-        }
+    private static void viewerError(Exception error) {
+        for (WebSocket socket : subscribers) push(socket, "stream_error", new JsonPrimitive(error.toString()));
+    }
+
+    private static BufferedImage viewerPixels(NativeImage image) {
+            BufferedImage rgb = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
+            int[] pixels = ((DataBufferInt) rgb.getRaster().getDataBuffer()).getData();
+            for (int y = 0; y < image.getHeight(); y++) {
+                for (int x = 0; x < image.getWidth(); x++) pixels[y * image.getWidth() + x] = ViewerEncoder.rgb(image.getColor(x, y));
+            }
+            return rgb;
     }
 
     private static JsonObject image(String point) throws Exception {
@@ -244,6 +258,7 @@ public class Observatory implements ClientModInitializer {
     private static void capture(Capture capture, String point) {
         if (capture.done().get()) return;
         try {
+            modelCapturedThisFrame = true;
             JsonObject result = image(point);
             if (capture.done().compareAndSet(false, true)) reply(capture.socket(), capture.id(), result);
         } catch (Exception error) {
@@ -501,6 +516,7 @@ public class Observatory implements ClientModInitializer {
             String command = request.get("command").getAsString(); JsonObject result = new JsonObject();
             switch (command) {
                 case "configure" -> {
+                    if (request.has("viewer_fps")) viewer.setFps(request.get("viewer_fps").getAsInt());
                     if (request.has("auto_jump")) {
                         if (!request.get("auto_jump").isJsonPrimitive() || !request.getAsJsonPrimitive("auto_jump").isBoolean()) throw new IllegalArgumentException("auto_jump must be boolean");
                         autoJump = request.get("auto_jump").getAsBoolean();

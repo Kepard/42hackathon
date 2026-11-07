@@ -391,6 +391,12 @@ to local dashboard addresses. Do not expose these ports or use multiple backend 
 The backend owns one persistent authenticated mod connection, one active run and its controller.
 The CLI must not control Minecraft concurrently with a dashboard run.
 
+The overlay-inclusive JPEG viewer targets 30 FPS. `configure` accepts `viewer_fps`
+from 0 (disabled) to 60; the exact model PNG path is unchanged and takes priority
+over viewer capture. Pixel conversion/JPEG encoding use one background job with
+no frame backlog. The dashboard reports measured arrival FPS and updates only
+the viewer image per frame, not the entire React application.
+
 REST (`/docs` on port 8000 provides schemas):
 - `POST /api/runs`: task/model/tier/timing, `max_steps`, `time_budget`, optional `max_cost_usd`.
   Returns run ID, or 409 if busy, 503 if Minecraft/key is unavailable, 422 for invalid config.

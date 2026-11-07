@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import {
   AnimatePresence,
   LayoutGroup,
@@ -135,11 +135,13 @@ function Frame({
   record,
   label,
   markers = false,
+  imageRef,
 }: {
   src?: string;
   record?: Step;
   label: string;
   markers?: boolean;
+  imageRef?: Ref<HTMLImageElement>;
 }) {
   const points =
     record?.tool_calls.filter(
@@ -149,7 +151,7 @@ function Frame({
     <div className="frame">
       <div className="frame-label">{label}</div>
       {src ? (
-        <img src={src} alt={label} />
+        <img ref={imageRef} src={src} alt={label} />
       ) : (
         <div className="empty">
           {label.includes("Model")
@@ -564,8 +566,12 @@ function App() {
     "ladder",
   ]);
   const [overlay, setOverlay] = useState<Overlay>({});
-  const [viewer, setViewer] = useState<string>(),
-    [model, setModel] = useState<string>(),
+  const viewer = useRef<string | undefined>(undefined);
+  const viewerImage = useRef<HTMLImageElement>(null);
+  const [viewerStarted, setViewerStarted] = useState(false);
+  const [viewerFps, setViewerFps] = useState<number>();
+  const viewerStats = useRef({ started: performance.now(), frames: 0, ready: false });
+  const [model, setModel] = useState<string>(),
     [modelStep, setModelStep] = useState(-1);
   const [steps, setSteps] = useState<Step[]>([]),
     [summary, setSummary] = useState<Summary | null>(null);
@@ -636,8 +642,21 @@ function App() {
               .catch((e) => setError(e.message));
         }
         if (type === "connection") setConnected(data.connected);
-        if (type === "frame")
-          setViewer(`data:image/jpeg;base64,${data.jpeg_base64}`);
+        if (type === "frame") {
+          viewer.current = `data:image/jpeg;base64,${data.jpeg_base64}`;
+          if (viewerImage.current) viewerImage.current.src = viewer.current;
+          else if (!viewerStats.current.ready) {
+            viewerStats.current.ready = true;
+            setViewerStarted(true);
+          }
+          const now = performance.now(), stats = viewerStats.current;
+          stats.frames++;
+          if (now - stats.started >= 1000) {
+            setViewerFps(stats.frames * 1000 / (now - stats.started));
+            stats.frames = 0;
+            stats.started = now;
+          }
+        }
         if (type === "agent_frame") {
           setModel(`data:image/png;base64,${data.png_base64}`);
           setModelStep(data.step);
@@ -860,10 +879,11 @@ function App() {
                           <span className="live-dot" />
                           Live world
                         </h3>
-                        <span>VIEWER · JPEG · ~5 FPS</span>
+                        <span>VIEWER · JPEG · {viewerFps?.toFixed(0) ?? "30 TARGET"} FPS</span>
                       </div>
                       <Frame
-                        src={viewer}
+                        src={viewerStarted ? viewer.current : undefined}
+                        imageRef={viewerImage}
                         label="Spectator view · includes overlay"
                       />
                       <div className="viewer-caption">

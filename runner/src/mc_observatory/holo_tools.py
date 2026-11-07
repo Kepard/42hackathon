@@ -178,7 +178,7 @@ class ToolExecutor:
             if probe["used"]:
                 await self.primitive("wait", ms=min(.6, max(0, deadline - time.monotonic() - .1)) * 1000)
                 try:
-                    frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
+                    frame = await asyncio.wait_for(self.observe(), max(.001, min(.2, deadline - time.monotonic())))
                     observed = changes(reference, frame)
                     center_progress = observed["center_change"]
                     probe.update(succeeded=center_progress >= .002 and observed["center_changed_fraction"] >= .01,

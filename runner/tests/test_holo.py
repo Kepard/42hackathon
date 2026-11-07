@@ -441,6 +441,22 @@ def test_agent_uses_environment_key_without_explicit_api(monkeypatch):
         HoloAgent()
 
 
+@pytest.mark.parametrize("failed", [False, True])
+async def test_request_and_completion_lengths_distinguish_missing_responses(tmp_path, failed):
+    class API(FakeAPI):
+        async def complete(self, payload):
+            self.payloads.append(payload)
+            if failed: raise TimeoutError
+            return response([call(seconds=0)])
+    client = PixelClient()
+    api = API(client)
+    row = [r async for r in HoloAgent(HoloConfig(max_steps=1),api).steps(client,"Observe",tmp_path)][0]
+    assert row["request_bytes"] == len(json.dumps(api.payloads[0]).encode("utf-8"))
+    assert row["request_image_count"] == 2
+    assert (row["completion_json_chars"] is None) is failed
+    if not failed: assert row["completion_json_chars"] > 0
+
+
 async def test_stop_during_setup_is_honored(tmp_path):
     controller = RunController()
 

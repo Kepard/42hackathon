@@ -82,7 +82,7 @@ class HoloAPIError(RuntimeError):
 class HoloAPI:
     _locks = {}
     _next = {}
-    short_timeout = 20
+    short_timeout = 6
 
     def __init__(self, api_key, api_timeout=15):
         if not api_key:
@@ -107,11 +107,15 @@ class HoloAPI:
                     await asyncio.sleep(max(0, self._next.get(model, 0) - time.monotonic()))
                     self._next[model] = time.monotonic() + 2.05
                 try:
+                    self.last_request_phase = "dispatch"
+                    self.last_response_status = None
+                    self.last_response_bytes = None
                     request_timeout = min(self.short_timeout, self.api_timeout) if attempt == 0 else self.api_timeout
                     async with asyncio.timeout(request_timeout):
                         return await self._request(session, payload, errors, request_timeout)
                 except TimeoutError:
-                    errors.append({"status": None, "type": "request_timeout", "timeout_s": request_timeout, "attempt": attempt + 1})
+                    errors.append({"status": None, "type": "request_timeout", "timeout_s": request_timeout, "attempt": attempt + 1,
+                                   "phase": self.last_request_phase, "response_status": self.last_response_status, "response_bytes": self.last_response_bytes})
                     if timeout_retried or attempt == 2:
                         raise
                     timeout_retried = True
@@ -125,11 +129,18 @@ class HoloAPI:
                     await asyncio.sleep(delay)
 
     async def _request(self, session, payload, errors, request_timeout):
+        self.last_request_phase = "headers"
         async with session.post("https://api.hcompany.ai/v1/chat/completions",
                                 headers={"Authorization": f"Bearer {self.api_key}"}, json=payload,
                                 timeout=aiohttp.ClientTimeout(total=request_timeout)) as response:
+            self.last_request_phase = "body"
+            self.last_response_status = response.status
             if response.status == 200:
-                result = await response.json()
+                try:
+                    result = await response.json()
+                finally:
+                    count = response.content.total_bytes
+                    self.last_response_bytes = count if isinstance(count, int) else None
                 result["_api_errors"] = errors
                 return result
             try:
@@ -329,6 +340,7 @@ class HoloAgent(BaseAgent):
                           "reasoning": "", "intent": [], "tool_calls": [], "executed_actions": [], "errors": [], "failure_tags": [],
                           "api_latency_ms": 0.0, "action_duration_ms": 0.0, "tokens": {"in": 0, "cached": 0, "out": 0, "reasoning": 0}, "cost_usd": 0.0,
                           "screenshot_ref": None}
+                record["completion_json_chars"] = None
                 api_start = None
                 action_start = None
                 if executor is not None:
@@ -365,6 +377,8 @@ class HoloAgent(BaseAgent):
                             payload["reasoning_effort"] = config.reasoning_effort
                         if config.seed is not None:
                             payload["seed"] = config.seed
+                        record["request_bytes"] = len(json.dumps(payload).encode("utf-8"))
+                        record["request_image_count"] = sum(part["type"] == "image_url" for part in payload["messages"][1]["content"])
                         announce = getattr(client, "model_input", None)
                         if announce is not None:
                             await announce(idx, payload["messages"][1]["content"], record["input_image_refs"])
@@ -391,6 +405,7 @@ class HoloAgent(BaseAgent):
                             record["failure_tags"].append("completion_truncated")
                             record["errors"].append("Completion token budget exhausted; choose one short tool action next turn.")
                         message = choice["message"]
+                        record["completion_json_chars"] = len(json.dumps(message))
                         record["reasoning"] = message.get("reasoning_content") or message.get("reasoning") or ""
                         record["raw_tool_calls"] = message.get("tool_calls") or []
                         record["skipped_tool_calls"] = []

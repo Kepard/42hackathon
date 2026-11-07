@@ -1,7 +1,7 @@
 import io
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from PIL import Image, ImageDraw
@@ -194,10 +194,11 @@ async def test_http_error_redaction_and_recovered_429(monkeypatch):
 
 
 @pytest.mark.parametrize("recover", [False, True])
-async def test_default_api_fifteen_second_timeout_retries_once_and_records_attempts(monkeypatch, recover):
+async def test_default_api_six_second_first_attempt_and_full_fifteen_second_retry(monkeypatch, recover):
     from unittest.mock import AsyncMock
     class API(HoloAPI):
         async def _request(self, session, payload, errors, request_timeout):
+            assert request_timeout == (6 if self.last_attempts == 1 else 15)
             if recover and self.last_attempts == 2:
                 return {"_api_errors": errors}
             raise TimeoutError
@@ -212,7 +213,30 @@ async def test_default_api_fifteen_second_timeout_retries_once_and_records_attem
             await api.complete({"model": "fake"})
         assert len(api.last_errors) == 2
     assert api.last_attempts == 2
-    assert api.last_errors[0]["timeout_s"] == 15
+    assert api.last_errors[0]["timeout_s"] == 6
+    assert api.last_errors[0]["phase"] == "dispatch"
+    assert api.last_errors[0]["response_status"] is None
+
+
+@pytest.mark.parametrize("phase,status,received", [("headers",None,None),("body",200,123)])
+async def test_timeout_preserves_phase_and_response_evidence(monkeypatch, phase, status, received):
+    class Response:
+        status = 200
+        content = MagicMock(total_bytes=received)
+        async def __aenter__(self):
+            if phase == "headers": raise TimeoutError
+            return self
+        async def __aexit__(self, *args): pass
+        async def json(self): raise TimeoutError
+    class Session:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def post(self, *args, **kwargs): return Response()
+    monkeypatch.setattr("mc_observatory.holo.aiohttp.ClientSession", Session)
+    monkeypatch.setattr("mc_observatory.holo.asyncio.sleep", AsyncMock())
+    api = HoloAPI("test-key")
+    with pytest.raises(TimeoutError): await api.complete({"model":"fake"})
+    assert all(e["phase"] == phase and e["response_status"] == status and e["response_bytes"] == received for e in api.last_errors)
 
 
 async def test_retry_allows_full_configured_timeout_after_short_attempt(monkeypatch):

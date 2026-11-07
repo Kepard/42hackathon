@@ -140,6 +140,7 @@ class ToolExecutor:
         self.current_frame = None
         self.notes = ""
         self.unchanged_moves = 0
+        self.failed_mining_frame = None
         self.jev, self.visibility_threshold = jev, visibility_threshold
 
     def begin_step(self, png=None):
@@ -162,6 +163,7 @@ class ToolExecutor:
             return "not_in_reach"
         deadline = time.monotonic() + seconds
         scene_changed = False
+        center_progress = 0
         await self.button(0, True)
         try:
             while (remaining := deadline - time.monotonic()) > 0:
@@ -171,11 +173,14 @@ class ToolExecutor:
                 except asyncio.TimeoutError:
                     break
                 observed = changes(reference, frame)
+                center_progress = max(center_progress, observed["center_change"])
                 scene_changed |= observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08
         finally:
             await self.button(0, False)
         settled = changes(reference, await self.observe())
-        scene_changed |= settled["frame_change"] >= .002
+        center_progress = max(center_progress, settled["center_change"])
+        scene_changed |= settled["center_changed_fraction"] >= .7 and settled["center_change"] >= .08
+        self.failed_mining_frame = reference if seconds >= .35 and center_progress < .01 else None
         return "scene_changed" if scene_changed else "no_change"
 
     async def seek(self, target, seconds):
@@ -207,7 +212,8 @@ class ToolExecutor:
             l, t, r, b = decision["box"]
             x, y = (l + r) / 2, (t + b) / 2
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
-            if l <= .5 <= r and t <= .5 <= b and outline(frame):
+            previous_miss = self.failed_mining_frame is not None and changes(self.failed_mining_frame, frame)["center_change"] < .01
+            if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame):
                 await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
                 if outline(await self.observe()):
                     decision["decision"] = "in_reach"

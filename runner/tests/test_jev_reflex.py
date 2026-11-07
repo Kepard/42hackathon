@@ -152,6 +152,17 @@ async def test_seek_confirms_reachable_off_center_face_without_steering(monkeypa
     assert not any(a["action"] in ("mouse", "key") for a in ex.actions)
 
 
+async def test_failed_mining_pixels_prevent_reusing_the_same_false_reach_cue(monkeypatch):
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    ex = executor(FakeJev())
+    assert await ex.attack_until_broken(.35) == "no_change"
+    assert ex.failed_mining_frame == PNG
+    ex.begin_step(PNG)
+    assert await ex.seek("oak log trunk", .01) == "timeout"
+    assert ex.jev.calls[0]["walking"]
+    assert any(a["action"] == "key" and a.get("pressed") for a in ex.actions)
+
+
 async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
     fake = FakeJev()

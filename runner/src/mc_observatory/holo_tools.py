@@ -21,7 +21,7 @@ def choice(*values):
 
 XY = {"x": number(0, 1000), "y": number(0, 1000)}
 BUTTON = choice("left", "right")
-KEY = choice(*list("wasd") + ["space", "shift", "ctrl", "e", "esc", "enter", "t", "q", "f", "tab"] + list("123456789"))
+KEY = choice(*list("wasd") + ["space", "shift", "ctrl", "e", "esc", "enter", "t", "q", "f", "tab", "f3"] + list("123456789"))
 RAW = {
     "key_down": ("Hold a Minecraft key until key_up. Use wait to allow ticks.", {"key": KEY}),
     "key_up": ("Release a held key.", {"key": KEY}),
@@ -43,6 +43,7 @@ SKILLS = {
     "select_hotbar": ("Select hotbar slot 1..9.", {"n": {"type": "integer", "minimum": 1, "maximum": 9}}),
     "open_inventory": ("Tap E. Only use if inventory is currently closed.", {}),
     "close_screen": ("Tap Escape. Only use if a GUI is open; otherwise it opens pause menu.", {}),
+    "toggle_debug": ("Tap F3 to toggle Minecraft's vanilla debug screen; read it only from screenshots.", {}),
     "click_at": RAW["click_at"],
     "shift_click_at": ("Shift-click a GUI slot at normalized screenshot coordinates.", XY),
     "wait": ("Let game ticks run for seconds.", {"seconds": number(0, 10)}),
@@ -181,6 +182,8 @@ class ToolExecutor:
             await self.tap("space", 250)
         elif name == "select_hotbar":
             await self.tap(str(args["n"]))
+        elif name == "toggle_debug":
+            await self.tap("f3")
         elif name in ("open_inventory", "close_screen"):
             await self.tap("e" if name == "open_inventory" else "esc")
         elif name == "wait":

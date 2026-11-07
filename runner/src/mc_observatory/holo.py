@@ -40,7 +40,7 @@ def usage_cost(usage, model):
 class HoloConfig:
     model: str = "holo4-27b"
     tier: str = "skills"
-    timing: str = "freeze"
+    timing: str = "realtime"
     max_steps: int = 30
     time_budget: float = 180
     history_steps: int = 8
@@ -125,9 +125,11 @@ PRIMER = """You control Minecraft Java Survival through screenshots and input to
 Goal: {goal}
 W/A/S/D move, space jumps, shift sneaks, E toggles inventory, Escape closes GUIs (opens menu if none).
 Hotbar keys 1-9 select slots. Hold left mouse to break a block within ~4 blocks; keep aim steady
-until it breaks, then walk close to collect the drop. World aim is the image center, even
-when the crosshair is hidden. Right mouse uses/places. Obtain a log by
-mining a tree trunk, not leaves. The first-person hand and overlays may be visible.
+until it breaks, then walk close to collect the drop. The crosshair is your aim; a visible
+block selection outline shows the targeted block within reach. Right mouse uses/places.
+Obtain a log by mining a tree trunk, not leaves. Screenshots include the vanilla HUD:
+crosshair, hotbar, health, and the F3 debug screen when toggled. F3/key_press or toggle_debug
+toggles debug information; read it only from pixels. Observatory telemetry is never shown.
 Look is RELATIVE, positive yaw/dx right, pitch/dy down. GUI click coordinates are normalized
 0..1000 from the screenshot's top-left; click_at is ONLY for visible GUIs, not world aiming.
 Every tool requires a short intent sentence. You may call several tools; they run sequentially.

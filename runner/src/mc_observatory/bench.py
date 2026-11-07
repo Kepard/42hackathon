@@ -44,7 +44,7 @@ def main():
     parser.add_argument("--task", default="get_log")
     parser.add_argument("--models", default="holo4-27b,holo4-35b-a3b")
     parser.add_argument("--tiers", default="raw,skills")
-    parser.add_argument("--timing", choices=("freeze", "realtime"), default="freeze")
+    parser.add_argument("--timing", choices=("freeze", "realtime"), default="realtime")
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--label", required=True)
     parser.add_argument("--max-steps", type=int, default=30)

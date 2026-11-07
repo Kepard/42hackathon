@@ -77,10 +77,30 @@ def test_schema_and_sequential_parse():
             assert "intent" in tool["function"]["parameters"]["required"]
 
 
+@pytest.mark.parametrize("tier,name,args", [("raw", "key_press", {"key": "f3", "ms": 0}), ("skills", "toggle_debug", {})])
+async def test_f3_is_pixel_only_keyboard_input(tier, name, args):
+    client = PixelClient()
+    executor = ToolExecutor(client, 640, 480)
+    parsed = parse_calls({"tool_calls": [call(name, **args)]}, tier)
+    await executor.execute(parsed[0], tier)
+    assert executor.actions[0] == {"action": "key", "key": "f3", "pressed": True}
+    assert executor.actions[-1] == {"action": "key", "key": "f3", "pressed": False}
+    assert client.events[0] == ("key", 292, {"pressed": True})
+    with pytest.raises(InvalidToolArgs):
+        parse_calls({"tool_calls": [call("toggle_debug", read_text=True)]}, "skills")
+
+
+def test_realtime_default_and_hud_prompt():
+    from mc_observatory.holo import PRIMER
+    from mc_observatory.server import StartRun
+    assert HoloConfig().timing == StartRun().timing == "realtime"
+    assert "block selection outline" in PRIMER and "read it only from pixels" in PRIMER
+
+
 async def test_freeze_order_pixels_only_and_history(tmp_path):
     client = PixelClient()
     api = FakeAPI(client, response(reasoning_content="I should observe."))
-    agent = HoloAgent(HoloConfig(max_steps=2), api)
+    agent = HoloAgent(HoloConfig(max_steps=2, timing="freeze"), api)
     records = []
     async for record in agent.steps(client, "Get a log", tmp_path):
         record["evaluator"] = {"secret": "never send score"}
@@ -122,7 +142,7 @@ async def test_api_and_tool_failures(tmp_path, result, error, tag):
 async def test_timeout_releases_controls(tmp_path):
     client = PixelClient()
     api = FakeAPI(client, response([call("attack", seconds=10)]))
-    agent = HoloAgent(HoloConfig(time_budget=.03), api)
+    agent = HoloAgent(HoloConfig(time_budget=.03, timing="freeze"), api)
     records = [r async for r in agent.steps(client, "Mine", tmp_path)]
     assert "timeout" in records[0]["failure_tags"]
     assert ("mouse", {"button": 0, "pressed": False}) in client.events
@@ -279,7 +299,7 @@ async def test_final_step_settles_lagging_stats(tmp_path, crafted):
             return {"stats": {"crafted": {"minecraft:oak_planks": 4}}} if crafted and self.reads > 1 else {}
 
     client = Client()
-    agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(client))
+    agent = HoloAgent(HoloConfig(max_steps=1, timing="freeze"), FakeAPI(client))
     summary = await MinecraftRunner(agent, client, tmp_path, tracing=False).run("craft_planks")
     assert summary["success"] is crafted and client.reads == 2
     assert json.loads((tmp_path / "steps.jsonl").read_text())["final_settle_ms"] == 600

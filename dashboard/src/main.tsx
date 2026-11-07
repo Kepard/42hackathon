@@ -443,7 +443,7 @@ function App() {
     task: "get_log",
     model: "holo4-27b",
     tier: "skills",
-    timing: "freeze",
+    timing: "realtime",
     max_steps: 30,
     time_budget: 180,
     max_cost_usd: "",

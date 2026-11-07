@@ -75,6 +75,14 @@ async def test_batch_poll_deadline_stops_before_next_trial(monkeypatch):
     assert len(requests) == 2
 
 
+def test_user_stopped_trial_is_not_model_failure():
+    summary = {"score": 0, "success": False, "task": "get_log", "steps": 6,
+               "config": {"model": "a", "tier": "skills", "timing": "freeze"}, "total_cost_usd": .01}
+    row = leaderboard([{"summary": summary, "status": "stopped", "metadata": {"label": "baseline"}}])[0]
+    assert row["runs"] == 1 and row["valid_runs"] == 0
+    assert row["success_rate"] is None and row["infrastructure_failures"] == 1
+
+
 def test_leaderboard_labels_timing_medians_and_infrastructure():
     def run(label, timing="freeze", success=False, steps=30, latency=300, tags=None):
         return {"status": "finished", "metadata": {"label": label}, "summary": {

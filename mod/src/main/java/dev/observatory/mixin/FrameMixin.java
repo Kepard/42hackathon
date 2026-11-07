@@ -9,6 +9,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(GameRenderer.class)
 public class FrameMixin {
+    @Inject(method = "render", at = @At("HEAD"))
+    private void beginFrame(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
+        Observatory.beginFrame();
+    }
     @Inject(method = "render", at = @At("TAIL"))
     private void endFrame(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         Observatory.endFrame();

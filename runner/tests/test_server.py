@@ -53,6 +53,26 @@ def test_run_and_confirmed_controls(service, monkeypatch):
         assert service.controller.stopped
 
 
+async def test_user_stop_status_survives_acting_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    from mc_observatory.holo import HoloConfig
+    from mc_observatory.server import StartRun
+    class Runner:
+        def __init__(self, *args): pass
+        async def run(self, *args):
+            service.phase = "ACTING"
+            return {"success": False}
+    monkeypatch.setattr("mc_observatory.server.MinecraftRunner", Runner)
+    service = ObservatoryService(tmp_path, Client())
+    path = tmp_path / "stopped-test"
+    path.mkdir()
+    (path / "run.json").write_text(json.dumps({"status": "running"}))
+    service.controller = RunController()
+    service.controller.interventions = [{"action": "stop"}]
+    await service.execute(path.name, StartRun(), HoloConfig(), {})
+    assert json.loads((path / "run.json").read_text())["status"] == "stopped"
+
+
 def test_empty_invalid_and_origin_requests(service, monkeypatch):
     monkeypatch.delenv("HCOMPANY_API_KEY", raising=False)
     with TestClient(create_app(service)) as client:

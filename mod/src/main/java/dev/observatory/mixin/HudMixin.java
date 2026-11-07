@@ -15,8 +15,4 @@ public class HudMixin {
     private void afterHud(DrawContext context, float tickDelta, CallbackInfo ci) {
         Observatory.afterHud(context);
     }
-    @Inject(method = "render", at = @At("HEAD"))
-    private void beforeHud(DrawContext context, float tickDelta, CallbackInfo ci) {
-        Observatory.beforeHud();
-    }
 }

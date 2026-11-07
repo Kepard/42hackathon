@@ -56,7 +56,7 @@ def leaderboard(runs):
     groups = defaultdict(list)
     for run in runs:
         s = run.get("summary")
-        if not s and run.get("metadata", {}).get("label") and run.get("status") in {"error", "interrupted"}:
+        if not s and run.get("metadata", {}).get("label") and run.get("status") in {"error", "interrupted", "stopped"}:
             meta = run["metadata"]
             s = {"config": meta, "task": meta.get("task"), "score": 0, "success": False,
                  "failure_tags": ["infrastructure_error"], "steps": len(run.get("steps", []))}
@@ -77,7 +77,7 @@ def leaderboard(runs):
                 milestones[rung].append(seconds)
             tags.update(set(s.get("failure_tags", [])))
         costs = [s["total_cost_usd"] for s in summaries if s.get("total_cost_usd") is not None]
-        valid = [r["summary"] for r in group if r.get("status", "finished") not in {"error", "interrupted"}
+        valid = [r["summary"] for r in group if r.get("status", "finished") not in {"error", "interrupted", "stopped"}
                  and not set(r["summary"].get("failure_tags", [])) & {"api_error", "metrics_error", "infrastructure_error"}]
         times = [s["wall_time_seconds"] for s in valid if s.get("success") and "wall_time_seconds" in s]
         steps = [s["steps"] for s in valid if "steps" in s]
@@ -102,7 +102,7 @@ class StartRun(BaseModel):
     task: str = "get_log"
     model: str = Field(default="holo4-27b", min_length=1, max_length=120)
     tier: Literal["raw", "skills"] = "skills"
-    timing: Literal["freeze", "realtime"] = "freeze"
+    timing: Literal["freeze", "realtime"] = "realtime"
     max_steps: int = Field(default=30, ge=1, le=10000)
     time_budget: float = Field(default=180, gt=0, le=10800)
     max_cost_usd: float | None = Field(default=None, gt=0)
@@ -254,7 +254,7 @@ class ObservatoryService:
         try:
             agent = HoloAgent(config, controller=self.controller)
             summary = await MinecraftRunner(agent, ObservedClient(), path).run(spec.task, task)
-            meta["status"] = "stopped" if not summary["success"] and self.phase == "STOPPING" else "finished"
+            meta["status"] = "stopped" if any(e["action"] == "stop" for e in self.controller.interventions) else "finished"
             self.publish("summary", {"run_id": run_id, **summary})
         except asyncio.CancelledError:
             meta["status"] = "interrupted"

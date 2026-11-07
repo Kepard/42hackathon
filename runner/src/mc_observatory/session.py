@@ -8,7 +8,7 @@ from .evaluator import LadderEvaluator
 
 KEYS = {"escape": 256, "esc": 256, "enter": 257, "return": 257,
         "tab": 258, "backspace": 259, "space": 32, "shift": 340,
-        "ctrl": 341, "left": 263, "right": 262, "up": 265, "down": 264}
+        "ctrl": 341, "left": 263, "right": 262, "up": 265, "down": 264, "f3": 292}
 
 
 def keycode(name):

@@ -187,9 +187,11 @@ Flags reset with a new world and last for this mod process, not across restarts;
 Nether advancement remains an additional persistent signal.
 
 `screenshot` returns `png_base64`, width, height, capture point. Capture runs on the render
-thread at **InGameHud.render HEAD** when no GUI is open: world and first-person hand are
-present; HUD/hotbar/crosshair and later overlays are absent. With a GUI, hidden HUD, or no
+thread at **InGameHud.render TAIL**, flushing vanilla drawing before capturing and then
+drawing our overlay. World, hand, vanilla HUD/crosshair/hotbar/health and enabled F3 debug
+text are present; observatory telemetry is absent. With a GUI, hidden HUD, or no
 HUD hook, it falls back to `GameRenderer.render TAIL`, including GUI/HUD as applicable.
+Requests arriving after overlay drawing wait for the next clean frame, never a contaminated fallback.
 An independent WebSocket-side timer returns an error after five seconds even if rendering
 stalls; capture success/error uses one completion guard. Dashboard subscriptions separately
 emit `{"event":"frame","data":{"jpeg_base64":"...","width":640,"height":480,"capture_point":"end_frame_viewer"}}`
@@ -204,6 +206,11 @@ The compact panel renders at HUD TAIL, after agent capture. For GUI agent captur
 is suppressed for that frame and the clean fallback is captured; that frame is not streamed.
 Subsequent viewer frames include the panel again. F1 hides the HUD and panel; vanilla GUIs may
 cover part of it. No telemetry is composited into agent PNGs.
+
+Realtime is the default for HoloAgent, the dashboard/API, `obs run` and `mc-bench`;
+`--timing freeze` remains available. Raw tools expose `key_press(key="f3", ms=100)`;
+skills expose `toggle_debug()`. Debug information reaches the model only as screenshot pixels.
+User-stopped trials are retained but excluded from eligible model success/median statistics.
 Loopback-only; browser `Origin` headers are rejected by default. Explicitly allow trusted origins
 with comma-separated `OBS_ALLOWED_ORIGINS` or Java property `observatory.allowedOrigins` (property
 wins). Optional `OBS_TOKEN` requires `Authorization: Bearer <token>` at the WebSocket handshake;

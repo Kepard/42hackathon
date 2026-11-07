@@ -195,7 +195,7 @@ def main():
     run.add_argument("--task", default="get_log")
     run.add_argument("--model", default="holo4-27b")
     run.add_argument("--tier", choices=("raw", "skills"), default="skills")
-    run.add_argument("--timing", choices=("freeze", "realtime"), default="freeze")
+    run.add_argument("--timing", choices=("freeze", "realtime"), default="realtime")
     run.add_argument("--max-steps", type=int, default=30)
     run.add_argument("--time-budget", type=float, default=180)
     run.add_argument("--history-steps", type=int, default=8)

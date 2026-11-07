@@ -48,10 +48,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Observatory implements ClientModInitializer {
     private static JsonObject overlay = new JsonObject();
+    private static boolean overlayDrawn;
 
     public static void afterHud(DrawContext context) {
         MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.currentScreen == null && !captures.isEmpty()) {
+            context.draw();
+            Capture pending;
+            while ((pending = captures.poll()) != null) capture(pending, "after_hud_before_overlay");
+        }
         if (overlay.size() == 0 || (mc.currentScreen != null && !captures.isEmpty())) return;
+        overlayDrawn = true;
         int width = mc.getWindow().getScaledWidth() - 12;
         context.fill(6, 6, width + 6, 68, 0xDD101A29);
         int complete = Math.max(0, Math.min(13, overlay.has("completed") ? overlay.get("completed").getAsInt() : 0));
@@ -114,18 +121,15 @@ public class Observatory implements ClientModInitializer {
         if (reset == null && player.getServer() == MinecraftClient.getInstance().getServer()) portalTouched = true;
     }
 
-    public static void beforeHud() {
-        if (MinecraftClient.getInstance().currentScreen != null) return;
-        captures.removeIf(capture -> {
-            capture(capture, "before_hud"); return true;
-        });
+    public static void beginFrame() {
+        overlayDrawn = false;
     }
 
     public static void endFrame() {
         frames++;
-        boolean cleanFallback = !captures.isEmpty();
+        boolean cleanFallback = !overlayDrawn && !captures.isEmpty();
         Capture pending;
-        while ((pending = captures.poll()) != null) capture(pending, "end_frame_fallback");
+        if (!overlayDrawn) while ((pending = captures.poll()) != null) capture(pending, "end_frame_fallback");
         if (cleanFallback || subscribers.isEmpty() || System.nanoTime() - lastPush < 200_000_000L) return;
         lastPush = System.nanoTime();
         try {
@@ -321,6 +325,7 @@ public class Observatory implements ClientModInitializer {
         mc.options.pauseOnLostFocus = false; mc.options.getGuiScale().setValue(2); mc.options.hudHidden = false;
         mc.options.getFov().setValue(70); mc.options.getMouseSensitivity().setValue(.5);
         mc.options.setPerspective(net.minecraft.client.option.Perspective.FIRST_PERSON);
+        if (mc.getDebugHud().shouldShowDebugHud()) mc.getDebugHud().toggleDebugHud();
         mc.options.tutorialStep = net.minecraft.client.tutorial.TutorialStep.NONE; mc.options.write();
     }
 

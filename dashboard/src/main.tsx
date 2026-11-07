@@ -5,6 +5,7 @@ import "./style.css";
 
 type Call = { name: string; arguments: Record<string, unknown> };
 type Step = {
+  jev_calls?: Record<string, unknown>[];
   step: number;
   intent: string[];
   tool_calls: Call[];
@@ -51,6 +52,8 @@ type Run = {
   };
 };
 type Board = {
+  reflex?: string;
+  reasoning_effort?: string | null;
   timing: string;
   label: string;
   median_time_seconds: number | null;
@@ -274,6 +277,7 @@ function Timeline({ steps }: { steps: Step[] }) {
               <pre>{JSON.stringify(s.tool_calls, null, 2)}</pre>
               <h4>Executed inputs</h4>
               <pre>{JSON.stringify(s.executed_actions, null, 2)}</pre>
+              {!!s.jev_calls?.length && <><h4>Jev pixel reflex decisions</h4><pre>{JSON.stringify(s.jev_calls, null, 2)}</pre></>}
               {s.errors.map((e, i) => (
                 <p className="error" key={i}>
                   {e}
@@ -383,7 +387,7 @@ function BenchmarkComparison({ board }: { board: Board[] }) {
   const labels = [...new Set(["baseline", "after-fix", ...board.map(b => b.label)])];
   const setups = new Map<string, Board[]>();
   for (const row of board.filter(b => b.label === left || b.label === right)) {
-    const key = JSON.stringify([row.task, row.model, row.tier, row.timing]);
+    const key = JSON.stringify([row.task, row.model, row.tier, row.timing, row.reflex || "none", row.reasoning_effort || "default"]);
     setups.set(key, [...(setups.get(key) || []), row]);
   }
   function cell(row?: Board) {
@@ -401,7 +405,7 @@ function BenchmarkComparison({ board }: { board: Board[] }) {
       <th><select aria-label="First benchmark label" value={left} onChange={e => setLeft(e.target.value)}>{labels.map(l => <option key={l}>{l}</option>)}</select></th>
       <th><select aria-label="Second benchmark label" value={right} onChange={e => setRight(e.target.value)}>{labels.map(l => <option key={l}>{l}</option>)}</select></th>
     </tr></thead><tbody>{[...setups.entries()].map(([key, rows]) => <tr key={key}>
-      <td><strong>{title(rows[0].task)}</strong><small>{rows[0].model} · {rows[0].tier} · {rows[0].timing}</small></td>
+      <td><strong>{title(rows[0].task)}</strong><small>{rows[0].model} · {rows[0].tier} · {rows[0].timing} · reflex {rows[0].reflex || "none"} · reasoning {rows[0].reasoning_effort || "default"}</small></td>
       <td>{cell(rows.find(r => r.label === left))}</td><td>{cell(rows.find(r => r.label === right))}</td>
     </tr>)}</tbody></table></div>
     {!setups.size && <p className="muted">Run a labelled benchmark to populate the comparison.</p>}
@@ -1017,6 +1021,7 @@ function App() {
                             {JSON.stringify(replayStep.tool_calls, null, 2)}
                           </pre>
                           <h4>Executed inputs</h4>
+                          {!!replayStep.jev_calls?.length && <><h4>Jev pixel reflex decisions</h4><pre>{JSON.stringify(replayStep.jev_calls, null, 2)}</pre></>}
                           <pre>
                             {JSON.stringify(
                               replayStep.executed_actions,
@@ -1133,7 +1138,7 @@ function App() {
                           <small>{b.tier}</small>
                         </td>
                         <td>{title(b.task)}</td>
-                        <td><strong>{b.label}</strong><small>{b.timing}</small></td>
+                        <td><strong>{b.label}</strong><small>{b.timing} · reflex {b.reflex || "none"} · reasoning {b.reasoning_effort || "default"}</small></td>
                         <td>{b.runs}<small>{b.valid_runs} eligible</small></td>
                         <td>
                           <div className="rate">

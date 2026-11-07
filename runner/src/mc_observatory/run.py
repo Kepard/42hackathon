@@ -79,6 +79,9 @@ def summarize(records, evaluator, reached, success, elapsed, tags, config):
             "mean_api_latency_ms": sum(latencies) / len(latencies) if latencies else 0,
             "p95_api_latency_ms": latencies[max(0, math.ceil(len(latencies) * .95) - 1)] if latencies else 0,
             "total_cost_usd": sum(r["cost_usd"] for r in records) if known_cost else None,
+            "jev_calls": sum(len(r.get("jev_calls", [])) for r in records),
+            "jev_cost_usd": sum(r.get("jev_cost_usd", 0) for r in records),
+            "holo_calls": sum(r["api_latency_ms"] > 0 for r in records),
             "tokens": {key: sum(r["tokens"][key] for r in records) for key in ("in", "cached", "out", "reasoning")},
             "failure_tags": sorted(tags), "config": asdict(config)}
 
@@ -182,7 +185,8 @@ async def run_cli(args):
     config = HoloConfig(model=args.model, tier=args.tier, timing=args.timing, max_steps=args.max_steps,
                         time_budget=args.time_budget, history_steps=args.history_steps,
                         history_images=args.history_images, temperature=args.temperature,
-                        seed=args.seed, max_cost_usd=args.max_cost_usd)
+                        seed=args.seed, max_cost_usd=args.max_cost_usd, reflex=args.reflex,
+                        jev_threshold=args.jev_threshold, reasoning_effort=args.reasoning_effort)
     api = HoloAPI(os.environ.get("HCOMPANY_API_KEY"))
     out = Path(args.out) / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
     controller = RunController()
@@ -200,6 +204,9 @@ def main():
     run.add_argument("--model", default="holo4-27b")
     run.add_argument("--tier", choices=("raw", "skills"), default="skills")
     run.add_argument("--timing", choices=("freeze", "realtime"), default="realtime")
+    run.add_argument("--reflex", choices=("none", "jev"), default="none")
+    run.add_argument("--jev-threshold", type=float, default=.5)
+    run.add_argument("--reasoning-effort", choices=("low",))
     run.add_argument("--max-steps", type=int, default=30)
     run.add_argument("--time-budget", type=float, default=180)
     run.add_argument("--history-steps", type=int, default=8)

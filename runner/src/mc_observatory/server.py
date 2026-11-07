@@ -65,9 +65,9 @@ def leaderboard(runs):
             cfg = s.get("config", {})
             meta = run.get("metadata", {})
             groups[(s.get("task", "unknown"), cfg.get("model", "unknown"), cfg.get("tier", "unknown"),
-                    cfg.get("timing", "unknown"), meta.get("label") or "unlabelled")].append(run)
+                    cfg.get("timing", "unknown"), cfg.get("reflex", "none"), cfg.get("reasoning_effort"), meta.get("label") or "unlabelled")].append(run)
     result = []
-    for (task, model, tier, timing, label), group in groups.items():
+    for (task, model, tier, timing, reflex, reasoning_effort, label), group in groups.items():
         summaries = [r["summary"] for r in group]
         latencies = sorted(s["api_latency_ms"] for r in group for s in r.get("steps", []) if s.get("api_latency_ms", 0) > 0)
         milestones = defaultdict(list)
@@ -82,7 +82,7 @@ def leaderboard(runs):
         times = [s["wall_time_seconds"] for s in valid if s.get("success") and "wall_time_seconds" in s]
         steps = [s["steps"] for s in valid if "steps" in s]
         infrastructure = len(group) - len(valid)
-        result.append({"model": model, "tier": tier, "task": task, "timing": timing, "label": label, "runs": len(group),
+        result.append({"model": model, "tier": tier, "task": task, "timing": timing, "reflex": reflex, "reasoning_effort": reasoning_effort, "label": label, "runs": len(group),
                        "median_time_seconds": median(times) if times else None,
                        "median_steps": median(steps) if steps else None,
                        "p50_api_latency_ms": median(latencies) if latencies else None,
@@ -103,6 +103,9 @@ class StartRun(BaseModel):
     model: str = Field(default="holo4-27b", min_length=1, max_length=120)
     tier: Literal["raw", "skills"] = "skills"
     timing: Literal["freeze", "realtime"] = "realtime"
+    reflex: Literal["none", "jev"] = "none"
+    jev_threshold: float = Field(default=.5, ge=0, le=1)
+    reasoning_effort: Literal["low"] | None = None
     max_steps: int = Field(default=30, ge=1, le=10000)
     time_budget: float = Field(default=180, gt=0, le=10800)
     max_cost_usd: float | None = Field(default=None, gt=0)

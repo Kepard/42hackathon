@@ -135,6 +135,15 @@ def test_leaderboard_aggregates_steps_and_keeps_groups_separate():
     assert next(r for r in result if r["tier"] == "raw")["cost_per_run"] is None
 
 
+def test_leaderboard_distinguishes_reflex_and_reasoning():
+    runs = [{"summary": {"config": {"model": "holo4-27b", "tier": "skills", "reflex": reflex, "reasoning_effort": effort},
+                         "task": "get_log", "score": 0, "success": False, "failure_tags": [], "milestones": {}, "total_cost_usd": .01}}
+            for reflex, effort in (("none", None), ("jev", None), ("jev", "low"))]
+    result = leaderboard(runs)
+    assert len(result) == 3
+    assert {(r["reflex"], r["reasoning_effort"]) for r in result} == {("none",None),("jev",None),("jev","low")}
+
+
 async def test_bounded_live_queue_and_intervention_event(service):
     queue = asyncio.Queue(maxsize=1)
     service.listeners.add(queue)

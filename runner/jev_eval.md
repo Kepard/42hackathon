@@ -41,3 +41,26 @@ from15 runs, manual visual labels, 30 manually boxed frames, 400 API responses, 
 cases exist, the box subset repeats fixed-spawn views, and there are no positive iron
 frames. This is an exploratory perception/latency test, not a held-out navigation or
 gameplay benchmark. Inspect recall and the majority baseline, not accuracy alone.
+
+## Opt-in gameplay proposals
+
+`obs run --task get_log --reflex jev --tier skills --timing realtime` enables
+`seek(target,max_s=8)` and advisory `collect(item="log",max_s=.8)` hotbar scores.
+The backend accepts the same `reflex`, `jev_threshold` (default .5), and optional
+`reasoning_effort: "low"` run fields. Raw rejects Jev. Defaults remain non-Jev and
+default Holo reasoning. The low setting is restricted to holo4-27b.
+
+Seek queries only Box + target-visible Noul, never Choice or crosshair-on-log.
+It captures the same overlay-free model surface, runs a nominal5Hz loop (slower
+if capture/API takes longer), clamps turns to12° yaw/8° pitch, and moves in short
+released-key pulses only while centered. No keys stay held during vision requests.
+The existing pixel outline cue AND crosshair inside the target box are required
+for `in_reach`. Outline also gates mining when Jev is enabled. Visibility loss,
+one second of unchanged walking, timeout and API failure all stop seeking.
+There is currently no independent pixel danger detector in the old reflex code;
+this does not make approaching lava or cliffs safe. Holo must avoid hazards.
+
+Jev requests/response fields, timing, source-image SHA256 and estimated costs are
+saved in `steps.jsonl`/trajectory and shown in dashboard step details. Costs are
+included in total run cost; unknown failed-call usage reserves the conservative
+upper bound. Six-coordinate/model state is never passed to Jev or Holo.

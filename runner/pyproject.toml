@@ -15,6 +15,7 @@ mc-bench = "mc_observatory.bench:main"
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27,<1"]
 bench = ["cua-bench>=0.3.1"]
+jev = ["typesafe-sdk==0.7.5"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

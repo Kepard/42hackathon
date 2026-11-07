@@ -51,6 +51,13 @@ def test_screenshot_cues():
         outline(b"bad")
 
 
+@pytest.mark.parametrize("box", [(399, 209, 542, 277), (383, 162, 546, 302)])
+def test_outline_rejects_wide_background_and_crop_boundary_edges(box):
+    im = Image.new("RGB", (854, 480), (90, 100, 110))
+    ImageDraw.Draw(im).rectangle(box, outline="black", width=2)
+    assert not outline(encode(im))
+
+
 @pytest.mark.parametrize("name,cue,outcome", [
     ("approach_until_outline", "outline", "outline_pixel_cue"),
     ("mine", "broken_caption", "block_gone_pixel_cue"),

@@ -12,6 +12,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.util.InputUtil;
@@ -35,11 +36,41 @@ import org.java_websocket.server.WebSocketServer;
 import org.lwjgl.glfw.GLFW;
 
 import java.net.InetSocketAddress;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Observatory implements ClientModInitializer {
+    private static JsonObject overlay = new JsonObject();
+
+    public static void afterHud(DrawContext context) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (overlay.size() == 0 || (mc.currentScreen != null && !captures.isEmpty())) return;
+        int width = mc.getWindow().getScaledWidth() - 12;
+        context.fill(6, 6, width + 6, 68, 0xDD101A29);
+        int complete = Math.max(0, Math.min(13, overlay.has("completed") ? overlay.get("completed").getAsInt() : 0));
+        context.fill(10, 24, width + 2, 27, 0xFF34445A);
+        context.fill(10, 24, 10 + (width - 8) * complete / 13, 27, 0xFF42D9B0);
+        context.getMatrices().push();
+        context.getMatrices().scale(.7f, .7f, 1);
+        String[] lines = {label("objective", "Minecraft Observatory"),
+                complete + "/13  " + label("current_rung", "log"),
+                label("intent", "Waiting for a run"), label("action", "No actions yet"),
+                "API " + label("api_latency_ms", "0") + " ms   " + label("badges", "PAUSED")};
+        int[] ys = {12, 43, 56, 69, 82};
+        for (int i = 0; i < lines.length; i++) context.drawText(mc.textRenderer,
+                mc.textRenderer.trimToWidth(lines[i], (int)((width - 8) / .7)), 15, ys[i], i == 4 ? 0x79E5CB : 0xEDF4FF, false);
+        context.getMatrices().pop();
+    }
+
+    private static String label(String key, String fallback) {
+        JsonElement value = overlay.get(key);
+        return value == null || value.isJsonNull() ? fallback : value.isJsonPrimitive() ? value.getAsString() : value.toString();
+    }
     private static final Gson JSON = new Gson();
     private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "observatory-timeouts"); thread.setDaemon(true); return thread;
@@ -88,12 +119,13 @@ public class Observatory implements ClientModInitializer {
 
     public static void endFrame() {
         frames++;
+        boolean cleanFallback = !captures.isEmpty();
         Capture pending;
         while ((pending = captures.poll()) != null) capture(pending, "end_frame_fallback");
-        if (subscribers.isEmpty() || System.nanoTime() - lastPush < 500_000_000L) return;
+        if (cleanFallback || subscribers.isEmpty() || System.nanoTime() - lastPush < 200_000_000L) return;
         lastPush = System.nanoTime();
         try {
-            JsonObject frame = image("end_frame_stream");
+            JsonObject frame = viewerImage();
             JsonObject state = state();
             for (WebSocket socket : subscribers) {
                 if (socket.hasBufferedData()) continue;
@@ -101,6 +133,19 @@ public class Observatory implements ClientModInitializer {
             }
         } catch (Exception error) {
             for (WebSocket socket : subscribers) push(socket, "stream_error", new JsonPrimitive(error.toString()));
+        }
+    }
+
+    private static JsonObject viewerImage() throws Exception {
+        try (NativeImage image = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer())) {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(image.getBytes()));
+            BufferedImage rgb = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_RGB);
+            var graphics = rgb.createGraphics(); graphics.drawImage(source, 0, 0, null); graphics.dispose();
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); ImageIO.write(rgb, "jpeg", bytes);
+            JsonObject result = new JsonObject();
+            result.addProperty("jpeg_base64", Base64.getEncoder().encodeToString(bytes.toByteArray()));
+            result.addProperty("width", source.getWidth()); result.addProperty("height", source.getHeight());
+            result.addProperty("capture_point", "end_frame_viewer"); return result;
         }
     }
 
@@ -262,6 +307,8 @@ public class Observatory implements ClientModInitializer {
         JsonObject result = serverState.deepCopy();
         result.addProperty("in_world", mc.player != null && reset == null);
         result.addProperty("resetting", reset != null); result.addProperty("paused", paused);
+        result.addProperty("pause_on_lost_focus", mc.options.pauseOnLostFocus);
+        result.addProperty("window_focused", mc.isWindowFocused());
         result.addProperty("fps", mc.getCurrentFps()); result.addProperty("frames", frames);
         result.addProperty("elapsed_seconds", (System.nanoTime() - started) / 1e9);
         result.addProperty("render_distance", mc.options.getViewDistance().getValue());
@@ -306,6 +353,12 @@ public class Observatory implements ClientModInitializer {
         try {
             String command = request.get("command").getAsString(); JsonObject result = new JsonObject();
             switch (command) {
+                case "overlay" -> {
+                    JsonObject payload = request.getAsJsonObject("payload");
+                    if (payload == null || payload.toString().length() > 8192) throw new IllegalArgumentException("Overlay payload must be an object under 8192 characters");
+                    if (payload.has("completed")) payload.addProperty("completed", Math.max(0, Math.min(13, payload.get("completed").getAsInt())));
+                    overlay = payload.deepCopy();
+                }
                 case "screenshot" -> {
                     requestCapture(socket, id); return;
                 }

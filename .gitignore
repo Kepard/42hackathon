@@ -14,3 +14,7 @@ spike/**
 !spike/*.py
 !spike/
 runs/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/test-results/
+dashboard/playwright-report/

@@ -87,10 +87,18 @@ present; HUD/hotbar/crosshair and later overlays are absent. With a GUI, hidden 
 HUD hook, it falls back to `GameRenderer.render TAIL`, including GUI/HUD as applicable.
 An independent WebSocket-side timer returns an error after five seconds even if rendering
 stalls; capture success/error uses one completion guard. Dashboard subscriptions separately
-emit `{"event":"frame","data":{...screenshot...}}` then `{"event":"state","data":{...}}`
-at approximately 2 Hz, without request IDs. Stream captures are end-of-frame, not pre-HUD.
+emit `{"event":"frame","data":{"jpeg_base64":"...","width":640,"height":480,"capture_point":"end_frame_viewer"}}`
+then `{"event":"state","data":{...}}` at approximately 5 Hz, without request IDs.
+Viewer captures are end-of-frame and include the observatory overlay. Agent captures remain PNG.
 The Python client drops oldest queued events beyond 8; the mod skips slow subscribers with
 buffered data. Streams are best-effort, not a fixed-rate video recorder.
+
+`overlay` accepts a `payload` JSON object (maximum 8192 characters); `{}` disables it. Fields:
+`objective`, `completed` (0..13), `current_rung`, `intent`, `action`, `api_latency_ms`, `badges`.
+The compact panel renders at HUD TAIL, after agent capture. For GUI agent captures, overlay drawing
+is suppressed for that frame and the clean fallback is captured; that frame is not streamed.
+Subsequent viewer frames include the panel again. F1 hides the HUD and panel; vanilla GUIs may
+cover part of it. No telemetry is composited into agent PNGs.
 Loopback-only; browser `Origin` headers are rejected by default. Explicitly allow trusted origins
 with comma-separated `OBS_ALLOWED_ORIGINS` or Java property `observatory.allowedOrigins` (property
 wins). Optional `OBS_TOKEN` requires `Authorization: Bearer <token>` at the WebSocket handshake;
@@ -226,6 +234,92 @@ ordering, realtime, macros/shift-click, controller hooks, failure taxonomy and r
 ```sh
 .venv/bin/python -m pytest -q tests/test_holo.py
 ```
+
+The cost cap is checked on every completion, including missing/malformed tools. Task success
+also enforces the task JSON deadline, independently of the agent wall-time budget. Before a
+terminal failure, the runner allows 600 ms of input-free simulation and re-reads scoring state
+to catch stats refreshed every ten ticks, then restores freeze. The settle interval counts
+toward the task deadline and is logged as `final_settle_ms`. Screenshot failures never inherit
+the preceding step's executed actions.
+
+## Hybrid web dashboard
+
+Three processes, each in its own terminal (keep the API key and optional `OBS_TOKEN` server-side):
+
+```sh
+# 1. Minecraft Java (Java 17 / software renderer)
+cd ~/repos/mc-observatory/mod
+DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 ./gradlew runClient
+
+# 2. FastAPI backend, Python 3.12, one process/worker only
+cd ~/repos/mc-observatory
+uv pip install --python runner/.venv/bin/python -e 'runner[test]'
+# cua-bench is already installed on this VM; on a fresh environment also install:
+# uv pip install --python runner/.venv/bin/python -e ~/repos/cua/libs/cua-bench
+runner/.venv/bin/python -m uvicorn mc_observatory.server:app --host 127.0.0.1 --port 8000
+
+# 3. React / Vite UI
+cd ~/repos/mc-observatory/dashboard
+source ~/.nvm/nvm.sh
+npm ci
+npm run dev
+```
+
+Open **http://127.0.0.1:5173**. `HCOMPANY_API_KEY` must already be in the backend environment;
+never put it into Vite variables or browser requests. The UI proxies `/api` and `/ws` to port
+8000. The browser never connects to the mod. Both services are loopback-only; this is not an
+authenticated public/multi-user deployment. HTTP and WS origins and Host headers are restricted
+to local dashboard addresses. Do not expose these ports or use multiple backend workers.
+The backend owns one persistent authenticated mod connection, one active run and its controller.
+The CLI must not control Minecraft concurrently with a dashboard run.
+
+REST (`/docs` on port 8000 provides schemas):
+- `POST /api/runs`: task/model/tier/timing, `max_steps`, `time_budget`, optional `max_cost_usd`.
+  Returns run ID, or 409 if busy, 503 if Minecraft/key is unavailable, 422 for invalid config.
+- `GET /api/status`, `/api/runs`, `/api/runs/{id}` (summary, steps and interventions).
+- `GET /api/runs/{id}/screenshots/{step}`: exact zero-based agent PNG.
+- `POST /api/control`: `{action:pause|resume|stop|set_goal, source:ui|voice|devin, text?:...}`.
+  Controls take effect between steps, not in the middle of a model call/action batch.
+  Goal changes are accepted after setup and return an expiring, single-use confirmation token.
+- `POST /api/control/confirm-goal`: `{token, source}` applies the proposed goal. Merely proposing
+  never changes the agent instruction. The scoring target remains the original task.
+- `GET /api/leaderboard`: model × tier × task aggregates from summaries; mean/p95 API latency
+  is computed from individual steps. Milestone times average reached trials only. Unknown
+  pricing is not treated as zero. Failure counts count runs carrying each tag.
+
+`WS /ws/live` publishes `snapshot`, `connection`, `frame` (JPEG), `agent_frame` (exact PNG),
+`step`, `overlay`, `intervention`, `summary`, `run_status`, `error` and heartbeat events.
+Slow viewers have bounded queues; the oldest queued event is dropped. Reconnecting browsers
+receive current frames and reload persisted steps/interventions. Dashboard restart does not
+resume an interrupted agent. The run root defaults to repo `runs/`; override with `OBS_RUNS_DIR`.
+
+Run directories include `run.json`, `steps.jsonl`, `summary.json`, screenshots, an
+`interventions.jsonl` audit trail, chronological `events.jsonl` (steps + interventions), and
+cua-bench trajectory export. Every intervention records UTC timestamp and source. Cua-bench
+intervention records retain original timestamps in their data even though exported at run end.
+Voice/Gladia and Devin panels are intentionally disabled placeholders for the next phase.
+
+The dev client already persists `pauseOnLostFocus:false`. State now reports
+`pause_on_lost_focus` and `window_focused`. A live unfocused test stayed in the world without
+a pause menu; the earlier 35b menu-opening cause remains unverified, not attributed to focus.
+
+Checks:
+```sh
+cd ~/repos/mc-observatory
+runner/.venv/bin/python -m pytest -q runner/tests -m 'not live'
+runner/.venv/bin/python spike/verify_overlay.py
+cd dashboard
+npm run build
+# Explicit opt-in: performs a paid live trial using the backend key and existing Chrome CDP.
+node tests/live.mjs
+```
+
+Playwright verified start → pause → propose/confirm goal → resume, replay next frame and
+leaderboard, without browser errors. The UI get-log trial ended at 30 steps, score 0,
+68.48 seconds, $0.0411436 (`budget_exhausted`); the model did not obtain a log. Screenshots
+and overlay comparison evidence are ignored under `spike/ui/`, never committed. World
+agent PNGs with overlay off/on were pixel-identical in the comparison; GUI differences were
+702 pixels (<0.5%, animated rendering), while the viewer JPEG visibly included the panel.
 
 ### Holo smoke observations
 

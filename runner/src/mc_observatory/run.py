@@ -165,6 +165,8 @@ class MinecraftRunner:
             summary.update({"task": task_id, "goal": self.controller.goal, "finished_at": utcnow()})
             (self.out / "summary.json").write_text(json.dumps(summary, indent=2))
             if tracer and records:
+                for intervention in getattr(self.controller, "interventions", []):
+                    tracer.record("intervention", intervention)
                 tracer.record("summary", summary)
                 tracer.save_to_disk(str(self.out / "trajectory"), save_pngs=True)
         return summary

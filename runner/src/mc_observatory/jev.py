@@ -20,7 +20,7 @@ class JevVision:
         questions = {"visible": Noul(instructions=(f"Is a {target} item icon in one of the nine hotbar slots? Include the inventory GUI bottom hotbar row. Exclude recipe icons, main inventory, and held-item sprites."
                                                    if hotbar else f"Is a {target} block visibly exposed in the world in this Minecraft screenshot? Exclude held items and GUI icons. GUI screens mean no."))}
         if not hotbar:
-            questions["target"] = Box(instructions=f"Tight box around the nearest visible {target} block in the world. Exclude held items, GUI icons and foliage obscuring the target. Use apparent size for nearness.")
+            questions["target"] = Box(instructions=f"Tight box around ONE individual exposed {target} cube face nearest the crosshair height. Do not box an entire multi-block trunk, canopy, held item or GUI. Choose the square target face closest to screen center. Use apparent size for nearness.")
         event = {"target": target, "kind": "hotbar" if hotbar else "seek", "sha256": hashlib.sha256(png).hexdigest(), "model": "jev-1.14.0", "started_at": datetime.now(timezone.utc).isoformat()}
         started = time.monotonic()
         try:

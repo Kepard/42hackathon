@@ -137,6 +137,15 @@ async def test_collect_advice_is_not_pickup_proof():
     assert ex.jev.calls[-1]["kind"] == "hotbar"
 
 
+async def test_seek_boxes_one_block_face_not_the_entire_trunk():
+    fake = FakeJev()
+    await JevVision(fake).ask(PNG, "oak log trunk")
+    instruction = fake.inputs[0]["questions"]["target"].instructions
+    assert "ONE individual exposed oak log trunk cube face" in instruction
+    assert "not box an entire multi-block trunk" in instruction
+    assert "crosshair height" in instruction
+
+
 def test_opt_in_schemas_raw_unchanged_and_barrier():
     assert tool_schemas("raw", "jev") == tool_schemas("raw")
     assert "seek" not in [t["function"]["name"] for t in tool_schemas("skills")]

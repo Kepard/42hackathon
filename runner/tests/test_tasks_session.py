@@ -57,3 +57,19 @@ async def test_actions_are_dispatched_and_unsupported_refused():
         await session.execute_action(cb.ScrollAction())
     with pytest.raises(NotImplementedError):
         await session.run_command("echo unsupported")
+
+
+@pytest.mark.parametrize("task_id,item", [("craft_planks", "minecraft:oak_planks"), ("craft_table", "minecraft:crafting_table")])
+@pytest.mark.parametrize("category", ["picked_up", "mined", "crafted"])
+async def test_craft_tasks_require_crafted_stat(task_id, item, category):
+    class FakeSession:
+        task_started = time.monotonic()
+        evaluator = LadderEvaluator()
+
+        async def state(self):
+            state = {"inventory": [{"id": item, "count": 1}], "stats": {category: {item: 1}}}
+            self.evaluator.update(state)
+            return state
+
+    task = next(task for task in tasks() if task.task_id == task_id)
+    assert await evaluate(task, FakeSession()) == [float(category == "crafted")]

@@ -180,7 +180,7 @@ class ToolExecutor:
             while (remaining := seconds - (time.monotonic() - started)) > 0:
                 await self.primitive("wait", ms=min(.2, remaining) * 1000)
                 try:
-                    frame = await asyncio.wait_for(self.observe(), max(.001, seconds - (time.monotonic() - started)))
+                    frame = await asyncio.wait_for(self.observe(), max(.25, seconds - (time.monotonic() - started)))
                 except asyncio.TimeoutError:
                     return "timeout"
                 delta = changes(reference, frame)

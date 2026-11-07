@@ -527,6 +527,8 @@ English "Block broken" subtitle plus center change, no visible progress after0.8
 timeout. `collect` stops on an item-like hotbar/count change or timeout. These are
 screen-only heuristics calibrated for854x480, GUI2, vanilla English subtitles; not
 semantic guarantees. Internal reflex screenshots are recorded, not all sent to Holo.
+Reflex captures always have at least250ms to complete, including at the0.2s minimum
+duration; the final observation can extend the action by up to that capture window.
 The log milestone now requires inventory/pickup/crafting evidence, never mining alone;
 other rung scoring and the created-obsidian exception are unchanged.
 

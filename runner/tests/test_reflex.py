@@ -96,6 +96,25 @@ async def test_reflex_timeout_empty_and_capture_error(monkeypatch, name):
     assert not ex.held_keys and not ex.held_buttons
 
 
+@pytest.mark.parametrize("name,signal,outcome", [
+    ("approach_until_outline", "outline", "outline_pixel_cue"),
+    ("mine", "broken_caption", "block_gone_pixel_cue"),
+    ("collect", "hotbar_change", "hotbar_changed"),
+])
+async def test_shortest_reflex_allows_a_real_capture_window(monkeypatch, name, signal, outcome):
+    values = iter([False, True]) if signal == "outline" else iter([0, 255]) if signal == "broken_caption" else iter([True])
+    monkeypatch.setattr(f"mc_observatory.holo_tools.{signal}", lambda *args: next(values))
+    class Executor(ToolExecutor):
+        async def observe(self):
+            await asyncio.sleep(.03)
+            self.current_frame = encode(Image.new("RGB", (854, 480), "white"))
+            return self.current_frame
+    ex = Executor(PixelClient(), 854, 480)
+    ex.begin_step(scene())
+    assert await ex.reflex(name, .2) == outcome
+    assert not ex.held_keys and not ex.held_buttons
+
+
 async def test_request_image_hard_cap_with_many_feedback_frames(tmp_path):
     c = PixelClient()
     api = FakeAPI(c)

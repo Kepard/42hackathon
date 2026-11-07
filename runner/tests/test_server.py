@@ -102,3 +102,18 @@ async def test_bounded_live_queue_and_intervention_event(service):
     service.publish("step", {"step": 0})
     service.publish("step", {"step": 1})
     assert queue.qsize() == 1 and (await queue.get())["data"]["step"] == 1
+
+
+async def test_overlay_bounds_payload_and_command_error_is_not_disconnect(service):
+    payloads = []
+    async def call(command, **kwargs):
+        payloads.append(kwargs["payload"])
+        raise RuntimeError("command rejected")
+    service.client.call = call
+    service.connected = True
+    await service.set_overlay(objective="x" * 20000, intent="\U0001f600" * 10000, action="a" * 20000)
+    assert len(json.dumps(payloads[-1], ensure_ascii=True)) <= 7000
+    assert service.connected
+    assert len(service.overlay["objective"]) == 20000
+    await service.set_overlay(objective="normal", intent="", action="")
+    assert payloads[-1]["objective"] == "normal"

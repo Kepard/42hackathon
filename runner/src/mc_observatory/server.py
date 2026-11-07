@@ -146,10 +146,14 @@ class ObservatoryService:
         self.overlay.update(fields)
         self.publish("overlay", self.overlay.copy())
         if self.connected:
+            payload = {key: value[:1024] if isinstance(value, str) else value for key, value in self.overlay.items()}
+            while len(json.dumps(payload, ensure_ascii=True)) > 7000:
+                key = max((key for key in payload if isinstance(payload[key], str)), key=lambda key: len(payload[key]))
+                payload[key] = payload[key][:len(payload[key]) // 2]
             try:
-                await self.client.call("overlay", payload=self.overlay)
-            except Exception:
-                self.connected = False
+                await self.client.call("overlay", payload=payload)
+            except Exception as error:
+                self.publish("overlay_error", {"error": type(error).__name__})
 
     async def stream(self):
         while True:

@@ -61,19 +61,28 @@ SKILLS = {
 }
 
 
-def tool_schemas(tier):
+JEV_SKILLS = {
+    "seek": ("Use fast TypeSafe Jev vision on the same overlay-free screenshots to seek a free-text block target. Proportional look/forward, selection-outline reach gate, visibility/stuck/timeout stops. No attack or privileged state. Fallible pixel/model cues; inspect the returned frame.", {"target": {"type": "string", "minLength": 1, "maxLength": 160}, "max_s": {**number(.2, 10), "default": 8}}),
+}
+
+
+def tool_schemas(tier, reflex="none"):
     vocabulary = RAW if tier == "raw" else SKILLS
+    if tier == "skills" and reflex == "jev":
+        vocabulary = {**vocabulary, **JEV_SKILLS}
+        vocabulary["collect"] = ("Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
+        vocabulary["attack_until_broken"] = ("Hold attack steadily until max_s (logs ~3.3s by hand), with existing pixel selection-outline gate before starting. Returned scene change is NOT proof of breaking or pickup. Then collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
              "parameters": {"type": "object", "properties": {**fields, "intent": {"type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence explaining why you are taking this action."}},
                             "required": [*[key for key, spec in fields.items() if "default" not in spec], "intent"], "additionalProperties": False}}}
             for name, (description, fields) in vocabulary.items()]
 
 
-def parse_calls(message, tier):
+def parse_calls(message, tier, reflex="none"):
     calls = message.get("tool_calls") or []
     if not isinstance(calls, list) or len(calls) > 16:
         raise InvalidToolArgs("Expected at most 16 tool calls")
-    schemas = {tool["function"]["name"]: tool["function"]["parameters"] for tool in tool_schemas(tier)}
+    schemas = {tool["function"]["name"]: tool["function"]["parameters"] for tool in tool_schemas(tier, reflex)}
     parsed = []
     for call in calls:
         try:
@@ -105,22 +114,22 @@ def parse_calls(message, tier):
     return parsed
 
 
-def observation_prefix(calls):
+def observation_prefix(calls, reflex="none"):
     if not isinstance(calls, list):
         return calls, []
     for index, raw in enumerate(calls):
         try:
-            call = parse_calls({"tool_calls": [raw]}, "skills")[0]
+            call = parse_calls({"tool_calls": [raw]}, "skills", reflex)[0]
         except InvalidToolArgs:
             return calls[:index + 1], calls[index + 1:]
-        if call["name"] in {"attack", "mine", "attack_until_broken", "mine_up", "approach_until_outline", "collect"} or (
+        if call["name"] in {"seek", "attack", "mine", "attack_until_broken", "mine_up", "approach_until_outline", "collect"} or (
                 call["name"] == "move" and call["arguments"]["seconds"] > .5):
             return calls[:index + 1], calls[index + 1:]
     return calls, []
 
 
 class ToolExecutor:
-    def __init__(self, client, width, height):
+    def __init__(self, client, width, height, jev=None, visibility_threshold=.5):
         self.client, self.width, self.height = client, width, height
         self.held_keys, self.held_buttons = set(), set()
         self.actions = []
@@ -128,6 +137,7 @@ class ToolExecutor:
         self.current_frame = None
         self.notes = ""
         self.unchanged_moves = 0
+        self.jev, self.visibility_threshold = jev, visibility_threshold
 
     def begin_step(self, png=None):
         self.actions, self.results, self.frames = [], [], []
@@ -145,6 +155,8 @@ class ToolExecutor:
 
     async def attack_until_broken(self, seconds):
         reference = self.current_frame or await self.observe()
+        if self.jev is not None and not outline(reference):
+            return "not_in_reach"
         deadline = time.monotonic() + seconds
         scene_changed = False
         await self.button(0, True)
@@ -162,6 +174,52 @@ class ToolExecutor:
         settled = changes(reference, await self.observe())
         scene_changed |= settled["frame_change"] >= .002
         return "scene_changed" if scene_changed else "no_change"
+
+    async def seek(self, target, seconds):
+        if self.jev is None:
+            raise InvalidToolArgs("seek requires reflex=jev")
+        deadline = time.monotonic() + seconds
+        anchor, walking_since = None, None
+        while time.monotonic() < deadline:
+            tick = time.monotonic()
+            frame = await self.observe()
+            try:
+                async with asyncio.timeout(max(.001, deadline - time.monotonic())):
+                    decision = await self.jev.ask(frame, target)
+            except TimeoutError:
+                return "timeout"
+            except Exception:
+                return "vision_error"
+            decision["frame_index"] = len(self.frames) - 1
+            if decision["noul"] < self.visibility_threshold:
+                decision["decision"] = "not_visible"
+                return "not_visible"
+            l, t, r, b = decision["box"]
+            if l <= .5 <= r and t <= .5 <= b and outline(frame):
+                decision["decision"] = "in_reach"
+                return "in_reach"
+            x, y = (l + r) / 2, (t + b) / 2
+            focal = self.height / 2 / math.tan(math.radians(35))
+            px, py = (x - .5) * (self.width - 1), (y - .5) * (self.height - 1)
+            yaw = max(-12, min(12, .7 * math.degrees(math.atan2(px, focal))))
+            pitch = max(-8, min(8, .7 * math.degrees(math.atan2(py, math.hypot(focal, px)))))
+            decision.update(decision="steer", yaw_deg=yaw, pitch_deg=pitch, walking=abs(x - .5) <= .09 and abs(y - .5) <= .15)
+            await self.primitive("mouse", dx=yaw / .15, dy=pitch / .15)
+            if abs(x - .5) <= .09 and abs(y - .5) <= .15:
+                if walking_since is None or changes(anchor, frame)["frame_change"] >= .002:
+                    anchor, walking_since = frame, time.monotonic()
+                elif time.monotonic() - walking_since >= 1:
+                    decision["decision"] = "stuck"
+                    return "stuck"
+                await self.key("w", True)
+                try:
+                    await self.primitive("wait", ms=max(0, min(.12, deadline - time.monotonic())) * 1000)
+                finally:
+                    await self.key("w", False)
+            else:
+                anchor, walking_since = None, None
+            await asyncio.sleep(max(0, min(.2 - (time.monotonic() - tick), deadline - time.monotonic())))
+        return "timeout"
 
     async def reflex(self, name, seconds, sprint=False):
         reference = self.current_frame or await self.observe()
@@ -265,7 +323,7 @@ class ToolExecutor:
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
-        after = self.current_frame if call["name"] in ("attack_until_broken", "approach_until_outline", "mine", "collect") else await self.observe()
+        after = self.current_frame if call["name"] in ("seek", "attack_until_broken", "approach_until_outline", "mine", "collect") else await self.observe()
         delta = changes(before, after)
         if call["name"] == "move":
             self.unchanged_moves = self.unchanged_moves + 1 if delta["frame_change"] < .002 else 0
@@ -280,6 +338,13 @@ class ToolExecutor:
                           hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
+        if call["name"] == "collect" and self.jev is not None:
+            try:
+                advice = await self.jev.ask(after, call["arguments"].get("item", "log"), hotbar=True)
+                advice["frame_index"] = len(self.frames) - 1
+                result["hotbar_item_advisory"] = {"item": advice["target"], "noul": advice["noul"], "not_collection_proof": True}
+            except Exception:
+                result["hotbar_item_advisory"] = {"error": "vision_error", "not_collection_proof": True}
         if call["name"] == "aim_at" and call["arguments"]["x"] >= 700 and call["arguments"]["y"] >= 700:
             result["warning"] = "Aim point overlaps the usual held-item corner, not necessarily a world block. Select an EMPTY hotbar slot to check whether the object disappears before aiming again."
         self.results.append(result)
@@ -287,6 +352,10 @@ class ToolExecutor:
 
     async def execute_inputs(self, call, tier):
         name, args = call["name"], call["arguments"]
+        if name == "seek":
+            return await self.seek(args["target"], args.get("max_s", 8))
+        if self.jev is not None and name in ("mine", "attack") and not outline(self.current_frame or await self.observe()):
+            return "not_in_reach"
         if name in ("approach_until_outline", "mine", "collect"):
             return await self.reflex(name, args["max_s"], args.get("sprint", False))
         if name in ("key_down", "key_up"):

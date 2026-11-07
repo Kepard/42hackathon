@@ -51,8 +51,17 @@ class HoloConfig:
     seed: int | None = None
     max_cost_usd: float | None = None
     api_timeout: float = 45
+    reflex: str = "none"
+    jev_threshold: float = .5
+    reasoning_effort: str | None = None
 
     def __post_init__(self):
+        if self.reflex not in ("none", "jev") or (self.reflex == "jev" and self.tier != "skills"):
+            raise ValueError("Jev reflex requires skills tier")
+        if not 0 <= self.jev_threshold <= 1 or self.reasoning_effort not in (None, "low"):
+            raise ValueError("Invalid Jev threshold or reasoning effort")
+        if self.reasoning_effort is not None and self.model != "holo4-27b":
+            raise ValueError("Reasoning effort setting is only verified for holo4-27b")
         if self.tier not in ("raw", "skills") or self.timing not in ("freeze", "realtime"):
             raise ValueError("Invalid tier/timing")
         if self.max_steps < 1 or self.time_budget <= 0 or self.history_steps < 0 or self.history_images < 1:
@@ -209,13 +218,14 @@ Wrong tool/no drops -> change tool. Short actions; each with intent. {timing}
 
 
 class HoloAgent(BaseAgent):
-    def __init__(self, config=None, api=None, controller=None):
+    def __init__(self, config=None, api=None, controller=None, jev_client=None):
         super().__init__()
         self.config = config or HoloConfig()
         self.api = api if api is not None else HoloAPI(os.environ.get("HCOMPANY_API_KEY"))
         self.controller = controller or RunController()
         self.terminal_tags = []
         self.records = []
+        self.jev_client = jev_client
 
     @staticmethod
     def name():
@@ -237,7 +247,10 @@ class HoloAgent(BaseAgent):
         for label, png in observations:
             content += [{"type": "text", "text": label},
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]
-        return [{"role": "system", "content": PRIMER.format(goal=self.controller.goal, timing=timing)}, {"role": "user", "content": content}]
+        primer = PRIMER.format(goal=self.controller.goal, timing=timing)
+        if self.config.reflex == "jev":
+            primer += "\nPrefer seek(target, max_s=8) over manual look+move to reach visible blocks. Then attack_until_broken(max_s=4), then collect(max_s=0.8,item='log'). Seek/collect use fast TypeSafe Jev on screenshots only. Outline gates mining; Jev hotbar scores are advisory, not pickup proof. If seek says not_visible, scan/clear leaves rather than repeating it."
+        return [{"role": "system", "content": primer}, {"role": "user", "content": content}]
 
     async def steps(self, client, goal, out):
         """Yield pixel-only records. The runner alone appends scoring/diagnostics."""
@@ -248,6 +261,10 @@ class HoloAgent(BaseAgent):
         self.controller.goal = goal
         start, cost = time.monotonic(), 0.0
         images, executor = [], None
+        jev = None
+        if config.reflex == "jev":
+            from .jev import JevVision
+            jev = JevVision(self.jev_client)
         feedback_images, feedback_refs = [], []
         try:
             for idx in range(config.max_steps):
@@ -287,11 +304,15 @@ class HoloAgent(BaseAgent):
                         record["input_image_refs"] = (record["image_refs"][:-1] + feedback_refs + record["image_refs"][-1:])[-3:] + [record["crop_ref"]]
                         width, height = struct.unpack(">II", png[16:24])
                         if executor is None:
-                            executor = ToolExecutor(client, width, height)
+                            executor = ToolExecutor(client, width, height, jev, config.jev_threshold)
                         executor.width, executor.height, executor.actions = width, height, []
                         executor.begin_step(png)
-                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop), "tools": tool_schemas(config.tier),
+                        if jev is not None:
+                            jev.calls = []
+                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop), "tools": tool_schemas(config.tier, config.reflex),
                                    "temperature": config.temperature, "max_tokens": 2048}
+                        if config.reasoning_effort is not None:
+                            payload["reasoning_effort"] = config.reasoning_effort
                         if config.seed is not None:
                             payload["seed"] = config.seed
                         announce = getattr(client, "model_input", None)
@@ -319,8 +340,8 @@ class HoloAgent(BaseAgent):
                         record["skipped_tool_calls"] = []
                         pending = record["raw_tool_calls"]
                         if config.tier == "skills":
-                            pending, record["skipped_tool_calls"] = observation_prefix(pending)
-                        calls = parse_calls({"tool_calls": pending}, config.tier)
+                            pending, record["skipped_tool_calls"] = observation_prefix(pending, config.reflex)
+                        calls = parse_calls({"tool_calls": pending}, config.tier, config.reflex)
                         record["tool_calls"] = calls
                         record["intent"] = [call["arguments"]["intent"] for call in calls]
                         if not calls:
@@ -364,6 +385,19 @@ class HoloAgent(BaseAgent):
                         (out / ref).write_bytes(frame)
                         feedback_refs.append(ref)
                     record["feedback_image_refs"] = feedback_refs.copy()
+                record["holo_cost_usd"] = record["cost_usd"]
+                record["jev_calls"] = jev.calls.copy() if jev is not None else []
+                for vision_call in record["jev_calls"]:
+                    frame_index = vision_call.get("frame_index")
+                    if frame_index is not None and 0 <= frame_index < len(feedback_refs):
+                        vision_call["screenshot_ref"] = feedback_refs[frame_index]
+                record["jev_cost_usd"] = sum(call["cost_usd"] for call in record["jev_calls"])
+                if record["cost_usd"] is not None:
+                    record["cost_usd"] += record["jev_cost_usd"]
+                if jev is not None:
+                    jev.calls = []
+                if config.max_cost_usd is not None and cost + (record["cost_usd"] or 0) >= config.max_cost_usd:
+                    record["failure_tags"].append("budget_exhausted")
                 record["finished_at"] = utcnow()
                 record["elapsed_seconds"] = time.monotonic() - start
                 cost += record["cost_usd"] or 0
@@ -378,6 +412,8 @@ class HoloAgent(BaseAgent):
                 await executor.release()
             if config.timing == "freeze":
                 await client.pause()
+            if jev is not None:
+                await jev.close()
 
     async def perform_task(self, task_description, session, logging_dir=None, tracer=None):
         from cua_bench.agents.base import AgentResult, FailureMode

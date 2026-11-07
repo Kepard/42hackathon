@@ -376,6 +376,7 @@ function App() {
     [wsConnected, setWsConnected] = useState(false);
   const [active, setActive] = useState<string | null>(null),
     [phase, setPhase] = useState("IDLE");
+  const [runActive, setRunActive] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>({});
   const [viewer, setViewer] = useState<string>(),
     [model, setModel] = useState<string>(),
@@ -437,6 +438,7 @@ function App() {
                 setSteps(r.steps);
                 setSummary(r.summary);
                 setInterventions(r.interventions);
+                setRunActive(r.status === "running");
               })
               .catch((e) => setError(e.message));
         }
@@ -459,11 +461,13 @@ function App() {
           );
         if (type === "intervention") setInterventions((old) => [...old, data]);
         if (type === "summary") {
+          setRunActive(false);
           setSummary(data);
           refresh();
         }
-        if (type === "error") setError(data.message);
+        if (type === "error") { setError(data.message); setRunActive(false); }
         if (type === "run_status") {
+          setRunActive(data.status === "running");
           setActive(data.id);
           setPhase(data.status === "running" ? "STARTING" : "IDLE");
           if (data.status === "running") {
@@ -496,6 +500,7 @@ function App() {
         max_cost_usd: form.max_cost_usd ? Number(form.max_cost_usd) : null,
       });
       setActive(result.id);
+      setRunActive(true);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -534,8 +539,7 @@ function App() {
       setError((e as Error).message);
     }
   }
-  const running =
-    !!active && !["IDLE", "PAUSED FROZEN"].includes(phase) && !summary;
+  const running = runActive;
   const current = steps.find((s) => s.step === modelStep);
   const replayStep = replay?.steps[replayIndex];
   return (

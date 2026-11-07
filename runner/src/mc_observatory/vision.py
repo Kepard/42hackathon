@@ -21,14 +21,24 @@ def center_crop(png):
     return out.getvalue()
 
 
+def hotbar_row_boxes(width, height):
+    scale = max(1, min(width // 320, height // 240))
+    scale += scale % 2
+    # Vanilla's 176x166 inventory has hotbar (8,142); the open book shifts it 77px.
+    gui_left = max(0, int(width / 2 - 84 * scale))
+    gui_right = min(width, int(width / 2 + 163 * scale))
+    gui_top = min(height - 1, int(height / 2 + 55))
+    gui_bottom = max(gui_top + 1, min(height, int(height / 2 + 81 * scale)))
+    row_width = gui_right - gui_left
+    world_left = (width - row_width) // 2
+    return ((world_left, max(0, height - 24 * scale), world_left + row_width, height),
+            (gui_left, gui_top, gui_right, gui_bottom))
+
+
 def hotbar_rows_crop(png):
     im = image(png)
-    width = max(1, round(im.width * .44))
-    world_left = (im.width - width) // 2
-    gui_left = min(im.width - width, round(im.width * .485))
-    gui_top = int(im.height * .74)
-    rows = [im.crop((world_left, int(im.height * .9), world_left + width, im.height)),
-            im.crop((gui_left, gui_top, gui_left + width, min(im.height, gui_top + max(1, int(im.height * .09)))))]
+    rows = [im.crop(box) for box in hotbar_row_boxes(im.width, im.height)]
+    width = rows[0].width
     strip = Image.new("RGB", (width, sum(row.height for row in rows)))
     y = 0
     for row in rows:

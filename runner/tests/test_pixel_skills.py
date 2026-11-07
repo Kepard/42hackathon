@@ -3,13 +3,14 @@ import base64
 import io
 import json
 import math
+from pathlib import Path
 
 import pytest
 from PIL import Image
 
 from mc_observatory.holo import HoloAgent, HoloConfig, PRIMER
 from mc_observatory.holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
-from mc_observatory.vision import center_crop, changes, hotbar_rows_crop
+from mc_observatory.vision import center_crop, changes, hotbar_row_boxes, hotbar_rows_crop
 from test_holo import FakeAPI, PixelClient, PNG, call, response
 
 
@@ -49,9 +50,9 @@ def test_hotbar_rows_are_only_nearest_scaled_current_pixels():
     source = io.BytesIO()
     im.save(source, format="PNG")
     result = Image.open(io.BytesIO(hotbar_rows_crop(source.getvalue())))
-    width = round(854 * .44)
-    world = im.crop(((854 - width) // 2, 432, (854 - width) // 2 + width, 480))
-    gui = im.crop((round(854 * .485), 355, round(854 * .485) + width, 398))
+    width = 494
+    world = im.crop((180, 432, 674, 480))
+    gui = im.crop((259, 295, 753, 402))
     assert result.size == (width * 3, (world.height + gui.height) * 3)
     assert result.crop((0, 0, width * 3, world.height * 3)).tobytes() == world.resize((width * 3, world.height * 3), Image.Resampling.NEAREST).tobytes()
     assert result.crop((0, world.height * 3, width * 3, result.height)).tobytes() == gui.resize((width * 3, gui.height * 3), Image.Resampling.NEAREST).tobytes()
@@ -60,6 +61,38 @@ def test_hotbar_rows_are_only_nearest_scaled_current_pixels():
         hotbar_rows_crop(b"")
     with pytest.raises(OSError):
         hotbar_rows_crop(b"not a picture")
+
+
+@pytest.mark.parametrize("size", [(640,480), (854,480), (1280,720), (2560,1440)])
+def test_hotbar_boxes_include_all_nine_slots_for_every_vanilla_scale(size):
+    width, height = size
+    world, gui = hotbar_row_boxes(width, height)
+    maximum = min(width // 320, height // 240)
+    maximum += maximum % 2
+    for scale in range(1, maximum + 1):
+        for book in (False, True):
+            shift = 77 * scale if book and width // scale >= 379 else 0
+            left = (width - 176 * scale) // 2 + 8 * scale + shift
+            top = (height - 166 * scale) // 2 + 142 * scale
+            assert gui[0] <= left and gui[2] >= left + 162 * scale
+            assert gui[1] <= top and gui[3] >= top + 18 * scale
+        assert world[0] <= width / 2 - 91 * scale
+        assert world[2] >= width / 2 + 91 * scale
+        assert world[1] <= height - 22 * scale and world[3] == height
+
+
+@pytest.mark.parametrize("book,frame", [(False,"inventory_closed_book_c226_36.png"), (True,"inventory_open_book_c226_85.png")])
+def test_real_inventory_hotbar_contains_every_slot(book, frame):
+    source = (Path(__file__).parent / "fixtures" / frame).read_bytes()
+    im = Image.open(io.BytesIO(source)).convert("RGB")
+    boxes = hotbar_row_boxes(*im.size)
+    result = Image.open(io.BytesIO(hotbar_rows_crop(source)))
+    world_height = (boxes[0][3] - boxes[0][1]) * 3
+    for slot in range(9):
+        left = 267 + (154 if book else 0) + slot * 36
+        original = im.crop((left,358,left+36,394))
+        x, y = (left - boxes[1][0]) * 3, world_height + (358 - boxes[1][1]) * 3
+        assert result.crop((x,y,x+108,y+108)).tobytes() == original.resize((108,108),Image.Resampling.NEAREST).tobytes()
 
 
 async def test_jev_payload_uses_only_current_pixels_and_exact_saved_refs(tmp_path):

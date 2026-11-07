@@ -66,10 +66,19 @@ public class Observatory implements ClientModInitializer {
             while ((pending = captures.poll()) != null) capture(pending, "after_hud_before_overlay");
         }
         if (overlay.size() == 0 || (mc.currentScreen != null && !captures.isEmpty())) return;
+        try {
+            drawOverlay(mc, context);
+        } catch (RuntimeException error) {
+            overlay = new JsonObject(); overlayDrawn = false;
+            System.err.println("Observatory overlay disabled after render error: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private static void drawOverlay(MinecraftClient mc, DrawContext context) {
         overlayDrawn = true;
         int width = mc.getWindow().getScaledWidth() / 2 - 6;
         context.fill(6, 6, width + 6, 30, 0xB0101A29);
-        int complete = Math.max(0, Math.min(13, overlay.has("completed") ? overlay.get("completed").getAsInt() : 0));
+        int complete = Math.max(0, Math.min(13, (int)number("completed", 0)));
         long now = System.nanoTime();
         boolean flash = now < completionUntil && (now / 200_000_000L) % 2 == 0;
         for (int i = 0; i < 13; i++) {
@@ -77,7 +86,7 @@ public class Observatory implements ClientModInitializer {
             int color = flash ? 0xFFFFFFFF : i < complete ? 0xFF42D9B0 : i == complete ? 0xFFFFCF66 : 0xFF526077;
             context.fill(x, 11, x + 2, 13, color);
         }
-        double seconds = overlay.has("api_latency_ms") ? overlay.get("api_latency_ms").getAsDouble() / 1000 : 0;
+        double seconds = number("api_latency_ms", 0) / 1000;
         String latency = String.format(Locale.ROOT, "API %.1fs", seconds);
         String badges = Arrays.stream(label("badges", "").split("\\s+"))
                 .filter(badge -> badge.equals("PAUSED") || badge.equals("LISTENING"))
@@ -89,6 +98,7 @@ public class Observatory implements ClientModInitializer {
         String summary = prefix + ellipsize(mc, label("current_rung", "log"),
                 available - mc.textRenderer.getWidth(prefix + suffix));
         context.getMatrices().push();
+        try {
         context.getMatrices().scale(scale, scale, 1);
         int x = (int)(51 / scale), y = (int)(9 / scale);
         context.drawText(mc.textRenderer, summary, x, y, 0xEDF4FF, false);
@@ -102,7 +112,17 @@ public class Observatory implements ClientModInitializer {
                 : "↳ " + label("intent", "") + " → " + label("action", "");
         context.drawText(mc.textRenderer, ellipsize(mc, detail.replaceAll("[\\r\\n]+", " "),
                 (int)((width - 8) / scale)), (int)(10 / scale), (int)(21 / scale), 0xEDF4FF, false);
-        context.getMatrices().pop();
+        } finally {
+            context.getMatrices().pop();
+        }
+    }
+
+    private static double number(String key, double fallback) {
+        JsonElement value = overlay.get(key);
+        if (value == null || value.isJsonNull() || !value.isJsonPrimitive()
+                || !value.getAsJsonPrimitive().isNumber()) return fallback;
+        double number = value.getAsDouble();
+        return Double.isFinite(number) ? number : fallback;
     }
 
     private static String ellipsize(MinecraftClient mc, String text, int width) {

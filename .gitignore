@@ -10,3 +10,6 @@ spike/*client*.log
 spike/restart.log
 spike/live-tests.log
 spike/unit-tests.log
+spike/**
+!spike/*.py
+!spike/

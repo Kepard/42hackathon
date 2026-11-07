@@ -74,7 +74,7 @@ def tool_schemas(tier, reflex="none"):
             vocabulary.pop(legacy)
         vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
         vocabulary["collect"] = ("Pick up visible drops AFTER mining, never use for block approach (call seek). Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
-        vocabulary["attack_until_broken"] = ("Hold attack steadily until max_s (logs ~3.3s by hand), with existing pixel selection-outline gate before starting. Returned scene change is NOT proof of breaking or pickup. Then collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
+        vocabulary["attack_until_broken"] = ("Hold attack steadily until max_s (logs ~3.3s by hand). If the selection outline is absent, first probe for0.6s and continue ONLY if target-centre pixels show mining progress; otherwise release and call seek again. Probe use/success is logged. Scene change is NOT proof of breaking or pickup. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
              "parameters": {"type": "object", "properties": {**fields, "intent": {"type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence explaining why you are taking this action."}},
                             "required": [*[key for key, spec in fields.items() if "default" not in spec], "intent"], "additionalProperties": False}}}
@@ -137,6 +137,7 @@ class ToolExecutor:
         self.held_keys, self.held_buttons = set(), set()
         self.actions = []
         self.results, self.frames = [], []
+        self.mining_probes = []
         self.current_frame = None
         self.notes = ""
         self.unchanged_moves = 0
@@ -145,6 +146,7 @@ class ToolExecutor:
 
     def begin_step(self, png=None):
         self.actions, self.results, self.frames = [], [], []
+        self.mining_probes = []
         self.current_frame = png
 
     async def observe(self):
@@ -159,14 +161,25 @@ class ToolExecutor:
 
     async def attack_until_broken(self, seconds):
         reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
-        if self.jev is not None and not outline(reference):
-            return "not_in_reach"
-        deadline = time.monotonic() + seconds
+        probe = {"used": self.jev is not None and not outline(reference), "succeeded": None}
+        self.mining_probes.append(probe)
+        deadline = time.monotonic() + (max(seconds, .8) if probe["used"] else seconds)
         scene_changed = False
         center_progress = 0
         await self.button(0, True)
         try:
-            while (remaining := deadline - time.monotonic()) > 0:
+            if probe["used"]:
+                await self.primitive("wait", ms=600)
+                try:
+                    frame = await asyncio.wait_for(self.observe(), .2)
+                    observed = changes(reference, frame)
+                    center_progress = observed["center_change"]
+                    probe.update(succeeded=center_progress >= .002 and observed["center_changed_fraction"] >= .01,
+                                 center_change=center_progress, center_changed_fraction=observed["center_changed_fraction"],
+                                 frame_index=len(self.frames) - 1)
+                except asyncio.TimeoutError:
+                    probe.update(succeeded=False, error="capture_timeout")
+            while probe["succeeded"] is not False and (remaining := deadline - time.monotonic()) > 0:
                 await self.primitive("wait", ms=min(.35, remaining) * 1000)
                 try:
                     frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
@@ -180,7 +193,9 @@ class ToolExecutor:
         settled = changes(reference, await self.observe())
         center_progress = max(center_progress, settled["center_change"])
         scene_changed |= settled["frame_change"] >= .002
-        self.failed_mining_frame = reference if seconds >= .35 and center_progress < .01 else None
+        self.failed_mining_frame = reference if seconds >= .35 and center_progress < .01 and probe["succeeded"] is not True else None
+        if probe["succeeded"] is False:
+            return "not_in_reach"
         return "scene_changed" if scene_changed else "no_change"
 
     async def seek(self, target, seconds):
@@ -344,6 +359,7 @@ class ToolExecutor:
             await self.button(button, True)
 
     async def execute(self, call, tier):
+        probe_start = len(self.mining_probes)
         if tier == "raw":
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
@@ -366,6 +382,8 @@ class ToolExecutor:
             result["outcome"] = outcome
         if call["name"] == "attack_until_broken":
             result["scene_changed"] = outcome == "scene_changed"
+        if len(self.mining_probes) > probe_start:
+            result["mining_probes"] = self.mining_probes[probe_start:]
         if self.jev is not None and outcome == "not_in_reach":
             result["next_action"] = "call seek(<target>) first"
         if self.jev is not None and call["name"] == "attack_until_broken" and outcome in ("scene_changed", "no_change") and self.failed_mining_frame is not None:

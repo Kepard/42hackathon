@@ -1,7 +1,10 @@
+import asyncio
 import io
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import ImageDraw
 
 from mc_observatory.holo import HoloAgent, HoloConfig
 from mc_observatory.holo_tools import ToolExecutor, tool_schemas, parse_calls, observation_prefix
@@ -224,7 +227,54 @@ async def test_attack_footer_change_has_consistent_scene_feedback_but_no_target_
         assert result["next_action"] == "call seek(<target>) first"
 
 
-async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
+@pytest.mark.parametrize("mode", ["cracks", "unchanged", "hud", "capture_timeout"])
+async def test_real_bark_probe_continues_only_on_target_progress(monkeypatch, mode):
+    before = (Path(__file__).parent / "fixtures" / "mining_bark_probe.png").read_bytes()
+    broken = (Path(__file__).parent / "fixtures" / "mining_bark_broken.png").read_bytes()
+    cracks = image(before)
+    ImageDraw.Draw(cracks).line((400,215,430,250,410,265), fill="black", width=3)
+    hud = image(before)
+    hud.paste((255,255,255), (0,400,200,430))
+    def encode(im):
+        out = io.BytesIO()
+        im.save(out, format="PNG")
+        return out.getvalue()
+    clock = [0.]
+    monkeypatch.setattr("mc_observatory.holo_tools.time", SimpleNamespace(monotonic=lambda: clock[0]))
+    class Client(PixelClient):
+        count = 0
+        async def screenshot(self):
+            self.count += 1
+            if mode == "capture_timeout" and self.count == 2:
+                raise asyncio.TimeoutError
+            if clock[0] >= 3.3 and mode == "cracks":
+                return broken
+            if clock[0] >= .6:
+                return encode(cracks) if mode == "cracks" else encode(hud) if mode == "hud" else before
+            return before
+    class Executor(ToolExecutor):
+        async def primitive(self, kind, **args):
+            if kind == "wait":
+                clock[0] += args["ms"] / 1000
+                self.actions.append({"action": kind, **args})
+            else:
+                await super().primitive(kind, **args)
+    fake = FakeJev()
+    ex = Executor(Client(),854,480,JevVision(fake))
+    ex.begin_step(before)
+    result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": 4}}, "skills")
+    assert result["mining_probes"][0]["used"]
+    assert result["mining_probes"][0]["succeeded"] is (mode == "cracks")
+    assert clock[0] == pytest.approx(4 if mode == "cracks" else .6)
+    assert not fake.inputs and not ex.held_buttons
+    if mode == "cracks":
+        assert result["outcome"] == "scene_changed"
+    else:
+        assert result["outcome"] == "not_in_reach"
+        assert result["next_action"] == "call seek(<target>) first"
+
+
+async def test_absent_outline_probes_then_releases_without_progress_or_jev_decision(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     fake = FakeJev()
     ex = executor(fake)
@@ -243,7 +293,8 @@ async def test_mining_checks_fresh_pixels_after_model_latency(monkeypatch, actua
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(dark if actual_reachable else light)
     assert await ex.attack_until_broken(0) == ("no_change" if actual_reachable else "not_in_reach")
-    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is actual_reachable
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions)
+    assert ex.mining_probes[0]["used"] is (not actual_reachable)
 
 
 @pytest.mark.parametrize("overhead_outline", [False, True])
@@ -261,7 +312,8 @@ async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhe
     ex.attack_until_broken = lambda _, *args: ToolExecutor.attack_until_broken(ex, 0)
     result = await ex.execute({"name": "mine_up", "arguments": {"count": 1}}, "skills")
     assert result["outcome"] == (["no_change"] if overhead_outline else ["not_in_reach"])
-    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is overhead_outline
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions)
+    assert result["mining_probes"][0]["used"] is (not overhead_outline)
 
 
 async def test_collect_advice_is_not_pickup_proof():
@@ -302,7 +354,7 @@ def test_jev_has_no_legacy_block_approach_and_prompt_uses_seek():
     assert "mine(max_s=4)" not in text
     assert "approach ->" not in text
     assert "trunk width >=85px" not in text
-    assert "Mine only after in_reach" in text
+    assert "Mining uses an outline or a short pixel-progress probe" in text
     with pytest.raises(ValueError):
         parse_calls({"tool_calls": [call("reposition", direction="forward", seconds=.1)]}, "skills", "jev")
 

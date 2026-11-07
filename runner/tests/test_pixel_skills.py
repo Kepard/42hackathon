@@ -127,7 +127,7 @@ async def test_observation_barrier_discards_dependent_calls_and_explains_history
     records = [r async for r in agent.steps(client, "get log", tmp_path)]
     assert len(records[0]["raw_tool_calls"]) == len(tools)
     assert [c["name"] for c in records[0]["tool_calls"]] == (["update_notes", "aim_at"] if tier == "skills" else ["mouse_move", "key_press"])
-    assert [c["name"] for c in records[0]["skipped_tool_calls"]] == (["move", "attack"] if tier == "skills" else [])
+    assert [c["function"]["name"] for c in records[0]["skipped_tool_calls"]] == (["move", "attack"] if tier == "skills" else [])
     assert any(e[0] == "key" for e in client.events if isinstance(e, tuple)) is (tier == "raw")
     history = json.loads(api.payloads[1]["messages"][1]["content"][0]["text"].split(": ", 1)[1])
     assert history[0]["actions"] == records[0]["tool_calls"]
@@ -138,6 +138,19 @@ async def test_observation_barrier_empty_completion_does_not_invent_actions(tmp_
     agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(PixelClient(), response([])))
     records = [r async for r in agent.steps(PixelClient(), "get log", tmp_path)]
     assert records[0]["tool_calls"] == records[0]["skipped_tool_calls"] == records[0]["executed_actions"] == []
+
+
+@pytest.mark.parametrize("tail", [[{"function": {"name": "attack", "arguments": "{"}}], [None], [{"function": {"name": "unknown", "arguments": {}}}]])
+async def test_observation_barrier_ignores_malformed_discarded_calls(tmp_path, tail):
+    client = PixelClient()
+    tools = [call("update_notes", text="Observe first"), call("aim_at", x=500, y=500), *tail]
+    api = FakeAPI(client, response(tools))
+    agent = HoloAgent(HoloConfig(max_steps=1), api)
+    record = [r async for r in agent.steps(client, "get log", tmp_path)][0]
+    assert not record["errors"]
+    assert [c["name"] for c in record["tool_calls"]] == ["update_notes", "aim_at"]
+    assert record["skipped_tool_calls"] == tail
+    assert any(a["action"] == "mouse" for a in record["executed_actions"])
 
 
 async def test_attack_screenshot_error_releases_mouse():

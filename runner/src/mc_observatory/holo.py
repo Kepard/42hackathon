@@ -276,12 +276,15 @@ class HoloAgent(BaseAgent):
                         message = response["choices"][0]["message"]
                         record["reasoning"] = message.get("reasoning_content") or message.get("reasoning") or ""
                         record["raw_tool_calls"] = message.get("tool_calls") or []
-                        calls = parse_calls(message, config.tier)
                         record["skipped_tool_calls"] = []
-                        if config.tier == "skills":
-                            barrier = next((i + 1 for i, call in enumerate(calls) if call["name"] != "update_notes"), len(calls))
-                            record["skipped_tool_calls"] = calls[barrier:]
-                            calls = calls[:barrier]
+                        pending = record["raw_tool_calls"]
+                        if config.tier == "skills" and isinstance(pending, list):
+                            barrier = next((i + 1 for i, call in enumerate(pending)
+                                            if not isinstance(call, dict) or not isinstance(call.get("function"), dict)
+                                            or call["function"].get("name") != "update_notes"), len(pending))
+                            record["skipped_tool_calls"] = pending[barrier:]
+                            pending = pending[:barrier]
+                        calls = parse_calls({"tool_calls": pending}, config.tier)
                         record["tool_calls"] = calls
                         record["intent"] = [call["arguments"]["intent"] for call in calls]
                         if not calls:

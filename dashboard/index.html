@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Minecraft Observatory</title>
+    <script>
+      try {
+        if (localStorage.getItem("observatory-theme") === "dark")
+          document.documentElement.classList.add("dark");
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

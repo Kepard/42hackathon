@@ -1,11 +1,18 @@
 import asyncio
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
 from mc_observatory.jev_eval import Budget, RESERVE_PER_CALL, binary_metrics, evaluate, iou, percentile, prepare
+
+
+def test_runtime_vision_import_does_not_load_offline_evaluation_or_optional_sdk():
+    result = subprocess.run([sys.executable, "-c", "import sys; import mc_observatory.jev; assert 'mc_observatory.jev_eval' not in sys.modules; assert 'typesafe_sdk' not in sys.modules"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def fixture_run(tmp_path):

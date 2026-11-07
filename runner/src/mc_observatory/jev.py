@@ -3,7 +3,8 @@ import hashlib
 import time
 from datetime import datetime, timezone
 
-from .jev_eval import PRICE_PER_INPUT_TOKEN, RESERVE_PER_CALL
+PRICE_PER_INPUT_TOKEN = .042 / 1_000_000
+RESERVE_PER_CALL = 1_048_576 * PRICE_PER_INPUT_TOKEN
 
 
 class JevVision:

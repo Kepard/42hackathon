@@ -190,6 +190,15 @@ class RunController:
                 await result
 
 
+REACH_GUIDANCE = "At854x480/FOV70, trunk width >=85px usually means reach. Sprint+jump; sneak near cliffs."
+TREE_GUIDANCE = """TREE: streaked brown bark, NOT speckled dirt -> approach -> clear intervening green leaves
+(~0.35s; hold ~0.6s) -> OBSERVE -> re-aim bark -> mine(max_s=4), ~3.3s/log by hand ->
+collect(max_s=0.8) -> confirm LOG icon/count. Leaf gone is progress, NOT a log.
+Reflex outline/break/hotbar pixel cues are fallible, not semantic guarantees. Get4 logs.
+No cracks: change ONE variable (closer/re-aim/pitch/strafe); don't blindly retreat from leaves."""
+JEV_REACH_GUIDANCE = "After seek centres a visible target, attempt mining. Mining uses an outline or a short pixel-progress probe. not_in_reach -> call seek again, NOT another attack or manual aim. No center change while mining means no visible progress; scene_changed alone is not cracking. Collect is only for drops after mining, not block approach. Avoid cliffs/lava; seek safe solid targets."
+JEV_TREE_GUIDANCE = "TREE: seek('oak log trunk',max_s=8) -> attack_until_broken(max_s=4) -> collect(max_s=0.8,item='log') -> confirm LOG icon. Seek is the ONLY block approach tool. If leaves obstruct bark, seek('oak leaves'), attack_until_broken(max_s=0.6), then seek bark again. Leaf gone is progress, not a log. Scan with look when not_visible; reposition only to retreat/sidestep. Seek/collect use fast TypeSafe Jev on screenshots; mining uses outline/progress pixels and hotbar scores are advisory."
+
 PRIMER = """Minecraft Java Survival, screenshots and input tools only. Goal: {goal}
 CHECK -> EXPLAIN -> ACT: intent names visible outcome, failure hypothesis, next subgoal.
 CURRENT pixels override old frames/notes. After milestones update_notes: inventory,
@@ -197,23 +206,19 @@ completed subgoals, next waypoint. Don't recraft visible tools. Goal overrides r
 
 REACH: visible black block selection outline confirms ~4.5-block reach; absence is ambiguous
 when edges are offscreen. Cracks appear within ~0.3s; swinging isn't progress.
-At854x480/FOV70, trunk width >=85px usually means reach. Sprint+jump; sneak near cliffs.
-TREE: streaked brown bark, NOT speckled dirt -> approach -> clear intervening green leaves
-(~0.35s; hold ~0.6s) -> OBSERVE -> re-aim bark -> mine(max_s=4), ~3.3s/log by hand ->
-collect(max_s=0.8) -> confirm LOG icon/count. Leaf gone is progress, NOT a log.
-Reflex outline/break/hotbar pixel cues are fallible, not semantic guarantees. Get4 logs.
-No cracks: change ONE variable (closer/re-aim/pitch/strafe); don't blindly retreat from leaves.
+{reach_guidance}
+{tree_guidance}
 
 CONTROLS: WASD, space jump, shift sneak, E inventory, Escape closes GUI (opens menu if none),
 1-9 hotbar, left mine, right use. Look is RELATIVE: yaw right, pitch down. click_at is GUI-only;
-aim_at x/y=0..1000 on CURRENT FULL screen, not crop. Lower-right cube is your HELD ITEM,
+{aim_guidance} Lower-right cube is your HELD ITEM,
 not a world block: select EMPTY hotbar slot before locating stations.
 F3 via raw key_press/skills toggle_debug:
 read XYZ/Facing/Targeted Block only from pixels then close. Target up to20 blocks is NOT reach;
 use yaw NUMBER, not just cardinal Facing: relative turn=desired yaw-current yaw.
 Skills scene_changed/stuck are pixel heuristics, NOT
 block-gone or item-collected; raw has no computed feedback. Check frames.
-SKILLS BATCHING: GUI clicks/typing and look->move may batch. Stop after mining/attack,
+SKILLS BATCHING: {batch_guidance} Stop after mining/attack,
 reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe before mining.
 
 ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
@@ -273,11 +278,12 @@ class HoloAgent(BaseAgent):
         for label, png in observations:
             content += [{"type": "text", "text": label},
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]
-        primer = PRIMER.format(goal=self.controller.goal, timing=timing)
-        if self.config.reflex == "jev":
-            start, end = primer.index("TREE:"), primer.index("CONTROLS:")
-            primer = primer[:start] + "TREE: seek('oak log trunk',max_s=8) -> attack_until_broken(max_s=4) -> collect(max_s=0.8,item='log') -> confirm LOG icon. Seek is the ONLY block approach tool. If leaves obstruct bark, seek('oak leaves'), attack_until_broken(max_s=0.6), then seek bark again. Leaf gone is progress, not a log. Scan with look when not_visible; reposition only to retreat/sidestep. Seek/collect use fast TypeSafe Jev on screenshots; mining uses outline/progress pixels and hotbar scores are advisory.\n\n" + primer[end:]
-            primer = primer.replace("At854x480/FOV70, trunk width >=85px usually means reach. Sprint+jump; sneak near cliffs.", "After seek centres a visible target, attempt mining. Mining uses an outline or a short pixel-progress probe. not_in_reach -> call seek again, NOT another attack or manual aim. No center change while mining means no visible progress; scene_changed alone is not cracking. Collect is only for drops after mining, not block approach. Avoid cliffs/lava; seek safe solid targets.")
+        jev = self.config.reflex == "jev"
+        primer = PRIMER.format(goal=self.controller.goal, timing=timing,
+            reach_guidance=JEV_REACH_GUIDANCE if jev else REACH_GUIDANCE,
+            tree_guidance=JEV_TREE_GUIDANCE if jev else TREE_GUIDANCE,
+            aim_guidance="Use seek for blocks and look for scanning." if jev else "aim_at x/y=0..1000 on CURRENT FULL screen, not crop.",
+            batch_guidance="GUI clicks/typing may batch." if jev else "GUI clicks/typing and look->move may batch.")
         return [{"role": "system", "content": primer}, {"role": "user", "content": content}]
 
     async def steps(self, client, goal, out):

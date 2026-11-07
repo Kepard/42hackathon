@@ -187,7 +187,10 @@ class ToolExecutor:
                 except asyncio.TimeoutError:
                     probe.update(succeeded=False, error="capture_timeout")
             while probe["succeeded"] is not False and not probe.get("broke_pixel_cue") and (remaining := deadline - time.monotonic()) > 0:
-                await self.primitive("wait", ms=min(.35, remaining) * 1000)
+                if remaining <= .15:
+                    await self.primitive("wait", ms=remaining * 1000)
+                    break
+                await self.primitive("wait", ms=min(.35, remaining - .15) * 1000)
                 try:
                     frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
                 except asyncio.TimeoutError:
@@ -236,8 +239,9 @@ class ToolExecutor:
             l, t, r, b = decision["box"]
             x, y = (l + r) / 2, (t + b) / 2
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
+            near_face = (r - l) * self.width >= 180 * self.height / 480
             previous_miss = self.failed_mining_frame is not None and changes(self.failed_mining_frame, frame)["center_change"] < .01
-            if previous_miss and centered and (r - l) * self.width >= 180 * self.height / 480:
+            if previous_miss and centered and near_face:
                 decision.update(decision="stuck", reason="unchanged_mining_target_too_close")
                 return "stuck"
             if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame, decision["box"]):
@@ -251,7 +255,7 @@ class ToolExecutor:
             px, py = (x - .5) * (self.width - 1), (y - .5) * (self.height - 1)
             yaw = max(-12, min(12, .7 * math.degrees(math.atan2(px, focal))))
             pitch = max(-8, min(8, .7 * math.degrees(math.atan2(py, math.hypot(focal, px)))))
-            walking = centered and (r - l) * self.width < 180 * self.height / 480
+            walking = centered and not near_face
             decision.update(decision="steer", yaw_deg=yaw, pitch_deg=pitch, walking=walking)
             await self.primitive("mouse", dx=yaw / .15, dy=pitch / .15)
             if walking:
@@ -417,8 +421,6 @@ class ToolExecutor:
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
-        if self.jev is not None and name in ("mine", "attack") and not outline(self.current_frame or await self.observe()):
-            return "not_in_reach"
         if name in ("approach_until_outline", "mine", "collect"):
             return await self.reflex(name, args["max_s"], args.get("sprint", False))
         if name in ("key_down", "key_up"):
@@ -477,7 +479,8 @@ class ToolExecutor:
             return await self.attack_until_broken(args["max_s"])
         elif name == "mine_up":
             await self.set_pitch(-90)
-            await self.observe()
+            if self.jev is None:
+                await self.observe()
             outcomes = []
             for _ in range(args["count"]):
                 outcomes.append(await self.attack_until_broken(4))

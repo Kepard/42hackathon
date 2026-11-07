@@ -12,9 +12,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from .jev import PRICE_PER_INPUT_TOKEN, RESERVE_PER_CALL
 
-PRICE_PER_INPUT_TOKEN = .042 / 1_000_000
-RESERVE_PER_CALL = 1_048_576 * PRICE_PER_INPUT_TOKEN
 LABELS = ("crosshair_on_log", "outline_visible", "log_in_hotbar", "stone_visible", "iron_visible", "nearest_trunk")
 MOVES = ("forward", "turn_left", "turn_right", "jump", "attack", "stop")
 

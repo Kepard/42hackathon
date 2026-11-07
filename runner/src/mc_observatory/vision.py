@@ -40,6 +40,11 @@ def outline(png, target_box=None):
     ridge = ImageChops.subtract(patch.filter(ImageFilter.MaxFilter(5)), patch)
     p, luminance = ridge.load(), patch.load()
     cx, cy = patch.width // 2, patch.height // 2
+    bounds = None
+    if target_box is not None:
+        l, t, r, b = target_box
+        x0, y0 = (im.width - patch.width) // 2, (im.height - patch.height) // 2
+        bounds = (l * im.width - x0, t * im.height - y0, r * im.width - x0, b * im.height - y0)
     rows = []
     for y in range(3, patch.height - 3):
         start, last, hits = None, 0, 0
@@ -62,11 +67,10 @@ def outline(png, target_box=None):
                 continue
             if left < 8 or right > patch.width - 8 or (right - left) / (bottom - top) > 1.65:
                 continue
-            if target_box is not None:
-                l, t, r, b = target_box
-                x0, y0 = (im.width - patch.width) // 2, (im.height - patch.height) // 2
-                overlap_w = max(0, min(right + x0, r * im.width) - max(left + x0, l * im.width))
-                overlap_h = max(0, min(bottom + y0, b * im.height) - max(top + y0, t * im.height))
+            if bounds is not None:
+                l, t, r, b = bounds
+                overlap_w = max(0, min(right, r) - max(left, l))
+                overlap_h = max(0, min(bottom, b) - max(top, t))
                 if overlap_w * overlap_h < .65 * (right - left) * (bottom - top):
                     continue
             hits = sum(any(p[x, y] > 14 for x in range(max(0, left - 3), min(patch.width, left + 4)))

@@ -349,8 +349,9 @@ def test_inventory_slot_moves_do_not_count_as_resource_progress():
     assert tags == ["gui_stuck"]
 
 
-def test_private_inventory_progress_and_failure_tags_do_not_change_model_payload():
-    agent = HoloAgent(HoloConfig(), FakeAPI(PixelClient()))
+@pytest.mark.parametrize("reflex", ["none", "jev"])
+def test_private_inventory_progress_and_failure_tags_do_not_change_model_payload(reflex):
+    agent = HoloAgent(HoloConfig(reflex=reflex), FakeAPI(PixelClient()))
     payloads, tags = [], []
     for progressing in (False, True):
         detector, records = FailureDetector(window=2), []

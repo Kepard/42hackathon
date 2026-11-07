@@ -9,7 +9,7 @@ from PIL import Image
 
 from mc_observatory.holo import HoloAgent, HoloConfig, PRIMER
 from mc_observatory.holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
-from mc_observatory.vision import center_crop, changes
+from mc_observatory.vision import center_crop, changes, hotbar_rows_crop
 from test_holo import FakeAPI, PixelClient, PNG, call, response
 
 
@@ -39,6 +39,44 @@ def test_pixel_transforms_and_errors():
         changes(a, PNG)
     with pytest.raises(OSError):
         center_crop(b"not a picture")
+
+
+def test_hotbar_rows_are_only_nearest_scaled_current_pixels():
+    im = Image.new("RGB", (854, 480))
+    for y in range(im.height):
+        for x in range(im.width):
+            im.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+    source = io.BytesIO()
+    im.save(source, format="PNG")
+    result = Image.open(io.BytesIO(hotbar_rows_crop(source.getvalue())))
+    width = round(854 * .44)
+    world = im.crop(((854 - width) // 2, 432, (854 - width) // 2 + width, 480))
+    gui = im.crop((round(854 * .485), 355, round(854 * .485) + width, 398))
+    assert result.size == (width * 3, (world.height + gui.height) * 3)
+    assert result.crop((0, 0, width * 3, world.height * 3)).tobytes() == world.resize((width * 3, world.height * 3), Image.Resampling.NEAREST).tobytes()
+    assert result.crop((0, world.height * 3, width * 3, result.height)).tobytes() == gui.resize((width * 3, gui.height * 3), Image.Resampling.NEAREST).tobytes()
+    assert Image.open(io.BytesIO(hotbar_rows_crop(png("black", (1, 1))))).size == (3, 6)
+    with pytest.raises(OSError):
+        hotbar_rows_crop(b"")
+    with pytest.raises(OSError):
+        hotbar_rows_crop(b"not a picture")
+
+
+async def test_jev_payload_uses_only_current_pixels_and_exact_saved_refs(tmp_path):
+    c = PixelClient()
+    api = FakeAPI(c)
+    agent = HoloAgent(HoloConfig(max_steps=3, reflex="jev"), api, jev_client=object())
+    records = [r async for r in agent.steps(c, "Observe the current hotbar", tmp_path)]
+    for record, payload in zip(records, api.payloads):
+        refs = record["input_image_refs"]
+        assert refs == [record["screenshot_ref"], record["crop_ref"], record["hotbar_crop_ref"]]
+        parts = [p for p in payload["messages"][1]["content"] if p["type"] == "image_url"]
+        assert len(parts) == 3
+        for ref, part in zip(refs, parts):
+            assert (tmp_path / ref).read_bytes() == base64.b64decode(part["image_url"]["url"].split(",")[1])
+        assert (tmp_path / refs[0]).read_bytes() == PNG
+        assert "PRIVATE" not in json.dumps(payload)
+        assert not set(refs) & set(record.get("feedback_image_refs", []))
 
 
 @pytest.mark.parametrize("name,args", [

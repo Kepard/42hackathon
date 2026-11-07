@@ -12,7 +12,7 @@ from pathlib import Path
 import aiohttp
 
 from .holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas, observation_prefix
-from .vision import center_crop
+from .vision import center_crop, hotbar_rows_crop
 
 try:
     from cua_bench.agents.base import BaseAgent
@@ -264,7 +264,7 @@ class HoloAgent(BaseAgent):
     def name():
         return "holo-minecraft"
 
-    def messages(self, images, feedback_images=(), notes="", crop=None, held_inputs=None):
+    def messages(self, images, feedback_images=(), notes="", crop=None, held_inputs=None, hotbar=None):
         timing = ("The game is frozen during deliberation; actions run with ticks enabled. Held inputs carry across steps only during action execution."
                   if self.config.timing == "freeze" else "The game runs during deliberation. Release held controls explicitly.")
         if self.config.tier == "skills":
@@ -280,11 +280,15 @@ class HoloAgent(BaseAgent):
         observations += [(f"Previous action pixel-evidence frame {idx}", png) for idx, png in enumerate(feedback_images)]
         observations += [(f"CURRENT full screen from step {selected[-1][0]}", selected[-1][1])]
         observations = observations[-3:]
+        jev = self.config.reflex == "jev"
+        if jev:
+            observations = observations[-1:]
         observations += [("2x CURRENT center crop; coordinates still refer to the full screen", crop or center_crop(selected[-1][1]))]
+        if jev:
+            observations += [("3x CURRENT rows: TOP world hotbar, BOTTOM inventory GUI hotbar (ignore bottom if GUI closed). Read item COUNTS here; past intents/scratchpad may be wrong. Coordinates still refer to full screen.", hotbar or hotbar_rows_crop(selected[-1][1]))]
         for label, png in observations:
             content += [{"type": "text", "text": label},
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]
-        jev = self.config.reflex == "jev"
         primer = PRIMER.format(goal=self.controller.goal, timing=timing,
             reach_guidance=JEV_REACH_GUIDANCE if jev else REACH_GUIDANCE,
             tree_guidance=JEV_TREE_GUIDANCE if jev else TREE_GUIDANCE,
@@ -342,6 +346,12 @@ class HoloAgent(BaseAgent):
                         record["crop_ref"] = f"screenshots/{idx:05d}-center.png"
                         (out / record["crop_ref"]).write_bytes(crop)
                         record["input_image_refs"] = (record["image_refs"][:-1] + feedback_refs + record["image_refs"][-1:])[-3:] + [record["crop_ref"]]
+                        hotbar = None
+                        if config.reflex == "jev":
+                            hotbar = hotbar_rows_crop(png)
+                            record["hotbar_crop_ref"] = f"screenshots/{idx:05d}-hotbars.png"
+                            (out / record["hotbar_crop_ref"]).write_bytes(hotbar)
+                            record["input_image_refs"] = [record["screenshot_ref"], record["crop_ref"], record["hotbar_crop_ref"]]
                         width, height = struct.unpack(">II", png[16:24])
                         if executor is None:
                             executor = ToolExecutor(client, width, height, jev, config.jev_threshold)
@@ -349,7 +359,7 @@ class HoloAgent(BaseAgent):
                         executor.begin_step(png)
                         if jev is not None:
                             jev.calls = []
-                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop, executor.held_inputs() if config.tier=="skills" else None), "tools": tool_schemas(config.tier, config.reflex),
+                        payload = {"model": config.model, "messages": self.messages(images, feedback_images, executor.notes, crop, executor.held_inputs() if config.tier=="skills" else None, hotbar), "tools": tool_schemas(config.tier, config.reflex),
                                    "temperature": config.temperature, "max_tokens": 4096}
                         if config.reasoning_effort is not None:
                             payload["reasoning_effort"] = config.reasoning_effort

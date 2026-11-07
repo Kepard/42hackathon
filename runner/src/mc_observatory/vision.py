@@ -21,6 +21,24 @@ def center_crop(png):
     return out.getvalue()
 
 
+def hotbar_rows_crop(png):
+    im = image(png)
+    width = max(1, round(im.width * .44))
+    world_left = (im.width - width) // 2
+    gui_left = min(im.width - width, round(im.width * .485))
+    gui_top = int(im.height * .74)
+    rows = [im.crop((world_left, int(im.height * .9), world_left + width, im.height)),
+            im.crop((gui_left, gui_top, gui_left + width, min(im.height, gui_top + max(1, int(im.height * .09)))))]
+    strip = Image.new("RGB", (width, sum(row.height for row in rows)))
+    y = 0
+    for row in rows:
+        strip.paste(row, (0, y))
+        y += row.height
+    out = io.BytesIO()
+    strip.resize((strip.width * 3, strip.height * 3), Image.Resampling.NEAREST).save(out, format="PNG")
+    return out.getvalue()
+
+
 def changes(before, after):
     a, b = image(before), image(after)
     if a.size != b.size:

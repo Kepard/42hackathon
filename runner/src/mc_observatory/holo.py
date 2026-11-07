@@ -223,9 +223,9 @@ SKILLS BATCHING: {batch_guidance} Stop after mining/attack,
 reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe before mining.
 
 ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
-1 log: log icon/count. Full ladder: 4 logs -> planks (4/log), table (4 planks), sticks.
-Craft: click recipe-book search, Ctrl+A, type the item name FIRST; observe filtered results, then click the matching result. Never use unsearched icon positions.
-Observe the output slot: shift-click ONLY if visibly nonempty. If empty, re-search or obtain missing ingredients; never repeat empty-output clicks.
+1 log: log icon/count. Full ladder: convert ALL4 logs to16 planks BEFORE table (4 planks), sticks and pickaxe; logs cannot substitute for planks.
+Craft: ensure craftable-only filter (GREEN check, not red X); blank results mean check item name/grid or missing ingredients. Click recipe-book search, Ctrl+A, type the item name FIRST; observe filtered results, then click the matching result. Never use unsearched icon positions.
+Observe the output slot: shift-click ONLY if visibly nonempty AND NOT a red-tinted ghost. Red ghost ingredients/output are NOT owned/craftable items. If empty/red, obtain missing ingredients first; never repeat empty-output clicks.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
 4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
 Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.

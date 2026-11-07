@@ -92,7 +92,12 @@ def test_crafting_guidance_requires_search_and_visible_output():
         assert "type the item name FIRST" in text
         assert "ONLY if visibly nonempty" in text
         assert "never repeat empty-output clicks" in text
+        assert "ALL4 logs to16 planks BEFORE" in text
+        assert "craftable-only filter (GREEN check, not red X)" in text
+        assert "red-tinted ghost" in text
+        assert "Blank results" in text or "blank results" in text
     assert "ALWAYS shift-click output" not in goal
+    assert "craftable-only filter(397,236)" in goal
 
 
 @pytest.mark.parametrize("tier,name,args", [("raw", "key_press", {"key": "f3", "ms": 0}), ("skills", "toggle_debug", {})])

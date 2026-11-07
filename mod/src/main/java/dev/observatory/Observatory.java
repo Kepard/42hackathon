@@ -95,6 +95,7 @@ public class Observatory implements ClientModInitializer {
     private static final Set<Integer> guiButtons = new HashSet<>();
     private final Map<Integer, Long> releases = new HashMap<>();
     private static volatile boolean paused;
+    private static final SyntheticMouse syntheticMouse = new SyntheticMouse();
     private static volatile boolean portalTouched;
     private static volatile boolean portalLit;
     private final List<PortalAttempt> portalAttempts = new ArrayList<>();
@@ -138,6 +139,10 @@ public class Observatory implements ClientModInitializer {
     }
 
     public static boolean isPaused() { return paused; }
+    public static boolean cursorLocked(boolean physical) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        return syntheticMouse.cursorLocked(physical, mc.world != null && mc.currentScreen == null && reset == null);
+    }
     public static boolean isShiftHeld() { return syntheticShift; }
     public static void touchPortal(ServerPlayerEntity player) {
         if (reset == null && player.getServer() == MinecraftClient.getInstance().getServer()) portalTouched = true;
@@ -399,6 +404,7 @@ public class Observatory implements ClientModInitializer {
         result.addProperty("resetting", reset != null); result.addProperty("paused", paused);
         result.addProperty("pause_on_lost_focus", mc.options.pauseOnLostFocus);
         result.addProperty("window_focused", mc.isWindowFocused());
+        result.addProperty("cursor_locked", mc.mouse.isCursorLocked());
         result.addProperty("fps", mc.getCurrentFps()); result.addProperty("frames", frames);
         result.addProperty("elapsed_seconds", (System.nanoTime() - started) / 1e9);
         result.addProperty("render_distance", mc.options.getViewDistance().getValue());
@@ -434,6 +440,7 @@ public class Observatory implements ClientModInitializer {
     }
 
     private static void releaseInputs() {
+        syntheticMouse.release();
         syntheticShift = false;
         MinecraftClient mc = MinecraftClient.getInstance(); KeyBinding.unpressAll();
         if (mc.currentScreen != null) for (int button : guiButtons) mc.currentScreen.mouseReleased(cursorX, cursorY, button);
@@ -545,6 +552,7 @@ public class Observatory implements ClientModInitializer {
                         }
                         if (request.has("button")) {
                             int button = request.get("button").getAsInt(); if (button < 0 || button > 1) throw new IllegalArgumentException("button must be 0 or 1");
+                            syntheticMouse.button(button, false);
                             if (request.get("pressed").getAsBoolean()) { mc.currentScreen.mouseClicked(cursorX, cursorY, button); guiButtons.add(button); }
                             else { mc.currentScreen.mouseReleased(cursorX, cursorY, button); guiButtons.remove(button); }
                         }
@@ -554,6 +562,7 @@ public class Observatory implements ClientModInitializer {
                         if (request.has("button")) {
                             int button = request.get("button").getAsInt(); if (button < 0 || button > 1) throw new IllegalArgumentException("button must be 0 or 1");
                             InputUtil.Key key = InputUtil.Type.MOUSE.createFromCode(button); boolean pressed = request.get("pressed").getAsBoolean();
+                            syntheticMouse.button(button, pressed);
                             KeyBinding.setKeyPressed(key, pressed); if (pressed) KeyBinding.onKeyPressed(key);
                         }
                     }

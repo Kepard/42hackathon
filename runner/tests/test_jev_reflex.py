@@ -43,7 +43,7 @@ def executor(fake):
     (.9, (.4,.3,.6,.7), False, "timeout"),
 ])
 async def test_seek_stop_and_outline_must_be_inside_box(monkeypatch, p, box, outline, expected):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: outline)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: outline)
     ex = executor(FakeJev(p, box))
     assert await ex.seek("oak log trunk", .01) == expected
     assert not ex.held_keys and not ex.held_buttons
@@ -52,7 +52,7 @@ async def test_seek_stop_and_outline_must_be_inside_box(monkeypatch, p, box, out
 
 
 async def test_seek_proportional_aim_is_clamped_and_does_not_walk_off_target(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     ex = executor(FakeJev(box=(.8,.8,1,1)))
     await ex.seek("iron ore (orange-tan spots)", .01)
     mouse = next(a for a in ex.actions if a["action"] == "mouse")
@@ -63,7 +63,7 @@ async def test_seek_proportional_aim_is_clamped_and_does_not_walk_off_target(mon
 
 @pytest.mark.parametrize("box", [(.46,.4,.66,.6), (.3,.3,.7,.7)])
 async def test_seek_aligns_before_walking_and_does_not_press_into_close_face(monkeypatch, box):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     ex = executor(FakeJev(box=box))
     assert await ex.seek("oak log trunk", .01) == "timeout"
     assert not ex.jev.calls[0]["walking"]
@@ -78,7 +78,7 @@ async def test_seek_standoff_scales_with_vertical_fov_resolution(monkeypatch, wi
     class Client(PixelClient):
         async def screenshot(self):
             return frame
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     ex = ToolExecutor(Client(), width,height, JevVision(FakeJev(box=box)))
     ex.begin_step(frame)
     await ex.seek("oak log trunk", .01)
@@ -87,7 +87,7 @@ async def test_seek_standoff_scales_with_vertical_fov_resolution(monkeypatch, wi
 
 
 async def test_unchanged_walking_stops_stuck(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     ex = executor(FakeJev())
     assert await ex.seek("stone", 1.8) == "stuck"
     assert not ex.held_keys
@@ -110,7 +110,7 @@ async def test_error_stops_without_walking_and_logs_unknown_cost(monkeypatch):
 async def test_seek_always_captures_settled_feedback(monkeypatch, p, box, outline, error, expected):
     from test_pixel_skills import png
     dark, light = png("black", (640,480)), png("white", (640,480))
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: outline)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: outline)
 
     class Client(PixelClient):
         captures = 0
@@ -137,7 +137,7 @@ async def test_seek_does_not_report_transient_outline_as_settled_reach(monkeypat
         async def screenshot(self):
             self.captures += 1
             return first if self.captures == 1 else settled
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame: frame == first)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame, *args: frame == first)
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(first)
     assert await ex.seek("oak log trunk", .01) == "timeout"
@@ -147,7 +147,7 @@ async def test_seek_does_not_report_transient_outline_as_settled_reach(monkeypat
 
 
 async def test_seek_confirms_reachable_off_center_face_without_steering(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: True)
     ex = executor(FakeJev(box=(.49,.3,.79,.7)))
     assert await ex.seek("oak log trunk", .01) == "in_reach"
     assert ex.jev.calls[0]["decision"] == "in_reach"
@@ -155,7 +155,7 @@ async def test_seek_confirms_reachable_off_center_face_without_steering(monkeypa
 
 
 async def test_failed_mining_pixels_prevent_reusing_the_same_false_reach_cue(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: True)
     ex = executor(FakeJev())
     assert await ex.attack_until_broken(.35) == "no_change"
     assert ex.failed_mining_frame == PNG
@@ -166,7 +166,7 @@ async def test_failed_mining_pixels_prevent_reusing_the_same_false_reach_cue(mon
 
 
 async def test_failed_mining_at_close_face_reports_stuck_with_recovery(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: True)
     ex = executor(FakeJev(box=(.3,.3,.7,.7)))
     assert await ex.attack_until_broken(.35) == "no_change"
     ex.begin_step(PNG)
@@ -178,7 +178,7 @@ async def test_failed_mining_at_close_face_reports_stuck_with_recovery(monkeypat
 
 
 async def test_different_off_center_target_can_steer_after_failed_mining(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: True)
     ex = executor(FakeJev(box=(.4,.3,.9,.7)))
     assert await ex.attack_until_broken(.35) == "no_change"
     ex.begin_step(PNG)
@@ -186,6 +186,18 @@ async def test_different_off_center_target_can_steer_after_failed_mining(monkeyp
     assert result["outcome"] == "timeout" and not result["stuck"]
     assert ex.jev.calls[0]["decision"] == "steer"
     assert ex.jev.calls[0]["yaw_deg"] > 0
+    assert not ex.held_keys and not ex.held_buttons
+
+
+async def test_seek_rejects_outline_rectangle_outside_jev_target():
+    from pathlib import Path
+    frame = (Path(__file__).parent / "fixtures" / "outline_distant_background.png").read_bytes()
+    class Client(PixelClient):
+        async def screenshot(self):
+            return frame
+    ex = ToolExecutor(Client(), 854,480, JevVision(FakeJev(box=(.47,.46,.54,.58))))
+    ex.begin_step(frame)
+    assert await ex.seek("oak log trunk", .15) == "timeout"
     assert not ex.held_keys and not ex.held_buttons
 
 
@@ -200,7 +212,7 @@ async def test_attack_footer_change_has_consistent_scene_feedback_but_no_target_
     class Client(PixelClient):
         async def screenshot(self):
             return buffer.getvalue()
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: True)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: True)
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()) if use_jev else None)
     ex.begin_step(before)
     result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": .35}}, "skills")
@@ -213,7 +225,7 @@ async def test_attack_footer_change_has_consistent_scene_feedback_but_no_target_
 
 
 async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     fake = FakeJev()
     ex = executor(fake)
     assert await ex.attack_until_broken(.35) == "not_in_reach"
@@ -227,7 +239,7 @@ async def test_mining_checks_fresh_pixels_after_model_latency(monkeypatch, actua
     class Client(PixelClient):
         async def screenshot(self):
             return light if actual_reachable else dark
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame: frame == light)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame, *args: frame == light)
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(dark if actual_reachable else light)
     assert await ex.attack_until_broken(0) == ("no_change" if actual_reachable else "not_in_reach")
@@ -238,7 +250,7 @@ async def test_mining_checks_fresh_pixels_after_model_latency(monkeypatch, actua
 async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhead_outline):
     from test_pixel_skills import png
     dark, light = png("black", (640,480)), png("white", (640,480))
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame: frame == light)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame, *args: frame == light)
 
     class Client(PixelClient):
         async def screenshot(self):
@@ -246,7 +258,7 @@ async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhe
 
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(dark if overhead_outline else light)
-    ex.attack_until_broken = lambda _: ToolExecutor.attack_until_broken(ex, 0)
+    ex.attack_until_broken = lambda _, *args: ToolExecutor.attack_until_broken(ex, 0)
     result = await ex.execute({"name": "mine_up", "arguments": {"count": 1}}, "skills")
     assert result["outcome"] == (["no_change"] if overhead_outline else ["not_in_reach"])
     assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is overhead_outline
@@ -296,7 +308,7 @@ def test_jev_has_no_legacy_block_approach_and_prompt_uses_seek():
 
 
 async def test_not_in_reach_tells_model_to_seek_first(monkeypatch):
-    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _, *args: False)
     ex = executor(FakeJev())
     r = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": .35}}, "skills")
     assert r["outcome"] == "not_in_reach"

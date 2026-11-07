@@ -57,6 +57,14 @@ def test_real_outline_frames(name, expected):
     assert outline((Path(__file__).parent / "fixtures" / name).read_bytes()) is expected
 
 
+@pytest.mark.parametrize("name,box,expected", [
+    ("outline_bark_oblique.png", (.38,.35,.53,.77), True),
+    ("outline_distant_background.png", (.47,.46,.54,.58), False),
+])
+def test_outline_belongs_to_proposed_target_not_background(name, box, expected):
+    assert outline((Path(__file__).parent / "fixtures" / name).read_bytes(), box) is expected
+
+
 @pytest.mark.parametrize("box", [(399, 209, 542, 277), (383, 162, 546, 302)])
 def test_outline_rejects_wide_background_and_crop_boundary_edges(box):
     im = Image.new("RGB", (854, 480), (90, 100, 110))

@@ -216,9 +216,9 @@ class ToolExecutor:
             if previous_miss and centered and (r - l) * self.width >= 180 * self.height / 480:
                 decision.update(decision="stuck", reason="unchanged_mining_target_too_close")
                 return "stuck"
-            if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame):
+            if not previous_miss and l <= .5 <= r and t <= .5 <= b and outline(frame, decision["box"]):
                 await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
-                if outline(await self.observe()):
+                if outline(await self.observe(), decision["box"]):
                     decision["decision"] = "in_reach"
                     return "in_reach"
                 decision["reach_unconfirmed"] = True

@@ -34,8 +34,9 @@ def changes(before, after):
             "center_changed_fraction": sum(histogram[24:]) / (patch.width * patch.height)}
 
 
-def outline(png):
-    patch = center(image(png), 240, 200).convert("L")
+def outline(png, target_box=None):
+    im = image(png)
+    patch = center(im, 240, 200).convert("L")
     ridge = ImageChops.subtract(patch.filter(ImageFilter.MaxFilter(5)), patch)
     p, luminance = ridge.load(), patch.load()
     cx, cy = patch.width // 2, patch.height // 2
@@ -61,6 +62,13 @@ def outline(png):
                 continue
             if left < 8 or right > patch.width - 8 or (right - left) / (bottom - top) > 1.65:
                 continue
+            if target_box is not None:
+                l, t, r, b = target_box
+                x0, y0 = (im.width - patch.width) // 2, (im.height - patch.height) // 2
+                overlap_w = max(0, min(right + x0, r * im.width) - max(left + x0, l * im.width))
+                overlap_h = max(0, min(bottom + y0, b * im.height) - max(top + y0, t * im.height))
+                if overlap_w * overlap_h < .65 * (right - left) * (bottom - top):
+                    continue
             hits = sum(any(p[x, y] > 14 for x in range(max(0, left - 3), min(patch.width, left + 4)))
                        for y in range(top, bottom))
             right_hits = sum(any(p[x, y] > 14 for x in range(max(0, right - 3), min(patch.width, right + 4)))

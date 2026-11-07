@@ -188,20 +188,27 @@ def test_failure_detectors_and_summary():
     assert summary["score"] == 0 and summary["failure_tags"] == ["timeout"]
 
 
-async def test_runner_scores_without_exposing_state_and_emits(tmp_path):
+@pytest.mark.parametrize("timing", ["freeze", "realtime"])
+async def test_runner_scores_without_exposing_state_and_emits(tmp_path, timing):
     class ScoringClient(PixelClient):
-        async def reset(self, *args): return {"world_id": "fresh"}
+        async def reset(self, *args):
+            self.reset_args = args
+            return {"world_id": "fresh"}
         async def state(self): return {"world_id": "fresh", "inventory": [{"id": "minecraft:oak_log", "count": 1}]}
 
     client = ScoringClient()
     api = FakeAPI(client)
     controller = RunController()
-    agent = HoloAgent(HoloConfig(max_steps=2), api, controller)
+    agent = HoloAgent(HoloConfig(max_steps=2, timing=timing), api, controller)
     summary = await MinecraftRunner(agent, client, tmp_path, tracing=False).run("get_log")
     assert summary["success"] and summary["steps"] == 1 and summary["milestones"]["log"] >= 0
     assert (await controller.events.get())["evaluator"]["completed"] == ["log"]
     assert "minecraft:oak_log" not in json.dumps(api.payloads)
     assert (tmp_path / "summary.json").exists()
+    initial = json.loads((tmp_path / "initial_state.json").read_text())
+    assert client.reset_args == (12345, [], initial["task"]["spawn"])
+    assert initial["state"] == {"world_id": "fresh"}
+    assert client.events[0] == ("pause" if timing == "freeze" else "resume")
 
 
 @pytest.mark.parametrize("kwargs", [{"tier": "bad"}, {"history_images": 0}, {"max_steps": 0}, {"time_budget": -1},

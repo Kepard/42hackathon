@@ -130,6 +130,49 @@ item limits to split them (64 ender pearls become four stacks of 16). Duplicate 
 entries are combined first. An expanded inventory exceeding 36 slots is rejected before
 changing worlds; Minecraft's registry remains authoritative for item IDs and stack sizes.
 
+### Repeatable benchmarks
+
+Built-in tasks contain a `spawn` object (`x`, `y`, `z`, `yaw`, `pitch`,
+`time_of_day`). On seed 12345, get-log starts at `(96.5, 128, -16.5)`, yaw 0,
+pitch 10, facing an oak tree about 9 blocks away. Reset clears inventory before
+granting any task-specified starting items, restores health/hunger, clears weather,
+fixes daylight/weather cycling, teleports, and freezes the server. It waits for
+terrain rendering to finish before replying. HUD, first-person view, FOV 70 and
+mouse sensitivity 0.5 are restored. Freeze agents remain paused; realtime agents
+resume before starting their clock. Each run saves its task and actual reset state
+in `initial_state.json`; model inputs still contain only screenshots and the goal.
+
+With Minecraft and the single-worker backend running:
+
+```bash
+uv pip install --python runner/.venv/bin/python -e runner
+runner/.venv/bin/mc-bench --task get_log --models holo4-27b,holo4-35b-a3b \
+  --tiers raw,skills --timing freeze --trials 5 --label baseline --max-steps 30
+# After implementing a fix, use the identical command with --label after-fix.
+runner/.venv/bin/python spike/verify_benchmark.py
+```
+
+The batch CLI only submits/polls backend runs, sequentially; it never opens a mod
+connection or writes the run store. Every run records label and 1-based trial index.
+HTTP/startup/poll errors stop submission rather than risking overlapping trials;
+terminal backend run errors are recorded and subsequent trials continue. Do not
+launch another batch or intervene through the dashboard during a benchmark.
+Labelled runs require a task-defined spawn. Legacy unlabelled tasks remain supported.
+
+Leaderboard groups are task × model × tier × timing × label. The matched-label
+comparison displays baseline and after-fix side by side. `n` includes infrastructure
+failures; success rate uses eligible trials only (API/metrics errors and backend
+errors/interruption are infrastructure failures). Median time uses successful eligible
+trials; median steps includes unsuccessful eligible trials. p50 API latency pools
+all recorded positive step latencies, including failed calls. Cost averages all runs
+only when all costs are known. Provider timeouts can lack usage/billing data: recorded
+token-derived cost is not a guarantee of the provider's final bill. Old runs without
+labels/timing are kept separate as `unlabelled`/`unknown`.
+
+The reset probe captures two fresh resets, requires identical poses/time/health/
+inventory/weather and <5% changed screenshot pixels (animations may differ), and
+saves evidence under ignored `spike/ui/benchmark-reset-*`.
+
 `reset` validates the inventory, disconnects, and creates a unique fresh Survival save with
 the requested signed 64-bit seed.
 The reply arrives after server inventory grant and client in-world readiness (120s mod

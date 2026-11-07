@@ -51,11 +51,18 @@ type Run = {
   };
 };
 type Board = {
+  timing: string;
+  label: string;
+  median_time_seconds: number | null;
+  median_steps: number | null;
+  p50_api_latency_ms: number | null;
+  infrastructure_failures: number;
   model: string;
   tier: string;
   task: string;
   runs: number;
-  success_rate: number;
+  success_rate: number | null;
+  valid_runs: number;
   mean_score: number;
   mean_latency_ms: number;
   p95_latency_ms: number;
@@ -371,6 +378,36 @@ function Ladder({
     </section>
   );
 }
+function BenchmarkComparison({ board }: { board: Board[] }) {
+  const [left, setLeft] = useState("baseline"), [right, setRight] = useState("after-fix");
+  const labels = [...new Set(["baseline", "after-fix", ...board.map(b => b.label)])];
+  const setups = new Map<string, Board[]>();
+  for (const row of board.filter(b => b.label === left || b.label === right)) {
+    const key = JSON.stringify([row.task, row.model, row.tier, row.timing]);
+    setups.set(key, [...(setups.get(key) || []), row]);
+  }
+  function cell(row?: Board) {
+    return row ? <>
+      <strong>{row.success_rate == null ? "—" : `${num(row.success_rate * 100, 1)}% success`}</strong>
+      <small>n={row.runs} · {row.valid_runs} eligible · {row.infrastructure_failures} infrastructure failures</small>
+      <small>Median success time {row.median_time_seconds == null ? "—" : `${num(row.median_time_seconds, 1)}s`} · steps {row.median_steps ?? "—"}</small>
+      <small>{usd(row.cost_per_run)} / run · p50 API {row.p50_api_latency_ms == null ? "—" : `${num(row.p50_api_latency_ms)}ms`}</small>
+      <small>{Object.entries(row.failure_counts).slice(0, 3).map(([tag, n]) => `${tag} ×${n}`).join(" · ") || "No failure tags"}</small>
+    </> : <span className="muted">No trials for this label yet</span>;
+  }
+  return <section className="panel" aria-label="Matched benchmark comparison">
+    <div className="section-head"><h3>Baseline vs after-fix</h3><span>identical setups side by side</span></div>
+    <div className="table-scroll"><table><thead><tr><th>Task / model / tier / timing</th>
+      <th><select aria-label="First benchmark label" value={left} onChange={e => setLeft(e.target.value)}>{labels.map(l => <option key={l}>{l}</option>)}</select></th>
+      <th><select aria-label="Second benchmark label" value={right} onChange={e => setRight(e.target.value)}>{labels.map(l => <option key={l}>{l}</option>)}</select></th>
+    </tr></thead><tbody>{[...setups.entries()].map(([key, rows]) => <tr key={key}>
+      <td><strong>{title(rows[0].task)}</strong><small>{rows[0].model} · {rows[0].tier} · {rows[0].timing}</small></td>
+      <td>{cell(rows.find(r => r.label === left))}</td><td>{cell(rows.find(r => r.label === right))}</td>
+    </tr>)}</tbody></table></div>
+    {!setups.size && <p className="muted">Run a labelled benchmark to populate the comparison.</p>}
+  </section>;
+}
+
 function App() {
   const [page, setPage] = useState("Live");
   const [connected, setConnected] = useState(false),
@@ -1059,11 +1096,12 @@ function App() {
         )}
         {page === "Leaderboard" && (
           <>
+            <BenchmarkComparison board={board} />
             <div className="board-intro">
               <span className="tag">STATE-VERIFIED OUTCOMES</span>
               <p>
-                Grouped by model × tool tier × task. Latency aggregates
-                individual steps; unknown pricing stays unknown.
+                Matched task × model × tier × timing, with labels adjacent for baseline / after-fix comparison.
+                Time is median successful-trial time; steps include unsuccessful trials. Infrastructure failures are excluded from success rate and medians, not hidden from n or cost.
               </p>
             </div>
             <section className="panel">
@@ -1077,12 +1115,13 @@ function App() {
                     <tr>
                       <th>Model / tier</th>
                       <th>Task</th>
+                      <th>Timing / label</th>
                       <th>Runs</th>
                       <th>Success rate</th>
-                      <th>Mean score</th>
-                      <th>Mean / p95 latency</th>
+                      <th>Median time / steps</th>
+                      <th>p50 API latency</th>
                       <th>Cost / run</th>
-                      <th>Time to milestone</th>
+                      <th>Infrastructure failures</th>
                       <th>Failure tags</th>
                     </tr>
                   </thead>
@@ -1094,29 +1133,26 @@ function App() {
                           <small>{b.tier}</small>
                         </td>
                         <td>{title(b.task)}</td>
-                        <td>{b.runs}</td>
+                        <td><strong>{b.label}</strong><small>{b.timing}</small></td>
+                        <td>{b.runs}<small>{b.valid_runs} eligible</small></td>
                         <td>
                           <div className="rate">
                             <span
-                              style={{ width: `${b.success_rate * 100}%` }}
+                              style={{ width: `${(b.success_rate ?? 0) * 100}%` }}
                             />
                           </div>
-                          {num(b.success_rate * 100, 1)}%
+                          {b.success_rate == null ? "—" : `${num(b.success_rate * 100, 1)}%`}
                         </td>
-                        <td>{num(b.mean_score * 100, 1)}%</td>
+                        <td>{b.median_time_seconds == null ? "—" : `${num(b.median_time_seconds, 1)}s`} / {b.median_steps == null ? "—" : num(b.median_steps, 1)}</td>
                         <td>
-                          {num(b.mean_latency_ms)} / {num(b.p95_latency_ms)} ms
+                          {b.p50_api_latency_ms == null ? "—" : `${num(b.p50_api_latency_ms)} ms`}
                         </td>
                         <td>{usd(b.cost_per_run)}</td>
                         <td>
-                          {Object.entries(b.time_to_milestone).map(([r, t]) => (
-                            <small key={r}>
-                              {title(r)} · {num(t, 1)}s
-                            </small>
-                          ))}
+                          {b.infrastructure_failures}
                         </td>
                         <td>
-                          {Object.entries(b.failure_counts).map(([t, n]) => (
+                          {Object.entries(b.failure_counts).slice(0, 4).map(([t, n]) => (
                             <small className="failure-count" key={t}>
                               {t} ×{n}
                             </small>

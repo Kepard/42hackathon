@@ -1,5 +1,5 @@
 [
-  {"id":"get_log","description":"Obtain a log within three minutes.","seed":12345,"time_limit_seconds":180,"inventory":[],"goal":{"milestone":"log"}},
-  {"id":"craft_planks","description":"Craft oak planks from the starting oak logs within two minutes.","seed":12345,"time_limit_seconds":120,"inventory":[{"id":"minecraft:oak_log","count":4}],"goal":{"crafted":"minecraft:oak_planks"}},
-  {"id":"craft_table","description":"Craft a crafting table from the starting oak logs within three minutes.","seed":12345,"time_limit_seconds":180,"inventory":[{"id":"minecraft:oak_log","count":4}],"goal":{"crafted":"minecraft:crafting_table"}}
+  {"id":"get_log","description":"Obtain a log within three minutes.","seed":12345,"spawn":{"x":96.5,"y":128,"z":-16.5,"yaw":0,"pitch":10,"time_of_day":6000},"time_limit_seconds":180,"inventory":[],"goal":{"milestone":"log"}},
+  {"id":"craft_planks","description":"Craft oak planks from the starting oak logs within two minutes.","seed":12345,"spawn":{"x":96.5,"y":128,"z":-16.5,"yaw":0,"pitch":10,"time_of_day":6000},"time_limit_seconds":120,"inventory":[{"id":"minecraft:oak_log","count":4}],"goal":{"crafted":"minecraft:oak_planks"}},
+  {"id":"craft_table","description":"Craft a crafting table from the starting oak logs within three minutes.","seed":12345,"spawn":{"x":96.5,"y":128,"z":-16.5,"yaw":0,"pitch":10,"time_of_day":6000},"time_limit_seconds":180,"inventory":[{"id":"minecraft:oak_log","count":4}],"goal":{"crafted":"minecraft:crafting_table"}}
 ]

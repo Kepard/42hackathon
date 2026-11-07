@@ -63,7 +63,7 @@ class FailureDetector:
 def task_definition(task_id, user_file=None):
     if task_id == "ladder":
         return {"id": "ladder", "description": "Complete these Survival milestones in order: log, crafting table, wooden pickaxe, cobblestone, stone pickaxe, furnace, iron ore, iron ingot, kill a hostile mob, flint and steel, obsidian, light or enter a Nether portal, enter the Nether.",
-                "seed": 12345, "inventory": [], "goal": {"milestone": "enter_nether"}}
+                "seed": 12345, "spawn": task_definition("get_log", user_file)["spawn"], "inventory": [], "goal": {"milestone": "enter_nether"}}
     for task in definitions(user_file):
         if task["id"] == task_id:
             return task
@@ -107,7 +107,10 @@ class MinecraftRunner:
             from cua_bench.tracing import Tracing
             tracer = Tracing(self)
             tracer.start()
-        initial = await self.client.reset(task["seed"], task["inventory"])
+        initial = await self.client.reset(task["seed"], task["inventory"], task.get("spawn"))
+        (self.out / "initial_state.json").write_text(json.dumps({"task": task, "state": initial}, indent=2))
+        if self.agent.config.timing == "realtime":
+            await self.client.resume()
         evaluator = LadderEvaluator()
         evaluator.update(initial)
         start = time.monotonic()

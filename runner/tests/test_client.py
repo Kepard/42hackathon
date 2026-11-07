@@ -46,6 +46,20 @@ async def test_not_connected():
         await MinecraftClient().state()
 
 
+async def test_reset_forwards_spawn_only_when_configured():
+    calls = []
+    client = MinecraftClient()
+    async def call(command, **kwargs):
+        calls.append((command, kwargs))
+        return {}
+    client.call = call
+    await client.reset(12345)
+    spawn = {"x": 1, "y": 64, "z": 2, "yaw": 90, "pitch": 0, "time_of_day": 6000}
+    await client.reset(12345, [], spawn)
+    assert "spawn" not in calls[0][1]
+    assert calls[1] == ("reset", {"seed": 12345, "inventory": [], "spawn": spawn, "timeout": 150})
+
+
 async def test_token_header_from_environment(monkeypatch):
     monkeypatch.setenv("OBS_TOKEN", "test-token")
     captured = []

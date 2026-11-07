@@ -82,6 +82,7 @@ async def test_setup_clock_starts_after_initial_state(monkeypatch):
 
     class FakeClient:
         async def reset(self, *args): order.append("reset")
+        async def resume(self): order.append("resume")
 
     class FakeSession:
         client = FakeClient()
@@ -93,5 +94,5 @@ async def test_setup_clock_starts_after_initial_state(monkeypatch):
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: order.append("clock") or 123))
     session = FakeSession()
     await setup(tasks()[0], session)
-    assert order == ["reset", "state", "clock"]
+    assert order == ["reset", "resume", "state", "clock"]
     assert session.task_started == 123

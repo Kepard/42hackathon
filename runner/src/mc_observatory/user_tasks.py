@@ -17,6 +17,15 @@ TASK_SCHEMA = {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,79}$"},
         "description": {"type": "string", "minLength": 1, "maxLength": 2000},
         "seed": {"type": "integer", "minimum": -(2**63), "maximum": 2**63 - 1},
+        "spawn": {"type": "object", "additionalProperties": False,
+            "required": ["x", "y", "z", "yaw", "pitch", "time_of_day"],
+            "properties": {
+                "x": {"type": "number", "minimum": -29999984, "maximum": 29999984},
+                "y": {"type": "number", "minimum": -64, "maximum": 320},
+                "z": {"type": "number", "minimum": -29999984, "maximum": 29999984},
+                "yaw": {"type": "number", "minimum": -180, "maximum": 180},
+                "pitch": {"type": "number", "minimum": -90, "maximum": 90},
+                "time_of_day": {"type": "integer", "minimum": 0, "maximum": 23999}}},
         "time_limit_seconds": {"type": "integer", "minimum": 1, "maximum": 10800},
         "inventory": {"type": "array", "maxItems": 36, "items": {
             "type": "object", "additionalProperties": False, "required": ["id", "count"],

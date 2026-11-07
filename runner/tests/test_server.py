@@ -87,13 +87,13 @@ def test_leaderboard_aggregates_steps_and_keeps_groups_separate():
                             "failure_tags": [] if success else ["gui_stuck"]},
                 "steps": [{"api_latency_ms": 100}, {"api_latency_ms": 300}]}
     result = leaderboard([run("a", "skills", True, .01), run("a", "skills", False, .03), run("a", "raw", False, None)])
-    first = result[0]
+    first = next(r for r in result if r["tier"] == "skills")
     assert first["runs"] == 2 and first["success_rate"] == .5
     assert first["mean_score"] == pytest.approx(1/26)
     assert first["mean_latency_ms"] == 200 and first["p95_latency_ms"] == 300
     assert first["time_to_milestone"] == {"log": 10}
     assert first["cost_per_run"] == .02 and first["failure_counts"] == {"gui_stuck": 1}
-    assert result[1]["cost_per_run"] is None
+    assert next(r for r in result if r["tier"] == "raw")["cost_per_run"] is None
 
 
 async def test_bounded_live_queue_and_intervention_event(service):
@@ -191,3 +191,26 @@ def test_missing_user_task_creates_no_run(service, monkeypatch):
     with TestClient(create_app(service)) as client:
         assert client.post("/api/runs", json={"task": "missing_task"}).status_code == 422
         assert client.get("/api/runs").json() == []
+
+
+def test_benchmark_metadata_and_validation(service, monkeypatch):
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    with TestClient(create_app(service)) as client:
+        assert client.post("/api/runs", json={"label": "bad label"}).status_code == 422
+        assert client.post("/api/runs", json={"trial_index": 0}).status_code == 422
+        response = client.post("/api/runs", json={"label": "baseline", "trial_index": 3, "timing": "freeze"})
+        assert response.status_code == 202
+        meta = client.get(f'/api/runs/{response.json()["id"]}').json()["metadata"]
+        assert (meta["label"], meta["trial_index"], meta["timing"], meta["task"]) == ("baseline", 3, "freeze", "get_log")
+
+
+def test_labelled_benchmark_rejects_legacy_task_without_spawn(service, monkeypatch):
+    from mc_observatory.user_tasks import add_task, definitions
+    task = {**definitions()[0], "id": "legacy"}
+    task.pop("spawn")
+    add_task(task, service.root / "user-tasks.json")
+    monkeypatch.delenv("OBS_USER_TASKS_FILE", raising=False)
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    with TestClient(create_app(service)) as client:
+        assert client.post("/api/runs", json={"task": "legacy", "label": "baseline"}).status_code == 422
+        assert client.post("/api/runs", json={"task": "legacy"}).status_code == 202

@@ -85,8 +85,11 @@ class MinecraftClient:
         result = await self.call("screenshot")
         return base64.b64decode(result["png_base64"], validate=True)
 
-    async def reset(self, seed, inventory=None):
-        return await self.call("reset", seed=seed, inventory=inventory or [], timeout=150)
+    async def reset(self, seed, inventory=None, spawn=None):
+        fields = {"seed": seed, "inventory": inventory or []}
+        if spawn is not None:
+            fields["spawn"] = spawn
+        return await self.call("reset", **fields, timeout=150)
 
     async def pause(self):
         return await self.call("pause")

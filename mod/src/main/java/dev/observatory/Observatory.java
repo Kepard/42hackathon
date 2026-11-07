@@ -9,6 +9,7 @@ import net.minecraft.block.Blocks;
 import net.minecraft.item.Items;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
@@ -98,10 +99,12 @@ public class Observatory implements ClientModInitializer {
     private record PortalAttempt(ServerWorld world, BlockPos position, UUID player) {}
     private static class Reset {
         final WebSocket socket; final JsonElement id; final String world; final List<ItemStack> inventory;
+        final JsonObject spawn;
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
         volatile boolean granted;
-        Reset(WebSocket socket, JsonElement id, String world, List<ItemStack> inventory) {
+        Reset(WebSocket socket, JsonElement id, String world, List<ItemStack> inventory, JsonObject spawn) {
             this.socket = socket; this.id = id; this.world = world; this.inventory = inventory;
+            this.spawn = spawn;
         }
     }
 
@@ -203,7 +206,26 @@ public class Observatory implements ClientModInitializer {
             if (pending != null && !pending.granted && server.getSaveProperties().getLevelName().equals(pending.world)) {
                 player.getInventory().clear();
                 for (ItemStack item : pending.inventory) player.getInventory().insertStack(item.copy());
+                player.setHealth(player.getMaxHealth()); player.getHungerManager().setFoodLevel(20);
+                player.getHungerManager().setSaturationLevel(5); player.clearStatusEffects(); player.extinguish();
+                if (pending.spawn != null) {
+                    JsonObject spawn = pending.spawn;
+                    ServerWorld world = player.getServerWorld();
+                    world.getGameRules().get(GameRules.DO_DAYLIGHT_CYCLE).set(false, server);
+                    world.getGameRules().get(GameRules.DO_WEATHER_CYCLE).set(false, server);
+                    world.setTimeOfDay(spawn.get("time_of_day").getAsLong());
+                    world.setWeather(0, 0, false, false);
+                    player.teleport(world, spawn.get("x").getAsDouble(), spawn.get("y").getAsDouble(), spawn.get("z").getAsDouble(),
+                            spawn.get("yaw").getAsFloat(), spawn.get("pitch").getAsFloat());
+                    player.setVelocity(Vec3d.ZERO); player.fallDistance = 0;
+                }
                 player.currentScreenHandler.sendContentUpdates(); pending.granted = true;
+            }
+            if (pending != null && pending.granted && pending.spawn != null) {
+                JsonObject spawn = pending.spawn;
+                player.teleport(player.getServerWorld(), spawn.get("x").getAsDouble(), spawn.get("y").getAsDouble(), spawn.get("z").getAsDouble(),
+                        spawn.get("yaw").getAsFloat(), spawn.get("pitch").getAsFloat());
+                player.setVelocity(Vec3d.ZERO); player.fallDistance = 0;
             }
             if (server.getTicks() % 10 != 0 && (pending == null || !pending.granted)) return;
             JsonObject snapshot = new JsonObject();
@@ -256,7 +278,13 @@ public class Observatory implements ClientModInitializer {
                 if (now > pending.deadline) {
                     reset = null; error(pending.socket, pending.id, new TimeoutException("World reset exceeded 120 seconds"));
                 } else if (pending.granted && client.player != null && client.world != null && client.currentScreen == null) {
-                    if (++readyTicks >= 10) { reset = null; reply(pending.socket, pending.id, state()); }
+                    if (!client.worldRenderer.isTerrainRenderComplete()) readyTicks = 0;
+                    else if (++readyTicks == 80) {
+                        client.getServer().submit(() -> client.getServer().getTickManager().setFrozen(pending.spawn != null)).whenComplete((unused, failure) -> client.execute(() -> {
+                            if (failure != null) { reset = null; error(pending.socket, pending.id, failure); }
+                            else { paused = pending.spawn != null; reset = null; reply(pending.socket, pending.id, state()); }
+                        }));
+                    }
                 }
             }
         });
@@ -290,7 +318,9 @@ public class Observatory implements ClientModInitializer {
     private static void configure(MinecraftClient mc) {
         mc.options.getViewDistance().setValue(4); mc.options.getSimulationDistance().setValue(5);
         mc.options.getMaxFps().setValue(260); mc.options.getEnableVsync().setValue(false);
-        mc.options.pauseOnLostFocus = false; mc.options.getGuiScale().setValue(2);
+        mc.options.pauseOnLostFocus = false; mc.options.getGuiScale().setValue(2); mc.options.hudHidden = false;
+        mc.options.getFov().setValue(70); mc.options.getMouseSensitivity().setValue(.5);
+        mc.options.setPerspective(net.minecraft.client.option.Perspective.FIRST_PERSON);
         mc.options.tutorialStep = net.minecraft.client.tutorial.TutorialStep.NONE; mc.options.write();
     }
 
@@ -318,6 +348,8 @@ public class Observatory implements ClientModInitializer {
         result.addProperty("screen", mc.currentScreen == null ? "" : mc.currentScreen.getClass().getSimpleName());
         if (mc.player != null) {
             result.addProperty("dimension", mc.world.getRegistryKey().getValue().toString());
+            result.addProperty("raining", mc.world.isRaining()); result.addProperty("thundering", mc.world.isThundering());
+            result.addProperty("food", mc.player.getHungerManager().getFoodLevel());
             result.addProperty("x", mc.player.getX()); result.addProperty("y", mc.player.getY()); result.addProperty("z", mc.player.getZ());
             result.addProperty("yaw", mc.player.getYaw()); result.addProperty("pitch", mc.player.getPitch());
             result.addProperty("health", mc.player.getHealth()); result.addProperty("creative", mc.player.isCreative());
@@ -391,10 +423,20 @@ public class Observatory implements ClientModInitializer {
                             items.add(new ItemStack(entry.getKey(), size));
                         }
                     }
+                    JsonObject spawn = request.has("spawn") ? request.getAsJsonObject("spawn") : null;
+                    if (spawn != null) {
+                        for (String key : List.of("x", "y", "z", "yaw", "pitch", "time_of_day")) {
+                            if (!spawn.has(key) || !Double.isFinite(spawn.get(key).getAsDouble())) throw new IllegalArgumentException("Invalid spawn " + key);
+                        }
+                        if (Math.abs(spawn.get("x").getAsDouble()) > 29999984 || Math.abs(spawn.get("z").getAsDouble()) > 29999984
+                                || spawn.get("y").getAsDouble() < -64 || spawn.get("y").getAsDouble() > 320
+                                || Math.abs(spawn.get("yaw").getAsDouble()) > 180 || Math.abs(spawn.get("pitch").getAsDouble()) > 90
+                                || spawn.get("time_of_day").getAsDouble() < 0 || spawn.get("time_of_day").getAsDouble() > 23999) throw new IllegalArgumentException("Spawn out of bounds");
+                    }
                     worldStarted = true; configure(mc);
                     paused = false; releases.clear(); releaseInputs(); portalTouched = false; portalLit = false; serverState = new JsonObject();
                     String world = "observatory-" + UUID.randomUUID(); readyTicks = 0;
-                    reset = new Reset(socket, id, world, items);
+                    reset = new Reset(socket, id, world, items, spawn);
                     mc.disconnect(new TitleScreen()); createWorld(world, seed); return;
                 }
                 case "key" -> {

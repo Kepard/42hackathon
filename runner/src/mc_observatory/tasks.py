@@ -13,7 +13,8 @@ def tasks():
 @cb.setup_task(split="train")
 async def setup(task_cfg, session):
     task = task_cfg.metadata
-    await session.client.reset(task["seed"], task["inventory"])
+    await session.client.reset(task["seed"], task["inventory"], task.get("spawn"))
+    await session.client.resume()
     session.evaluator.reset()
     await session.state()
     session.task_started = time.monotonic()

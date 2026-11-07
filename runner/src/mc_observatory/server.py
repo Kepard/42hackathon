@@ -11,7 +11,7 @@ import uuid
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -56,11 +56,18 @@ def leaderboard(runs):
     groups = defaultdict(list)
     for run in runs:
         s = run.get("summary")
+        if not s and run.get("metadata", {}).get("label") and run.get("status") in {"error", "interrupted"}:
+            meta = run["metadata"]
+            s = {"config": meta, "task": meta.get("task"), "score": 0, "success": False,
+                 "failure_tags": ["infrastructure_error"], "steps": len(run.get("steps", []))}
+            run = {**run, "summary": s}
         if s and "score" in s:
             cfg = s.get("config", {})
-            groups[(cfg.get("model", "unknown"), cfg.get("tier", "unknown"), s.get("task", "unknown"))].append(run)
+            meta = run.get("metadata", {})
+            groups[(s.get("task", "unknown"), cfg.get("model", "unknown"), cfg.get("tier", "unknown"),
+                    cfg.get("timing", "unknown"), meta.get("label") or "unlabelled")].append(run)
     result = []
-    for (model, tier, task), group in groups.items():
+    for (task, model, tier, timing, label), group in groups.items():
         summaries = [r["summary"] for r in group]
         latencies = sorted(s["api_latency_ms"] for r in group for s in r.get("steps", []) if s.get("api_latency_ms", 0) > 0)
         milestones = defaultdict(list)
@@ -70,15 +77,25 @@ def leaderboard(runs):
                 milestones[rung].append(seconds)
             tags.update(set(s.get("failure_tags", [])))
         costs = [s["total_cost_usd"] for s in summaries if s.get("total_cost_usd") is not None]
-        result.append({"model": model, "tier": tier, "task": task, "runs": len(group),
-                       "success_rate": mean(bool(s.get("success")) for s in summaries),
+        valid = [r["summary"] for r in group if r.get("status", "finished") not in {"error", "interrupted"}
+                 and not set(r["summary"].get("failure_tags", [])) & {"api_error", "metrics_error", "infrastructure_error"}]
+        times = [s["wall_time_seconds"] for s in valid if s.get("success") and "wall_time_seconds" in s]
+        steps = [s["steps"] for s in valid if "steps" in s]
+        infrastructure = len(group) - len(valid)
+        result.append({"model": model, "tier": tier, "task": task, "timing": timing, "label": label, "runs": len(group),
+                       "median_time_seconds": median(times) if times else None,
+                       "median_steps": median(steps) if steps else None,
+                       "p50_api_latency_ms": median(latencies) if latencies else None,
+                       "infrastructure_failures": infrastructure,
+                       "valid_runs": len(valid),
+                       "success_rate": mean(bool(s.get("success")) for s in valid) if valid else None,
                        "mean_score": mean(s["score"] for s in summaries),
                        "time_to_milestone": {k: mean(v) for k, v in milestones.items()},
                        "mean_latency_ms": mean(latencies) if latencies else 0,
                        "p95_latency_ms": latencies[max(0, math.ceil(len(latencies) * .95) - 1)] if latencies else 0,
                        "cost_per_run": mean(costs) if len(costs) == len(summaries) else None,
-                       "failure_counts": dict(tags)})
-    return sorted(result, key=lambda r: (-r["success_rate"], -r["mean_score"], r["model"]))
+                       "failure_counts": dict(tags.most_common())})
+    return sorted(result, key=lambda r: (r["task"], r["model"], r["tier"], r["timing"], r["label"]))
 
 
 class StartRun(BaseModel):
@@ -89,6 +106,8 @@ class StartRun(BaseModel):
     max_steps: int = Field(default=30, ge=1, le=10000)
     time_budget: float = Field(default=180, gt=0, le=10800)
     max_cost_usd: float | None = Field(default=None, gt=0)
+    label: str = Field(default="", max_length=80, pattern=r"^[a-zA-Z0-9_.-]*$")
+    trial_index: int | None = Field(default=None, ge=1)
 
 
 class Control(BaseModel):
@@ -308,7 +327,9 @@ def create_app(service=None, devin_api=None):
         if not os.environ.get("HCOMPANY_API_KEY"): raise HTTPException(503, "Server API key is not configured")
         try:
             task = task_definition(spec.task, app.state.devin.user_file)
-            config = HoloConfig(**spec.model_dump(exclude={"task"}))
+            if spec.label and not task.get("spawn"):
+                raise ValueError("Labelled benchmarks require a task with a fixed spawn")
+            config = HoloConfig(**spec.model_dump(exclude={"task", "label", "trial_index"}))
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]

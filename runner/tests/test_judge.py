@@ -1,6 +1,6 @@
 import json
 
-from mc_observatory.judge import verdict,read_records,watch,evidence
+from mc_observatory.judge import verdict,read_records,watch,evidence,agent_elapsed
 
 
 def row(step=0,completed=(),next_rung="log",outcome=None):
@@ -16,6 +16,18 @@ def test_rung_budgets_and_new_progress_reset_clock():
     assert verdict([row(20,["log"],"crafting_table")],501)["rung_age_s"]==301
     assert verdict([row(0,["log"],"iron_ore")],479) is None
     assert verdict([row(0,["log"],"iron_ore")],481)["budget_s"]==480
+
+
+def test_world_setup_does_not_consume_later_rung_budget():
+    from datetime import datetime
+    meta={"created_at":"2020-01-01T00:00:00+00:00"}
+    r=row(1,["log"],"crafting_table")
+    r["finished_at"]="2020-01-01T00:02:10+00:00"
+    now=datetime.fromisoformat("2020-01-01T00:07:09+00:00").timestamp()
+    elapsed=agent_elapsed(meta,[r],now)
+    assert elapsed==309
+    assert verdict([r],elapsed) is None
+    assert verdict([r],agent_elapsed(meta,[r],now+2))["rung_age_s"]==301
 
 
 def test_repeated_failures_and_api_errors():

@@ -87,6 +87,13 @@ def http(backend, method, route, payload=None):
         return json.load(response)
 
 
+def agent_elapsed(meta, rows, now):
+    if rows and rows[-1].get("finished_at"):
+        latest=rows[-1]
+        return latest["elapsed_seconds"]+max(0,now-datetime.fromisoformat(latest["finished_at"]).timestamp())
+    return now-datetime.fromisoformat(meta["created_at"]).timestamp()
+
+
 def watch(run_dir, backend="http://127.0.0.1:8000", interval=60, request=None):
     run_dir=Path(run_dir)
     request=request or (lambda method,route,payload=None: http(backend,method,route,payload))
@@ -95,7 +102,7 @@ def watch(run_dir, backend="http://127.0.0.1:8000", interval=60, request=None):
         meta=json.loads((run_dir/"run.json").read_text())
         if meta.get("status") not in ("starting","running") or (run_dir/"summary.json").exists(): return None
         rows=read_records(run_dir/"steps.jsonl")
-        elapsed=time.time()-datetime.fromisoformat(meta["created_at"]).timestamp()
+        elapsed=agent_elapsed(meta,rows,time.time())
         decision=verdict(rows,elapsed)
         note={"at":time.time(),"elapsed_s":elapsed,"steps":len(rows),"verdict":decision or "progressing"}
         with (run_dir/"judge_notes.jsonl").open("a") as stream: stream.write(json.dumps(note)+"\n")

@@ -25,12 +25,19 @@ class FailureDetector:
         self.samples = []
         self.signatures = []
         self.progress = None
+        self.resources = None
         self.held = set()
 
     def update(self, record, state, progress):
         tags = []
-        advanced = self.progress != progress
+        inventory = {}
+        for stack in state.get("inventory") or []:
+            item = stack["id"]
+            inventory[item] = inventory.get(item, 0) + stack["count"]
+        resources = (tuple(sorted(inventory.items())), tuple(sorted(((state.get("stats") or {}).get("crafted") or {}).items())))
+        advanced = self.progress != progress or self.resources != resources
         self.progress = progress
+        self.resources = resources
         self.gui_steps = self.gui_steps + 1 if state.get("screen_open") and not advanced else 0
         if self.gui_steps >= self.window:
             tags.append("gui_stuck")
@@ -150,7 +157,7 @@ class MinecraftRunner:
                     record["failure_tags"] += self.detector.update(record, state, (tuple(snapshot["completed"]), len(evaluator.obtained)))
                     record["metrics"] = {key: state.get(key) for key in ("x", "y", "z", "health", "screen", "screen_open")}
                 except Exception as error:
-                    record["errors"].append(f"Scoring: {type(error).__name__}: {error}")
+                    record.setdefault("observer_errors", []).append(f"Scoring: {type(error).__name__}: {error}")
                     record["evaluator"] = evaluator.result()
                     record["failure_tags"].append("metrics_error")
                 if not success and record["step"] + 1 == self.agent.config.max_steps:

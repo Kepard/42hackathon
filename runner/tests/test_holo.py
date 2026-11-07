@@ -329,6 +329,59 @@ def test_failure_detectors_and_summary():
     assert summary["score"] == 0 and summary["failure_tags"] == ["timeout"]
 
 
+@pytest.mark.parametrize("kind", ["inventory", "crafted"])
+def test_resource_progress_resets_gui_and_identical_action_diagnostics(kind):
+    detector = FailureDetector(window=2)
+    record = {"tool_calls": [{"name": "shift_click_at", "arguments": {"x": 852, "y": 303}}], "executed_actions": []}
+    for count in (4, 8, 12, 16, 20):
+        state = {"screen_open": True, "inventory": [{"id": "minecraft:oak_planks", "count": count}] if kind == "inventory" else [],
+                 "stats": {"crafted": {"minecraft:oak_planks": count}} if kind == "crafted" else {}}
+        assert detector.update(record, state, 1) == []
+    detector.update(record, state, 1)
+    assert set(detector.update(record, state, 1)) == {"gui_stuck", "repeated_action_loop"}
+
+
+def test_inventory_slot_moves_do_not_count_as_resource_progress():
+    detector = FailureDetector(window=2)
+    record = {"tool_calls": [], "executed_actions": []}
+    for slot in range(3):
+        tags = detector.update(record, {"screen_open": True, "inventory": [{"id": "minecraft:oak_log", "count": 4, "slot": slot}]}, 1)
+    assert tags == ["gui_stuck"]
+
+
+def test_private_inventory_progress_and_failure_tags_do_not_change_model_payload():
+    agent = HoloAgent(HoloConfig(), FakeAPI(PixelClient()))
+    payloads, tags = [], []
+    for progressing in (False, True):
+        detector, records = FailureDetector(window=2), []
+        for idx in range(4):
+            record = {"step": idx, "intent": [], "tool_calls": [], "executed_actions": [], "errors": []}
+            state = {"screen_open": True, "inventory": [{"id": "PRIVATE_INVENTORY", "count": idx + 1 if progressing else 1}]}
+            record["failure_tags"] = detector.update(record, state, 0)
+            record["metrics"] = state
+            records.append(record)
+        tags.append(records[-1]["failure_tags"])
+        agent.records = records
+        payloads.append(agent.messages([(3, PNG)], []))
+    assert tags == [["gui_stuck"], []]
+    assert payloads[0] == payloads[1]
+    assert "PRIVATE_INVENTORY" not in json.dumps(payloads)
+
+
+async def test_private_scoring_errors_do_not_reach_next_model_request(tmp_path):
+    class ScoringClient(PixelClient):
+        async def reset(self, *args): return {}
+        async def state(self): raise ValueError("PRIVATE_INVENTORY")
+    client = ScoringClient()
+    api = FakeAPI(client)
+    agent = HoloAgent(HoloConfig(max_steps=2), api)
+    await MinecraftRunner(agent, client, tmp_path, tracing=False).run("get_log")
+    records = [json.loads(line) for line in (tmp_path / "steps.jsonl").read_text().splitlines()]
+    assert "PRIVATE_INVENTORY" in records[0]["observer_errors"][0]
+    assert "metrics_error" in records[0]["failure_tags"]
+    assert "PRIVATE_INVENTORY" not in json.dumps(api.payloads)
+
+
 @pytest.mark.parametrize("timing", ["freeze", "realtime"])
 async def test_runner_scores_without_exposing_state_and_emits(tmp_path, timing):
     class ScoringClient(PixelClient):

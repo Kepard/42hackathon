@@ -65,7 +65,7 @@ def outline(png):
                        for y in range(top, bottom))
             right_hits = sum(any(p[x, y] > 18 for x in range(max(0, right - 3), min(patch.width, right + 4)))
                              for y in range(top, bottom))
-            if min(hits, right_hits) / (bottom - top) >= .75:
+            if min(hits, right_hits) / (bottom - top) >= .7:
                 return True
     return False
 

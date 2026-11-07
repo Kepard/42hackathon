@@ -542,7 +542,11 @@ function App() {
   );
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
-    localStorage.setItem("observatory-theme", theme);
+    try {
+      localStorage.setItem("observatory-theme", theme);
+    } catch {
+      // Storage may be blocked; the theme still applies for this session.
+    }
   }, [theme]);
   const [connected, setConnected] = useState(false),
     [wsConnected, setWsConnected] = useState(false);

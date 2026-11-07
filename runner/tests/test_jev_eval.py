@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -136,3 +137,33 @@ async def test_owned_sdk_client_header_and_async_cleanup(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="overwrite"):
         await evaluate(root)
     assert len(created) == 1
+
+
+async def test_budget_rejection_waits_for_paid_inflight_results(tmp_path, monkeypatch):
+    sdk = pytest.importorskip("typesafe_sdk")
+    run, _ = fixture_run(tmp_path)
+    root = tmp_path / "dataset"
+    row = prepare(run.parent, root, count=1)[0]
+    (root / "manifest.jsonl").write_text("".join(json.dumps({**row, "id": str(i)}) + "\n" for i in range(3)))
+    active, completed = [], []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def system_one(self, **kwargs):
+            active.append(True)
+            await asyncio.sleep(.01)
+            active.pop()
+            completed.append(True)
+            return SimpleNamespace(model="jev-1.14.0", usage=SimpleNamespace(input_tokens=0, output_tokens=0),
+                                   nouls={key: SimpleNamespace(noul=.2) for key in ("crosshair_on_log", "log_in_hotbar")},
+                                   boxes={"nearest_trunk": SimpleNamespace(box=SimpleNamespace(left=0, top=0, right=1, bottom=1))},
+                                   choices={"next_move": SimpleNamespace(choice="stop")})
+        async def aclose(self):
+            assert not active
+
+    monkeypatch.setattr(sdk, "AsyncTypeSafeClient", Client)
+    result = await evaluate(root, limit=RESERVE_PER_CALL * 1.5)
+    assert len(completed) == 4
+    assert [r["successes"] for r in result] == [3, 1]
+    assert len((root / "responses.jsonl").read_text().splitlines()) == 4

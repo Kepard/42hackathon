@@ -153,7 +153,11 @@ async def evaluate(root, *, limit=1.8, model="jev-1.14.0", client=None):
                     async with sem:
                         if abort.is_set():
                             return
-                        await budget.reserve()
+                        try:
+                            await budget.reserve()
+                        except RuntimeError:
+                            abort.set()
+                            return
                         start = time.perf_counter()
                         record = {"id": row["id"], "concurrency": concurrency}
                         try:

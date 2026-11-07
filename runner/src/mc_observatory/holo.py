@@ -50,7 +50,7 @@ class HoloConfig:
     temperature: float = 0.2
     seed: int | None = None
     max_cost_usd: float | None = None
-    api_timeout: float = 45
+    api_timeout: float = 15
     reflex: str = "none"
     jev_threshold: float = .5
     reasoning_effort: str | None = None
@@ -84,7 +84,7 @@ class HoloAPI:
     _next = {}
     short_timeout = 20
 
-    def __init__(self, api_key, api_timeout=45):
+    def __init__(self, api_key, api_timeout=15):
         if not api_key:
             raise ValueError("HCOMPANY_API_KEY is required")
         self.api_key = api_key

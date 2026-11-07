@@ -194,7 +194,7 @@ async def test_http_error_redaction_and_recovered_429(monkeypatch):
 
 
 @pytest.mark.parametrize("recover", [False, True])
-async def test_api_twenty_second_timeout_retries_once_and_records_attempts(monkeypatch, recover):
+async def test_default_api_fifteen_second_timeout_retries_once_and_records_attempts(monkeypatch, recover):
     from unittest.mock import AsyncMock
     class API(HoloAPI):
         async def _request(self, session, payload, errors, request_timeout):
@@ -203,6 +203,7 @@ async def test_api_twenty_second_timeout_retries_once_and_records_attempts(monke
             raise TimeoutError
     monkeypatch.setattr("mc_observatory.holo.asyncio.sleep", AsyncMock())
     api = API("test-key")
+    assert api.api_timeout == HoloConfig().api_timeout == 15
     if recover:
         result = await api.complete({"model": "fake"})
         assert len(result["_api_errors"]) == 1
@@ -211,7 +212,7 @@ async def test_api_twenty_second_timeout_retries_once_and_records_attempts(monke
             await api.complete({"model": "fake"})
         assert len(api.last_errors) == 2
     assert api.last_attempts == 2
-    assert api.last_errors[0]["timeout_s"] == 20
+    assert api.last_errors[0]["timeout_s"] == 15
 
 
 async def test_retry_allows_full_configured_timeout_after_short_attempt(monkeypatch):

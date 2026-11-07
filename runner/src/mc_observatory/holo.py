@@ -190,6 +190,8 @@ class HoloAgent(BaseAgent):
                           "screenshot_ref": None}
                 api_start = None
                 action_start = None
+                if executor is not None:
+                    executor.actions = []
                 try:
                     async with asyncio.timeout(max(0.001, config.time_budget - (time.monotonic() - start))):
                         png = await client.screenshot()

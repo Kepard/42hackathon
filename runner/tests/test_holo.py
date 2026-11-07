@@ -277,3 +277,20 @@ async def test_final_step_settles_lagging_stats(tmp_path, crafted):
     assert summary["success"] is crafted and client.reads == 2
     assert json.loads((tmp_path / "steps.jsonl").read_text())["final_settle_ms"] == 600
     assert client.events[-1] == "pause"
+
+
+async def test_failed_screenshot_has_no_stale_actions(tmp_path):
+    class Client(PixelClient):
+        reads = 0
+        async def screenshot(self):
+            self.reads += 1
+            if self.reads > 1:
+                raise ConnectionError("Screenshot unavailable")
+            return PNG
+
+    client = Client()
+    api = FakeAPI(client, response([call("move", direction="forward", seconds=0)]))
+    rows = [r async for r in HoloAgent(HoloConfig(max_steps=2), api).steps(client, "Move", tmp_path)]
+    assert rows[0]["executed_actions"]
+    assert rows[1]["executed_actions"] == []
+    assert rows[1]["errors"]

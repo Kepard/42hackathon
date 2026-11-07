@@ -58,3 +58,25 @@ async def test_token_header_from_environment(monkeypatch):
         async with MinecraftClient(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"):
             pass
     assert captured == ["Bearer test-token"]
+
+
+async def test_reconnect_after_drop():
+    connections = 0
+
+    async def handler(ws):
+        nonlocal connections
+        connections += 1
+        request = json.loads(await ws.recv())
+        if connections == 1:
+            await ws.close()
+        else:
+            await ws.send(json.dumps({"id": request["id"], "ok": True, "result": {"connected": True}}))
+            await ws.wait_closed()
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        async with MinecraftClient(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}") as client:
+            with pytest.raises(ConnectionError):
+                await client.state()
+            await client.connect()
+            assert await client.state() == {"connected": True}
+    assert connections == 2

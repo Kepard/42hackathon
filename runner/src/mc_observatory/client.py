@@ -34,7 +34,9 @@ class MinecraftClient:
 
     async def connect(self):
         if self._socket is not None:
-            return
+            if self._reader is not None and not self._reader.done() and getattr(self._socket, "close_code", None) is None:
+                return
+            await self.close()
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else None
         header_arg = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
         self._socket = await websockets.connect(self.url, max_size=16 * 1024 * 1024, **{header_arg: headers})

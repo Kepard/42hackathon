@@ -16,6 +16,8 @@ public class ViewerEncoderTest {
             check(viewer.acquire(34_000_000L)); viewer.release();
             check(viewer.acquire(67_000_000L)); viewer.release();
             viewer.setFps(0); check(!viewer.acquire(1_000_000_000L));
+            check(viewer.stateDue(0)); check(!viewer.stateDue(500_000_000L));
+            check(viewer.stateDue(1_000_000_000L));
             boolean rejected = false;
             try { viewer.setFps(-1); } catch (IllegalArgumentException expected) { rejected = true; }
             check(rejected);

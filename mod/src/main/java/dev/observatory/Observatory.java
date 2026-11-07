@@ -52,7 +52,6 @@ public class Observatory implements ClientModInitializer {
     private static boolean overlayDrawn;
     private static boolean modelCapturedThisFrame;
     private static final ViewerEncoder viewer = new ViewerEncoder();
-    private static long lastViewerState;
     private static long viewerSequence;
     private static long objectiveUntil;
     private static long completionUntil;
@@ -208,10 +207,12 @@ public class Observatory implements ClientModInitializer {
         Capture pending;
         if (!overlayDrawn) while ((pending = captures.poll()) != null) capture(pending, "end_frame_fallback");
         long now = System.nanoTime();
+        if (!subscribers.isEmpty() && viewer.stateDue(now)) {
+            JsonObject snapshot = state();
+            for (WebSocket socket : subscribers) if (!socket.hasBufferedData()) push(socket, "state", snapshot);
+        }
         if (cleanFallback || modelCapturedThisFrame || subscribers.isEmpty() || !viewer.acquire(now)) return;
         try {
-            JsonObject snapshot = now - lastViewerState >= 1_000_000_000L ? state() : null;
-            if (snapshot != null) lastViewerState = now;
             long sequence = ++viewerSequence;
             NativeImage pixels = ScreenshotRecorder.takeScreenshot(MinecraftClient.getInstance().getFramebuffer());
             viewer.submit(() -> {
@@ -225,7 +226,6 @@ public class Observatory implements ClientModInitializer {
                 for (WebSocket socket : subscribers) {
                     if (socket.hasBufferedData()) continue;
                     push(socket, "frame", frame);
-                    if (snapshot != null) push(socket, "state", snapshot);
                 }
             }, Observatory::viewerError);
         } catch (Exception error) {

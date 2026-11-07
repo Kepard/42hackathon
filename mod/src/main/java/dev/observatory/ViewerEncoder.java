@@ -20,6 +20,13 @@ public final class ViewerEncoder implements AutoCloseable {
     });
     private long interval = 1_000_000_000L / 30;
     private long nextFrame;
+    private long nextState;
+
+    public boolean stateDue(long now) {
+        if (now < nextState) return false;
+        nextState = now + 1_000_000_000L;
+        return true;
+    }
 
     public void setFps(int fps) {
         if (fps < 0 || fps > 60) throw new IllegalArgumentException("viewer_fps must be0..60");

@@ -127,3 +127,16 @@ async def test_coordinate_click_requires_gui():
             await client.click(100, 100)
         await client.mouse(button=0, pressed=True)
         await client.mouse(button=0, pressed=False)
+
+
+async def test_frame_counter_with_hidden_hud():
+    async with MinecraftClient() as client:
+        await client.resume()
+        await tap(client, 290)
+        try:
+            before = (await client.state())["frames"]
+            await asyncio.sleep(0.3)
+            assert (await client.state())["frames"] > before
+            assert (await client.call("screenshot"))["capture_point"] == "end_frame_fallback"
+        finally:
+            await tap(client, 290)

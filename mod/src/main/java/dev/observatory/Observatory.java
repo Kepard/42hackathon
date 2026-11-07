@@ -78,7 +78,6 @@ public class Observatory implements ClientModInitializer {
     }
 
     public static void beforeHud() {
-        frames++;
         if (MinecraftClient.getInstance().currentScreen != null) return;
         captures.removeIf(capture -> {
             capture(capture, "before_hud"); return true;
@@ -86,6 +85,7 @@ public class Observatory implements ClientModInitializer {
     }
 
     public static void endFrame() {
+        frames++;
         Capture pending;
         while ((pending = captures.poll()) != null) capture(pending, "end_frame_fallback");
         if (subscribers.isEmpty() || System.nanoTime() - lastPush < 500_000_000L) return;

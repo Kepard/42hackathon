@@ -74,11 +74,12 @@ async def test_cannot_close_returns_seek_hint_without_attack_or_probe(monkeypatc
 
 
 @pytest.mark.parametrize("tool", ["mine_up","mine_down"])
-async def test_far_vertical_target_never_walks_or_attacks(monkeypatch, tool):
+async def test_vertical_target_bypasses_horizontal_close_gate(monkeypatch, tool):
     client, ex = setup(monkeypatch)
     result = await ex.execute({"name":tool,"arguments":{"count":1}}, "skills")
-    assert result["outcome"] == "not_close" and client.walks == 0
-    assert ("mouse",{"button":0,"pressed":True}) not in client.events
+    assert result["outcome"] == ["no_change"] and client.walks == 0
+    assert result.get("close_checks",[]) == []
+    assert ("mouse",{"button":0,"pressed":True}) in client.events
 
 
 def test_close_size_and_danger_are_pixel_scaled():
@@ -144,7 +145,7 @@ async def test_vertical_mining_ignores_saved_horizontal_target(monkeypatch,tool)
     ex.jev=StoneVision()
     result=await ex.execute({"name":tool,"arguments":{"count":1}},"skills")
     assert result["outcome"] != "not_close"
-    assert targets==["block face under the crosshair"]
+    assert targets==[]
     assert ("mouse",{"button":0,"pressed":True}) in client.events
     assert client.walks==0
 

@@ -274,7 +274,7 @@ class HoloAgent(BaseAgent):
         content = [{"type": "text", "text": "Your recent actions and visible effects you reported; skills pixel estimates are heuristics: " + json.dumps(summaries)},
                    {"type": "text", "text": "Your scratchpad (may be stale; reconcile with CURRENT pixels): " + (notes or "(empty)")}]
         if held_inputs is not None:
-            content.append({"type":"text","text":"Your own synthetic controls still held (input bookkeeping, not game state): " + json.dumps(held_inputs) + ". Skills holds last at most1s and are released before thinking. Use bounded move/reposition; GUI Ctrl+A: key_press(key='a',ms=100,ctrl=true), not modifiers across turns."})
+            content.append({"type":"text","text":"Your own synthetic controls still held (input bookkeeping, not game state): " + json.dumps(held_inputs) + ". Direct input holds last at most1s; mining uses its explicit break budget. All inputs are released before thinking. Use bounded move/reposition; GUI Ctrl+A: key_press(key='a',ms=100,ctrl=true), not modifiers across turns."})
         selected = images[-min(3, self.config.history_images):]
         observations = [(f"Full screen from step {idx}", png) for idx, png in selected[:-1]]
         observations += [(f"Previous action pixel-evidence frame {idx}", png) for idx, png in enumerate(feedback_images)]

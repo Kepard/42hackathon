@@ -57,8 +57,8 @@ SKILLS = {
     "toggle_debug": ("Tap F3 to toggle Minecraft's vanilla debug screen; read it only from screenshots.", {}),
     "aim_at": ("Aim at a full-screen point (0..1000) using FOV70 geometry, not game state. Approximate at steep pitch. Lower-right points warn about possible held-item confusion, not object identification. Check next frame.", XY),
     "set_pitch": ("Set pitch -90 up .. +90 down by clamping with mouse input, then rotating back. Reads no orientation state.", {"deg": number(-90, 90)}),
-    "mine_up": ("Mine close overhead blocks, looking straight up; far faces return not_close without walking. Up to4s each; verify drops visually.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
-    "mine_down": ("Mine close blocks directly below; dangerous, inspect ground first. Far vertical faces return not_close without walking. Up to4s each.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
+    "mine_up": ("Mine at exactly -90 pitch, without close/outline/Jev gates. Set break_s from the VISIBLE tool and block: woodpick stone~1.15s, bare-hand log~3s; adds0.35s margin. Retry once without hotbar pickup (grass/seam). Reports screen/hotbar change, NOT semantic break proof. Inspect ceiling first.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}, "break_s": {**number(.1,10),"default":1.5}}),
+    "mine_down": ("Mine at exactly +90 pitch, without close/outline/Jev gates. DANGEROUS: inspect supporting floor first. Set break_s from VISIBLE tool/block: dirt~0.75s, woodpick stone~1.15s; adds0.35s margin. Retry once without hotbar pickup (grass/seam). Reports screen/hotbar change, NOT semantic break proof.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}, "break_s": {**number(.1,10),"default":1.5}}),
     "attack_until_broken": ("Always walk right up to the block before mining (~1.5–2blocks, centred face width scaled by frame height). First take short forward steps up to4s; stuck/danger/uncertain target returns not_close. Then hold at most max_s. Scene change is NOT break/pickup proof.", {"max_s": number(.35, 10)}),
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
@@ -153,11 +153,13 @@ class ToolExecutor:
         self.failed_mining_frame = None
         self.jev, self.visibility_threshold = jev, visibility_threshold
         self.hold_tasks, self.hold_timers = {}, set()
+        self.vertical_mining = []
 
     def begin_step(self, png=None):
         self.actions, self.results, self.frames = [], [], []
         self.mining_probes = []
         self.close_checks = []
+        self.vertical_mining = []
         self.current_frame = png
 
     async def observe(self):
@@ -170,8 +172,27 @@ class ToolExecutor:
         await self.primitive("mouse", dx=0, dy=180 / .15)
         await self.primitive("mouse", dx=0, dy=(degrees - 90) / .15)
 
-    async def attack_until_broken(self, seconds, walk=True):
-        if not await self.approach_close(walk=walk):
+    async def mine_vertical(self, count, break_s):
+        outcomes = []
+        for block in range(count):
+            changed = False
+            for attempt in range(2):
+                before = self.current_frame or await self.observe()
+                self.cancel_hold("mouse",0)
+                await self.click(ms=(min(10,max(.1,break_s))+.35)*1000)
+                await self.primitive("wait",ms=200)
+                after = await self.observe()
+                delta = changes(before,after)
+                pickup = hotbar_change(before,after)
+                changed |= delta["frame_change"] >= .002
+                self.vertical_mining.append({"block":block,"attempt":attempt,"break_s":break_s,"margin_s":.35,
+                                             **delta,"scene_changed":delta["frame_change"]>=.002,"hotbar_changed":pickup})
+                if pickup: break
+            outcomes.append("scene_changed" if changed else "no_change")
+        return outcomes
+
+    async def attack_until_broken(self, seconds):
+        if not await self.approach_close():
             self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
             return "not_close"
         reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
@@ -294,7 +315,7 @@ class ToolExecutor:
             await asyncio.sleep(max(0, min(.2 - (time.monotonic() - tick), deadline - time.monotonic())))
         return "timeout"
 
-    async def approach_close(self, walk=True):
+    async def approach_close(self):
         deadline, still = time.monotonic() + 4, 0
         owns_w = not any(keycode(key) == 87 for key in self.held_keys)
         try:
@@ -305,8 +326,7 @@ class ToolExecutor:
                     self.close_checks.append({"decision": "not_close", "reason": danger})
                     return False
                 if self.jev is not None:
-                    target = self.seek_target if walk else "block face under the crosshair"
-                    decision = await asyncio.wait_for(self.jev.ask(frame, target), max(.001, deadline - time.monotonic()))
+                    decision = await asyncio.wait_for(self.jev.ask(frame, self.seek_target), max(.001, deadline - time.monotonic()))
                     decision.update(decision="close_check", frame_index=len(self.frames) - 1)
                     box = decision.get("box") if decision.get("noul", 0) >= self.visibility_threshold else None
                 else:
@@ -316,7 +336,7 @@ class ToolExecutor:
                 self.close_checks.append(check)
                 if close:
                     return True
-                if not walk or box is None or not (box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3]):
+                if box is None or not (box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3]):
                     check.update(decision="not_close", reason="no_centred_close_face")
                     return False
                 if deadline - time.monotonic() < .2:
@@ -481,11 +501,12 @@ class ToolExecutor:
 
     async def execute(self, call, tier):
         probe_start = len(self.mining_probes)
+        vertical_start = len(self.vertical_mining)
         if tier == "raw":
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
-        after = self.current_frame if call["name"] in ("seek", "attack_until_broken", "approach_until_outline", "mine", "collect") else await self.observe()
+        after = self.current_frame if call["name"] in ("seek", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "mine", "collect") else await self.observe()
         delta = changes(before, after)
         moving = call["name"] in ("move", "reposition")
         if moving:
@@ -501,6 +522,9 @@ class ToolExecutor:
                           hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
+        if call["name"] in ("mine_up","mine_down"):
+            result["vertical_mining"] = self.vertical_mining[vertical_start:]
+            result["hotbar_changed"] = any(a["hotbar_changed"] for a in result["vertical_mining"])
         if call["name"] == "attack_until_broken":
             result["scene_changed"] = outcome == "scene_changed"
         if len(self.mining_probes) > probe_start:
@@ -608,12 +632,7 @@ class ToolExecutor:
         elif name in ("mine_up", "mine_down"):
             await self.set_pitch(-90 if name == "mine_up" else 90)
             await self.observe()
-            outcomes = []
-            for _ in range(args["count"]):
-                outcomes.append(await self.attack_until_broken(4, walk=False))
-                if outcomes[-1] == "not_close":
-                    return "not_close"
-            return outcomes
+            return await self.mine_vertical(args["count"], args.get("break_s",1.5))
         elif name == "update_notes":
             self.notes = args["text"]
         elif name in ("open_inventory", "close_screen"):

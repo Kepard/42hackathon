@@ -330,10 +330,12 @@ async def test_mining_checks_fresh_pixels_after_model_latency(monkeypatch, actua
 
 
 @pytest.mark.parametrize("overhead_outline", [False, True])
-async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhead_outline):
+async def test_mine_up_uses_fresh_overhead_view_without_outline_gate(monkeypatch, overhead_outline):
+    from unittest.mock import AsyncMock
     from test_pixel_skills import png
     dark, light = png("black", (640,480)), png("white", (640,480))
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame, *args: frame == light)
+    monkeypatch.setattr("mc_observatory.holo_tools.asyncio.sleep", AsyncMock())
 
     class Client(PixelClient):
         async def screenshot(self):
@@ -341,11 +343,11 @@ async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhe
 
     ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
     ex.begin_step(dark if overhead_outline else light)
-    ex.attack_until_broken = lambda _, **kwargs: ToolExecutor.attack_until_broken(ex, 0)
     result = await ex.execute({"name": "mine_up", "arguments": {"count": 1}}, "skills")
-    assert result["outcome"] == (["no_change"] if overhead_outline else ["not_in_reach"])
-    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is overhead_outline
-    assert result["mining_probes"][0]["used"] is (not overhead_outline)
+    assert result["outcome"] == ["no_change"]
+    assert all(a["frame_change"]==0 for a in result["vertical_mining"])
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions)
+    assert result.get("mining_probes",[]) == []
 
 
 async def test_collect_advice_is_not_pickup_proof():

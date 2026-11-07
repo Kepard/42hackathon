@@ -246,12 +246,12 @@ async def test_mine_up_count_and_notes(monkeypatch):
     ex = ToolExecutor(PixelClient(), 854, 480)
     ex.begin_step(PNG)
     attempts = []
-    async def attack(seconds, walk=True):
-        attempts.append(seconds)
-        return "no_change"
-    monkeypatch.setattr(ex, "attack_until_broken", attack)
+    async def attack(count, seconds):
+        attempts.extend([seconds]*count)
+        return ["no_change"]*count
+    monkeypatch.setattr(ex, "mine_vertical", attack)
     result = await ex.execute(parsed("mine_up", count=3), "skills")
-    assert attempts == [4, 4, 4] and result["outcome"] == ["no_change"] * 3
+    assert attempts == [1.5, 1.5, 1.5] and result["outcome"] == ["no_change"] * 3
     assert ex.actions[:2] == [{"action": "mouse", "dx": 0, "dy": 1200}, {"action": "mouse", "dx": 0, "dy": -1200}]
     for text in ("I saw a trunk; try jumping.", ""):
         await ex.execute(parsed("update_notes", text=text), "skills")

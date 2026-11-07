@@ -73,8 +73,9 @@ class HoloConfig:
 
 
 class HoloAPIError(RuntimeError):
-    def __init__(self, errors):
+    def __init__(self, errors, retry_after=None):
         self.errors = errors
+        self.retry_after = retry_after
         super().__init__(f"H Company HTTP {errors[-1]['status']}")
 
 
@@ -89,37 +90,51 @@ class HoloAPI:
     async def complete(self, payload):
         errors = []
         self.last_errors = errors
+        timeout_retried = False
         async with aiohttp.ClientSession() as session:
             for attempt in range(3):
+                self.last_attempts = attempt + 1
                 model = payload["model"]
                 lock = self._locks.setdefault(model, asyncio.Lock())
                 async with lock:
                     await asyncio.sleep(max(0, self._next.get(model, 0) - time.monotonic()))
                     self._next[model] = time.monotonic() + 2.05
-                async with session.post("https://api.hcompany.ai/v1/chat/completions",
-                                        headers={"Authorization": f"Bearer {self.api_key}"}, json=payload) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        result["_api_errors"] = errors
-                        return result
+                try:
+                    return await self._request(session, payload, errors)
+                except TimeoutError:
+                    errors.append({"status": None, "type": "request_timeout", "timeout_s": 20, "attempt": attempt + 1})
+                    if timeout_retried or attempt == 2:
+                        raise
+                    timeout_retried = True
+                except HoloAPIError as error:
+                    if errors[-1]["status"] != 429 or attempt == 2:
+                        raise
                     try:
-                        raw = await response.content.readexactly(65537)
-                    except asyncio.IncompleteReadError as error:
-                        raw = error.partial
-                    body = raw[:65536].decode("utf-8", errors="replace")
-                    secrets = [self.api_key] + [value for key, value in os.environ.items()
-                                               if re.search(r"(?:KEY|TOKEN|SECRET)$", key) and len(value) >= 8]
-                    for secret in secrets:
-                        body = body.replace(secret, "[REDACTED]")
-                    body = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]", body)
-                    errors.append({"status": response.status, "body": body, "truncated": len(raw) > 65536})
-                    if response.status != 429 or attempt == 2:
-                        raise HoloAPIError(errors)
-                    try:
-                        delay = max(1, min(30, float(response.headers.get("Retry-After", 2 ** (attempt + 1)))))
+                        delay = max(1, min(30, float(error.retry_after or 2 ** (attempt + 1))))
                     except ValueError:
                         delay = 2 ** (attempt + 1)
-                await asyncio.sleep(delay)
+                    await asyncio.sleep(delay)
+
+    async def _request(self, session, payload, errors):
+        async with session.post("https://api.hcompany.ai/v1/chat/completions",
+                                headers={"Authorization": f"Bearer {self.api_key}"}, json=payload,
+                                timeout=aiohttp.ClientTimeout(total=20)) as response:
+            if response.status == 200:
+                result = await response.json()
+                result["_api_errors"] = errors
+                return result
+            try:
+                raw = await response.content.readexactly(65537)
+            except asyncio.IncompleteReadError as error:
+                raw = error.partial
+            body = raw[:65536].decode("utf-8", errors="replace")
+            secrets = [self.api_key] + [value for key, value in os.environ.items()
+                                       if re.search(r"(?:KEY|TOKEN|SECRET)$", key) and len(value) >= 8]
+            for secret in secrets:
+                body = body.replace(secret, "[REDACTED]")
+            body = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]", body)
+            errors.append({"status": response.status, "body": body, "truncated": len(raw) > 65536})
+            raise HoloAPIError(errors, response.headers.get("Retry-After"))
 
 
 class RunController:
@@ -333,6 +348,7 @@ class HoloAgent(BaseAgent):
                             raise
                         finally:
                             record["api_latency_ms"] = (time.monotonic() - api_start) * 1000
+                            record["api_attempts"] = getattr(self.api, "last_attempts", 1)
                         record["tokens"], record["cost_usd"] = usage_cost(response.get("usage") or {}, config.model)
                         if config.max_cost_usd is not None and cost + (record["cost_usd"] or 0) >= config.max_cost_usd:
                             record["failure_tags"].append("budget_exhausted")

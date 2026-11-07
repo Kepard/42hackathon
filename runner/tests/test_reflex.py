@@ -183,3 +183,24 @@ async def test_http_error_redaction_and_recovered_429(monkeypatch):
     result = await HoloAPI("test-secret").complete({"model": "holo4-27b"})
     assert len(attempts) == 2
     assert result["_api_errors"][0]["body"] == "token [REDACTED] Bearer [REDACTED]"
+
+
+@pytest.mark.parametrize("recover", [False, True])
+async def test_api_twenty_second_timeout_retries_once_and_records_attempts(monkeypatch, recover):
+    from unittest.mock import AsyncMock
+    class API(HoloAPI):
+        async def _request(self, session, payload, errors):
+            if recover and self.last_attempts == 2:
+                return {"_api_errors": errors}
+            raise TimeoutError
+    monkeypatch.setattr("mc_observatory.holo.asyncio.sleep", AsyncMock())
+    api = API("test-key")
+    if recover:
+        result = await api.complete({"model": "fake"})
+        assert len(result["_api_errors"]) == 1
+    else:
+        with pytest.raises(TimeoutError):
+            await api.complete({"model": "fake"})
+        assert len(api.last_errors) == 2
+    assert api.last_attempts == 2
+    assert api.last_errors[0]["timeout_s"] == 20

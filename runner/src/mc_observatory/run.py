@@ -81,7 +81,7 @@ def summarize(records, evaluator, reached, success, elapsed, tags, config):
             "total_cost_usd": sum(r["cost_usd"] for r in records) if known_cost else None,
             "jev_calls": sum(len(r.get("jev_calls", [])) for r in records),
             "jev_cost_usd": sum(r.get("jev_cost_usd", 0) for r in records),
-            "holo_calls": sum(r["api_latency_ms"] > 0 for r in records),
+            "holo_calls": sum(r.get("api_attempts", int(r["api_latency_ms"] > 0)) for r in records),
             "tokens": {key: sum(r["tokens"][key] for r in records) for key in ("in", "cached", "out", "reasoning")},
             "failure_tags": sorted(tags), "config": asdict(config)}
 

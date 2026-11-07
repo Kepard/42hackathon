@@ -1,5 +1,7 @@
 import asyncio
+import importlib
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -73,3 +75,23 @@ async def test_craft_tasks_require_crafted_stat(task_id, item, category):
 
     task = next(task for task in tasks() if task.task_id == task_id)
     assert await evaluate(task, FakeSession()) == [float(category == "crafted")]
+
+
+async def test_setup_clock_starts_after_initial_state(monkeypatch):
+    order = []
+
+    class FakeClient:
+        async def reset(self, *args): order.append("reset")
+
+    class FakeSession:
+        client = FakeClient()
+        evaluator = LadderEvaluator()
+
+        async def state(self): order.append("state")
+
+    module = importlib.import_module("mc_observatory.tasks")
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: order.append("clock") or 123))
+    session = FakeSession()
+    await setup(tasks()[0], session)
+    assert order == ["reset", "state", "clock"]
+    assert session.task_started == 123

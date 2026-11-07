@@ -39,3 +39,18 @@ async def test_modifiers_middle_click_scroll_double_click_and_drag_are_pixel_onl
     assert not ex.held_keys and not ex.held_buttons
     assert ("mouse",{"scroll_y":-1,"scroll_x":0}) in client.events
     assert sum(e==("mouse",{"button":2,"pressed":True}) for e in client.events)==2
+
+
+async def test_alias_holds_release_only_after_last_name_and_taps_preserve_holds():
+    client = PixelClient()
+    ex = ToolExecutor(client,640,480)
+    await ex.key("ctrl",True)
+    await ex.key("left_ctrl",True)
+    await ex.key("ctrl",False)
+    assert ex.held_keys == {"left_ctrl"}
+    assert client.events == [("key",341,{"pressed":True})]
+    await ex.tap("left_ctrl",0)
+    assert ex.held_keys == {"left_ctrl"}
+    await ex.key("left_ctrl",False)
+    assert not ex.held_keys
+    assert client.events == [("key",341,{"pressed":True}),("key",341,{"pressed":False})]

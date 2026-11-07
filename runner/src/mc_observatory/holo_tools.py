@@ -336,19 +336,25 @@ class ToolExecutor:
             await self.client.type_text(args["text"])
 
     async def key(self, key, pressed):
+        code = keycode(key)
+        was_held = any(keycode(held) == code for held in self.held_keys)
         (self.held_keys.add if pressed else self.held_keys.discard)(key)
-        await self.primitive("key", key=key, pressed=pressed)
+        is_held = any(keycode(held) == code for held in self.held_keys)
+        if was_held != is_held:
+            await self.primitive("key", key=key, pressed=is_held)
 
     async def button(self, button, pressed):
         (self.held_buttons.add if pressed else self.held_buttons.discard)(button)
         await self.primitive("mouse", button=button, pressed=pressed)
 
     async def tap(self, key, ms=100):
+        already_held = key in self.held_keys
         await self.key(key, True)
         try:
             await self.primitive("wait", ms=ms)
         finally:
-            await self.key(key, False)
+            if not already_held:
+                await self.key(key, False)
 
     async def click(self, button=0, ms=100):
         await self.button(button, True)

@@ -82,6 +82,24 @@ async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
     assert not fake.inputs and not ex.held_buttons
 
 
+@pytest.mark.parametrize("overhead_outline", [False, True])
+async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhead_outline):
+    from test_pixel_skills import png
+    dark, light = png("black", (640,480)), png("white", (640,480))
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame: frame == light)
+
+    class Client(PixelClient):
+        async def screenshot(self):
+            return light if overhead_outline else dark
+
+    ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
+    ex.begin_step(dark if overhead_outline else light)
+    ex.attack_until_broken = lambda _: ToolExecutor.attack_until_broken(ex, 0)
+    result = await ex.execute({"name": "mine_up", "arguments": {"count": 1}}, "skills")
+    assert result["outcome"] == (["no_change"] if overhead_outline else ["not_in_reach"])
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is overhead_outline
+
+
 async def test_collect_advice_is_not_pickup_proof():
     ex = executor(FakeJev())
     result = await ex.execute({"name": "collect", "arguments": {"max_s": .01,"item": "oak log"}}, "skills")

@@ -414,6 +414,7 @@ class ToolExecutor:
             return await self.attack_until_broken(args["max_s"])
         elif name == "mine_up":
             await self.set_pitch(-90)
+            await self.observe()
             outcomes = []
             for _ in range(args["count"]):
                 outcomes.append(await self.attack_until_broken(4))

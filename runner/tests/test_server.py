@@ -119,10 +119,11 @@ async def test_overlay_bounds_payload_and_command_error_is_not_disconnect(servic
     assert payloads[-1]["objective"] == "normal"
 
 
-def test_startup_and_shutdown_interrupt_running_metadata(service, monkeypatch):
+@pytest.mark.parametrize("status", ["starting", "running"])
+def test_startup_and_shutdown_interrupt_running_metadata(service, monkeypatch, status):
     path = service.root / "stale"
     path.mkdir()
-    (path / "run.json").write_text(json.dumps({"status": "running"}))
+    (path / "run.json").write_text(json.dumps({"status": status}))
     monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
     with TestClient(create_app(service)) as client:
         assert client.get("/api/runs/stale").json()["status"] == "interrupted"
@@ -148,3 +149,45 @@ async def test_execute_cancel_persists_interrupted(tmp_path, monkeypatch):
     worker.cancel()
     with pytest.raises(asyncio.CancelledError): await worker
     assert json.loads((path / "run.json").read_text())["status"] == "interrupted"
+
+
+def test_custom_root_task_snapshot_reaches_runner(tmp_path, monkeypatch):
+    from mc_observatory.user_tasks import add_task, definitions
+    task = {**definitions()[0], "id": "custom_log", "description": "Custom root log task"}
+    add_task(task, tmp_path / "user-tasks.json")
+    monkeypatch.delenv("OBS_USER_TASKS_FILE", raising=False)
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    received = []
+    async def run(self, task_id, definition=None):
+        received.append((task_id, definition))
+        return {"success": True}
+    monkeypatch.setattr("mc_observatory.server.MinecraftRunner.run", run)
+    service = ObservatoryService(tmp_path, Client())
+    with TestClient(create_app(service)) as client:
+        response = client.post("/api/runs", json={"task": "custom_log"})
+        assert response.status_code == 202
+        assert service.overlay["objective"] == task["description"]
+        assert received == [("custom_log", task)]
+        assert client.get(f'/api/runs/{response.json()["id"]}').json()["status"] == "finished"
+
+
+def test_failure_before_worker_creation_is_not_recorded_running(service, monkeypatch):
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    original = asyncio.create_task
+    def fail_worker(coroutine, *args, **kwargs):
+        if coroutine.cr_code.co_name == "execute": raise RuntimeError("worker unavailable")
+        return original(coroutine, *args, **kwargs)
+    with TestClient(create_app(service)) as client:
+        monkeypatch.setattr("mc_observatory.server.asyncio.create_task", fail_worker)
+        assert client.post("/api/runs", json={}).status_code == 500
+        runs = client.get("/api/runs").json()
+        assert len(runs) == 1 and runs[0]["status"] == "error"
+        assert runs[0]["metadata"]["finished_at"]
+        assert service.active is None and service.worker is None and service.phase == "IDLE"
+
+
+def test_missing_user_task_creates_no_run(service, monkeypatch):
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    with TestClient(create_app(service)) as client:
+        assert client.post("/api/runs", json={"task": "missing_task"}).status_code == 422
+        assert client.get("/api/runs").json() == []

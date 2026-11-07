@@ -97,8 +97,8 @@ class MinecraftRunner:
                 goal["milestone"] in evaluator.result()["completed"] if "milestone" in goal else
                 evaluator.has_item(goal["item"]))
 
-    async def run(self, task_id):
-        task = task_definition(task_id)
+    async def run(self, task_id, task=None):
+        task = task_definition(task_id) if task is None else task
         self.out.mkdir(parents=True, exist_ok=True)
         if (self.out / "steps.jsonl").exists():
             raise ValueError("Run output already exists; choose a new directory")

@@ -124,7 +124,7 @@ class ObservatoryService:
     def interrupt_stale_runs(self):
         for path in self.directories():
             meta = read_json(path / "run.json", {})
-            if meta.get("status") == "running":
+            if meta.get("status") in {"starting", "running"}:
                 meta.update(status="interrupted", finished_at=utcnow())
                 (path / "run.json").write_text(json.dumps(meta, indent=2))
 
@@ -213,7 +213,7 @@ class ObservatoryService:
                                intent=" / ".join(record["intent"]), action=" → ".join(c["name"] for c in record["tool_calls"]),
                                api_latency_ms=round(record["api_latency_ms"]), badges="PAUSED FROZEN" if self.controller.paused else "FROZEN" if self.timing == "freeze" else "RUNNING")
 
-    async def execute(self, run_id, spec, config):
+    async def execute(self, run_id, spec, config, task=None):
         path = self.directory(run_id)
         meta = read_json(path / "run.json")
         service = self
@@ -234,7 +234,7 @@ class ObservatoryService:
 
         try:
             agent = HoloAgent(config, controller=self.controller)
-            summary = await MinecraftRunner(agent, ObservedClient(), path).run(spec.task)
+            summary = await MinecraftRunner(agent, ObservedClient(), path).run(spec.task, task)
             meta["status"] = "stopped" if not summary["success"] and self.phase == "STOPPING" else "finished"
             self.publish("summary", {"run_id": run_id, **summary})
         except asyncio.CancelledError:
@@ -307,21 +307,36 @@ def create_app(service=None, devin_api=None):
         if not svc.connected: raise HTTPException(503, "Minecraft mod is offline")
         if not os.environ.get("HCOMPANY_API_KEY"): raise HTTPException(503, "Server API key is not configured")
         try:
-            task_definition(spec.task, app.state.devin.user_file)
+            task = task_definition(spec.task, app.state.devin.user_file)
             config = HoloConfig(**spec.model_dump(exclude={"task"}))
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
         path = svc.root / run_id
         path.mkdir(parents=True)
-        (path / "run.json").write_text(json.dumps({"created_at": utcnow(), "status": "running", **spec.model_dump()}))
-        svc.active, svc.timing, svc.phase = run_id, spec.timing, "STARTING"
-        svc.pending, svc.agent_frame = None, None
-        svc.controller = RunController(callback=svc.step)
-        svc.controller.interventions = []
-        svc.overlay = {"objective": task_definition(spec.task)["description"], "completed": 0, "current_rung": "log", "badges": "STARTING"}
-        svc.publish("run_status", {"id": run_id, "status": "running"})
-        svc.worker = asyncio.create_task(svc.execute(run_id, spec, config))
+        meta = {"created_at": utcnow(), "status": "starting", **spec.model_dump()}
+        (path / "run.json").write_text(json.dumps(meta))
+        try:
+            svc.active, svc.timing, svc.phase = run_id, spec.timing, "STARTING"
+            svc.pending, svc.agent_frame = None, None
+            svc.controller = RunController(callback=svc.step)
+            svc.controller.interventions = []
+            svc.overlay = {"objective": task["description"], "completed": 0, "current_rung": "log", "badges": "STARTING"}
+            coroutine = svc.execute(run_id, spec, config, task)
+            try:
+                svc.worker = asyncio.create_task(coroutine)
+            except Exception:
+                coroutine.close()
+                raise
+            meta["status"] = "running"
+            (path / "run.json").write_text(json.dumps(meta))
+            svc.publish("run_status", {"id": run_id, "status": "running"})
+        except Exception as error:
+            if svc.worker and not svc.worker.done(): svc.worker.cancel()
+            svc.active, svc.worker, svc.controller, svc.phase = None, None, None, "IDLE"
+            meta.update(status="error", error=type(error).__name__, finished_at=utcnow())
+            (path / "run.json").write_text(json.dumps(meta))
+            raise HTTPException(500, "Run could not be started") from error
         return {"id": run_id}
 
     def active():

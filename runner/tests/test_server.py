@@ -117,3 +117,34 @@ async def test_overlay_bounds_payload_and_command_error_is_not_disconnect(servic
     assert len(service.overlay["objective"]) == 20000
     await service.set_overlay(objective="normal", intent="", action="")
     assert payloads[-1]["objective"] == "normal"
+
+
+def test_startup_and_shutdown_interrupt_running_metadata(service, monkeypatch):
+    path = service.root / "stale"
+    path.mkdir()
+    (path / "run.json").write_text(json.dumps({"status": "running"}))
+    monkeypatch.setenv("HCOMPANY_API_KEY", "test-only")
+    with TestClient(create_app(service)) as client:
+        assert client.get("/api/runs/stale").json()["status"] == "interrupted"
+        run_id = client.post("/api/runs", json={}).json()["id"]
+    assert json.loads((service.root / run_id / "run.json").read_text())["status"] == "interrupted"
+
+
+async def test_execute_cancel_persists_interrupted(tmp_path, monkeypatch):
+    from mc_observatory.holo import HoloConfig
+    from mc_observatory.server import StartRun
+    started = asyncio.Event()
+    async def run(*args):
+        started.set()
+        await asyncio.Event().wait()
+    monkeypatch.setattr("mc_observatory.server.MinecraftRunner.run", run)
+    service = ObservatoryService(tmp_path, Client())
+    path = tmp_path / "cancelled"
+    path.mkdir()
+    (path / "run.json").write_text(json.dumps({"status": "running"}))
+    service.controller = RunController()
+    worker = asyncio.create_task(service.execute("cancelled", StartRun(), HoloConfig()))
+    await started.wait()
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError): await worker
+    assert json.loads((path / "run.json").read_text())["status"] == "interrupted"

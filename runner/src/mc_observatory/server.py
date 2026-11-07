@@ -119,6 +119,13 @@ class ObservatoryService:
         paths = {p.parent for name in ("summary.json", "run.json") for p in self.root.rglob(name)}
         return sorted(paths, key=lambda p: p.name, reverse=True)
 
+    def interrupt_stale_runs(self):
+        for path in self.directories():
+            meta = read_json(path / "run.json", {})
+            if meta.get("status") == "running":
+                meta.update(status="interrupted", finished_at=utcnow())
+                (path / "run.json").write_text(json.dumps(meta, indent=2))
+
     def directory(self, run_id):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id):
             raise HTTPException(404, "Run not found")
@@ -228,6 +235,9 @@ class ObservatoryService:
             summary = await MinecraftRunner(agent, ObservedClient(), path).run(spec.task)
             meta["status"] = "stopped" if not summary["success"] and self.phase == "STOPPING" else "finished"
             self.publish("summary", {"run_id": run_id, **summary})
+        except asyncio.CancelledError:
+            meta["status"] = "interrupted"
+            raise
         except Exception as error:
             meta.update(status="error", error=type(error).__name__)
             self.publish("error", {"message": f"Run failed: {type(error).__name__}", "run_id": run_id})
@@ -246,16 +256,20 @@ def create_app(service=None):
     @asynccontextmanager
     async def lifespan(app):
         svc.root.mkdir(parents=True, exist_ok=True)
+        svc.interrupt_stale_runs()
         stream = asyncio.create_task(svc.stream())
-        yield
-        if svc.controller:
-            await svc.controller.stop()
-        if svc.worker and not svc.worker.done():
-            svc.worker.cancel()
-            with suppress(asyncio.CancelledError): await svc.worker
-        stream.cancel()
-        with suppress(asyncio.CancelledError): await stream
-        await svc.client.close()
+        try:
+            yield
+        finally:
+            if svc.controller:
+                await svc.controller.stop()
+            if svc.worker and not svc.worker.done():
+                svc.worker.cancel()
+                with suppress(asyncio.CancelledError): await svc.worker
+            svc.interrupt_stale_runs()
+            stream.cancel()
+            with suppress(asyncio.CancelledError): await stream
+            await svc.client.close()
 
     app = FastAPI(title="Minecraft Observatory", lifespan=lifespan)
     app.state.service = svc

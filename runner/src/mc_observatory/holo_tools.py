@@ -214,7 +214,7 @@ class ToolExecutor:
             yaw = max(-12, min(12, .7 * math.degrees(math.atan2(px, focal))))
             pitch = max(-8, min(8, .7 * math.degrees(math.atan2(py, math.hypot(focal, px)))))
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
-            walking = centered and (r - l) * self.width < 180
+            walking = centered and (r - l) * self.width < 180 * self.height / 480
             decision.update(decision="steer", yaw_deg=yaw, pitch_deg=pitch, walking=walking)
             await self.primitive("mouse", dx=yaw / .15, dy=pitch / .15)
             if walking:

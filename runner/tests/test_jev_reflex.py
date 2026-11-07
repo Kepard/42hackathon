@@ -68,6 +68,22 @@ async def test_seek_aligns_before_walking_and_does_not_press_into_close_face(mon
     assert not any(a["action"] == "key" and a.get("pressed") for a in ex.actions)
 
 
+@pytest.mark.parametrize("width,height", [(854,480), (2560,1440)])
+@pytest.mark.parametrize("box,walking", [((.44,.4,.56,.6), True), ((.3,.3,.7,.7), False)])
+async def test_seek_standoff_scales_with_vertical_fov_resolution(monkeypatch, width, height, box, walking):
+    from test_pixel_skills import png
+    frame = png("black", (width,height))
+    class Client(PixelClient):
+        async def screenshot(self):
+            return frame
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    ex = ToolExecutor(Client(), width,height, JevVision(FakeJev(box=box)))
+    ex.begin_step(frame)
+    await ex.seek("oak log trunk", .01)
+    assert ex.jev.calls[0]["walking"] is walking
+    assert any(a["action"] == "key" and a.get("pressed") for a in ex.actions) is walking
+
+
 async def test_unchanged_walking_stops_stuck(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
     ex = executor(FakeJev())

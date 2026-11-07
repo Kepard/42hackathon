@@ -175,6 +175,18 @@ def test_all_movement_tools_reject_conflicting_modifiers(name, reflex):
     assert parse_calls({"tool_calls": [call(name, direction="left", seconds=.1, sprint=True)]}, "skills", reflex)
 
 
+@pytest.mark.parametrize("name", ["move", "reposition"])
+async def test_blocked_movement_reports_stuck_and_changed_view_clears_it(name):
+    from test_pixel_skills import png
+    ex = executor(FakeJev())
+    c = {"name": name, "arguments": {"direction": "left", "seconds": 0}}
+    assert not (await ex.execute(c, "skills"))["stuck"]
+    assert (await ex.execute(c, "skills"))["stuck"]
+    ex.current_frame = png("white", (640,480))
+    assert not (await ex.execute(c, "skills"))["stuck"]
+    assert ex.unchanged_moves == 0
+
+
 async def test_agent_logs_jev_inputs_and_aggregate_cost_and_low_setting(tmp_path):
     client, fake = PixelClient(), FakeJev(p=.1)
     api = FakeAPI(client,response([call("seek",target="log",max_s=.2)]))

@@ -335,11 +335,12 @@ class ToolExecutor:
         outcome = await self.execute_inputs(call, tier)
         after = self.current_frame if call["name"] in ("seek", "attack_until_broken", "approach_until_outline", "mine", "collect") else await self.observe()
         delta = changes(before, after)
-        if call["name"] == "move":
+        moving = call["name"] in ("move", "reposition")
+        if moving:
             self.unchanged_moves = self.unchanged_moves + 1 if delta["frame_change"] < .002 else 0
         elif delta["frame_change"] >= .002:
             self.unchanged_moves = 0
-        result = {"name": call["name"], **delta, "stuck": call["name"] == "move" and self.unchanged_moves >= 2}
+        result = {"name": call["name"], **delta, "stuck": outcome == "stuck" or (moving and self.unchanged_moves >= 2)}
         result.update(scene_changed=delta["frame_change"] >= .002 or outcome == "scene_changed",
                       block_gone=None, item_collected=None)
         if call["name"] in ("approach_until_outline", "mine", "collect"):

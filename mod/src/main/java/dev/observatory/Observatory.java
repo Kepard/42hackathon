@@ -5,6 +5,8 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.minecraft.util.TypedActionResult;
 import net.minecraft.block.Blocks;
 import net.minecraft.item.Items;
 import net.minecraft.util.ActionResult;
@@ -95,6 +97,21 @@ public class Observatory implements ClientModInitializer {
     private static volatile boolean portalTouched;
     private static volatile boolean portalLit;
     private final List<PortalAttempt> portalAttempts = new ArrayList<>();
+    private final CastingEvidence casting = new CastingEvidence();
+    private ServerWorld castingWorld;
+    private Vec3d castingOrigin;
+
+    private Map<Long, Double> nearbyObsidian(ServerPlayerEntity player) {
+        Map<Long, Double> found = new HashMap<>();
+        if (castingOrigin == null) return found;
+        BlockPos origin = BlockPos.ofFloored(castingOrigin);
+        for (BlockPos pos : BlockPos.iterateOutwards(origin, 6, 6, 6)) {
+            if (pos.toCenterPos().squaredDistanceTo(castingOrigin) <= 36
+                    && player.getServerWorld().getBlockState(pos).isOf(Blocks.OBSIDIAN))
+                found.put(pos.asLong(), pos.toCenterPos().squaredDistanceTo(player.getPos()));
+        }
+        return found;
+    }
     private static volatile JsonObject serverState = new JsonObject();
     private static long frames;
     private static long started = System.nanoTime();
@@ -191,6 +208,16 @@ public class Observatory implements ClientModInitializer {
 
     @Override public void onInitializeClient() {
         MinecraftClient mc = MinecraftClient.getInstance();
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer
+                    && player.getStackInHand(hand).isOf(Items.WATER_BUCKET)) {
+                if (castingWorld != serverWorld) casting.reset();
+                castingWorld = serverWorld;
+                castingOrigin = player.getPos();
+                casting.begin(serverWorld.getTime(), serverPlayer.getStatHandler().getStat(Stats.USED.getOrCreateStat(Items.WATER_BUCKET)), nearbyObsidian(serverPlayer).keySet());
+            }
+            return TypedActionResult.pass(player.getStackInHand(hand));
+        });
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
             var held = player.getStackInHand(hand);
             BlockPos position = hit.getBlockPos().offset(hit.getSide());
@@ -205,6 +232,12 @@ public class Observatory implements ClientModInitializer {
             if (server != mc.getServer()) return;
             if (server.getPlayerManager().getPlayerList().isEmpty()) return;
             ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
+            if (castingWorld != player.getServerWorld()) {
+                casting.reset(); castingWorld = player.getServerWorld(); castingOrigin = null;
+            }
+            if (!casting.active(player.getServerWorld().getTime())) castingOrigin = null;
+            boolean obsidianCreated = casting.observe(player.getServerWorld().getTime(),
+                    player.getStatHandler().getStat(Stats.USED.getOrCreateStat(Items.WATER_BUCKET)), nearbyObsidian(player));
             for (PortalAttempt attempt : portalAttempts) {
                 if (attempt.world() == player.getServerWorld() && attempt.player().equals(player.getUuid()) && attempt.world().getBlockState(attempt.position()).isOf(Blocks.NETHER_PORTAL)) portalLit = true;
             }
@@ -239,6 +272,7 @@ public class Observatory implements ClientModInitializer {
             snapshot.addProperty("world_id", server.getSaveProperties().getLevelName());
             snapshot.addProperty("seed", player.getServerWorld().getSeed());
             snapshot.addProperty("portal_entered", portalTouched);
+            snapshot.addProperty("obsidian_created", obsidianCreated);
             snapshot.addProperty("portal_lit", portalLit);
             snapshot.addProperty("server_time", player.getServerWorld().getTime());
             snapshot.addProperty("time_of_day", player.getServerWorld().getTimeOfDay());

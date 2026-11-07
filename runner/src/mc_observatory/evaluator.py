@@ -82,6 +82,8 @@ class LadderEvaluator:
             self.evidence.add("kill_hostile_mob")
         if state.get("portal_entered") is True or state.get("portal_lit") is True:
             self.evidence.add("portal")
+        if state.get("obsidian_created") is True:
+            self.evidence.add("obsidian")
         if state.get("dimension") == "minecraft:the_nether" or "minecraft:story/enter_the_nether" in advancements:
             self.evidence.update(("portal", "enter_nether"))
         return self.result()

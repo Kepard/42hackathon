@@ -77,6 +77,17 @@ def test_loading_state_does_not_pollute_evidence():
     assert evaluator.update({"in_world": False, "inventory": [stack("oak_log")]})["completed"] == []
 
 
+def test_created_obsidian_is_scoring_only_latched_and_world_scoped():
+    evaluator = LadderEvaluator()
+    assert evaluator.update({"world_id": "a", "obsidian_created": True})["observed"] == ["obsidian"]
+    assert not evaluator.has_item("minecraft:obsidian")
+    assert evaluator.update({"world_id": "a"})["observed"] == ["obsidian"]
+    assert evaluator.update({"world_id": "b"})["observed"] == []
+    for value in (False, None, 1, "true"):
+        assert LadderEvaluator().update({"obsidian_created": value})["observed"] == []
+    assert LadderEvaluator().update({"in_world": False, "obsidian_created": True})["observed"] == []
+
+
 @pytest.mark.parametrize("state", [None, [], {"inventory": {}}, {"inventory": [{}]}, {"inventory": [stack("oak_log", -1)]}, {"stats": []}, {"stats": {"crafted": {"x": True}}}, {"stats": {"mined": {"x": 1.5}}}, {"advancements": "abc"}])
 def test_invalid_state_is_atomic(state):
     evaluator = LadderEvaluator()

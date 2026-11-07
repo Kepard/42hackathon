@@ -205,15 +205,19 @@ class ToolExecutor:
                 decision["decision"] = "not_visible"
                 return "not_visible"
             l, t, r, b = decision["box"]
-            if l <= .5 <= r and t <= .5 <= b and outline(frame):
-                decision["decision"] = "in_reach"
-                return "in_reach"
             x, y = (l + r) / 2, (t + b) / 2
+            centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
+            if centered and outline(frame):
+                await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
+                if outline(await self.observe()):
+                    decision["decision"] = "in_reach"
+                    return "in_reach"
+                decision["reach_unconfirmed"] = True
+                continue
             focal = self.height / 2 / math.tan(math.radians(35))
             px, py = (x - .5) * (self.width - 1), (y - .5) * (self.height - 1)
             yaw = max(-12, min(12, .7 * math.degrees(math.atan2(px, focal))))
             pitch = max(-8, min(8, .7 * math.degrees(math.atan2(py, math.hypot(focal, px)))))
-            centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
             walking = centered and (r - l) * self.width < 180 * self.height / 480
             decision.update(decision="steer", yaw_deg=yaw, pitch_deg=pitch, walking=walking)
             await self.primitive("mouse", dx=yaw / .15, dy=pitch / .15)

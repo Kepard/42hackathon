@@ -121,9 +121,26 @@ async def test_seek_always_captures_settled_feedback(monkeypatch, p, box, outlin
     ex.begin_step(dark)
     result = await ex.execute({"name": "seek", "arguments": {"target": "log", "max_s": .01}}, "skills")
     assert result["outcome"] == expected
-    assert client.captures == len(fake.inputs) + 1
+    assert client.captures == len(fake.inputs) + (2 if expected == "in_reach" else 1)
     assert ex.current_frame == ex.frames[-1] == light
     assert result["scene_changed"]
+    assert not ex.held_keys and not ex.held_buttons
+
+
+async def test_seek_does_not_report_transient_outline_as_settled_reach(monkeypatch):
+    from test_pixel_skills import png
+    first, settled = png("black", (640,480)), png("white", (640,480))
+    class Client(PixelClient):
+        captures = 0
+        async def screenshot(self):
+            self.captures += 1
+            return first if self.captures == 1 else settled
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame: frame == first)
+    ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
+    ex.begin_step(first)
+    assert await ex.seek("oak log trunk", .01) == "timeout"
+    assert ex.jev.calls[0]["reach_unconfirmed"]
+    assert ex.current_frame == settled
     assert not ex.held_keys and not ex.held_buttons
 
 

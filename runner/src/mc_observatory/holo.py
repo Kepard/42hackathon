@@ -89,7 +89,10 @@ class HoloAPI:
             raise ValueError("HCOMPANY_API_KEY is required")
         self.api_key = api_key
         self.api_timeout = api_timeout
-        self.total_timeout = min(self.short_timeout, api_timeout) + 2 * api_timeout + 67
+
+    @property
+    def total_timeout(self):
+        return min(self.short_timeout, self.api_timeout) + 2 * self.api_timeout + 67
 
     async def complete(self, payload):
         errors = []
@@ -243,6 +246,8 @@ class HoloAgent(BaseAgent):
         super().__init__()
         self.config = config or HoloConfig()
         self.api = api if api is not None else HoloAPI(os.environ.get("HCOMPANY_API_KEY"), self.config.api_timeout)
+        if isinstance(self.api, HoloAPI):
+            self.api.api_timeout = self.config.api_timeout
         self.controller = controller or RunController()
         self.terminal_tags = []
         self.records = []

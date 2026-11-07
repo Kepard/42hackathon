@@ -233,3 +233,22 @@ async def test_retry_allows_full_configured_timeout_after_short_attempt(monkeypa
     assert api.last_attempts == 2 and len(result["_api_errors"]) == 1
     assert result["_api_errors"][0]["timeout_s"] == .01
     assert api.total_timeout > .01 + .06
+
+
+async def test_injected_holo_api_uses_agent_timeout_for_every_request(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from mc_observatory.holo import HoloAgent, HoloConfig
+    from test_pixel_skills import PixelClient
+    seen = []
+    class API(HoloAPI):
+        async def _request(self, session, payload, errors, request_timeout):
+            seen.append(request_timeout)
+            raise TimeoutError
+    monkeypatch.setattr("mc_observatory.holo.asyncio.sleep", AsyncMock())
+    api = API("test-key")
+    agent = HoloAgent(HoloConfig(max_steps=1, api_timeout=.01), api)
+    records = [r async for r in agent.steps(PixelClient(), "get log", tmp_path)]
+    assert seen == [.01, .01]
+    assert all(e["timeout_s"] == .01 for e in records[0]["api_errors"])
+    assert records[0]["failure_tags"] == ["api_error", "api_timeout"]
+    assert api.total_timeout == pytest.approx(67.03)

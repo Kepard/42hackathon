@@ -254,7 +254,7 @@ class ObservatoryService:
         try:
             agent = HoloAgent(config, controller=self.controller)
             summary = await MinecraftRunner(agent, ObservedClient(), path).run(spec.task, task)
-            meta["status"] = "stopped" if any(e["action"] == "stop" for e in self.controller.interventions) else "finished"
+            meta["status"] = "stopped" if not summary["success"] and any(e["action"] == "stop" for e in self.controller.interventions) else "finished"
             self.publish("summary", {"run_id": run_id, **summary})
         except asyncio.CancelledError:
             meta["status"] = "interrupted"

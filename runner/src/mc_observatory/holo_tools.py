@@ -158,7 +158,7 @@ class ToolExecutor:
         await self.primitive("mouse", dx=0, dy=(degrees - 90) / .15)
 
     async def attack_until_broken(self, seconds):
-        reference = self.current_frame or await self.observe()
+        reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
         if self.jev is not None and not outline(reference):
             return "not_in_reach"
         deadline = time.monotonic() + seconds

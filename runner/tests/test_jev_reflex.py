@@ -171,6 +171,20 @@ async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
     assert not fake.inputs and not ex.held_buttons
 
 
+@pytest.mark.parametrize("actual_reachable", [False, True])
+async def test_mining_checks_fresh_pixels_after_model_latency(monkeypatch, actual_reachable):
+    from test_pixel_skills import png
+    dark, light = png("black", (640,480)), png("white", (640,480))
+    class Client(PixelClient):
+        async def screenshot(self):
+            return light if actual_reachable else dark
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda frame: frame == light)
+    ex = ToolExecutor(Client(), 640,480, JevVision(FakeJev()))
+    ex.begin_step(dark if actual_reachable else light)
+    assert await ex.attack_until_broken(0) == ("no_change" if actual_reachable else "not_in_reach")
+    assert any(a.get("button") == 0 and a.get("pressed") for a in ex.actions) is actual_reachable
+
+
 @pytest.mark.parametrize("overhead_outline", [False, True])
 async def test_mine_up_checks_outline_in_fresh_overhead_view(monkeypatch, overhead_outline):
     from test_pixel_skills import png

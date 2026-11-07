@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import json
+import os
+import inspect
 from contextlib import suppress
 
 import websockets
@@ -13,9 +15,10 @@ class ModError(RuntimeError):
 class MinecraftClient:
     """Multiplex request responses and bounded dashboard events on one socket."""
 
-    def __init__(self, url="ws://127.0.0.1:8765", timeout=10):
+    def __init__(self, url="ws://127.0.0.1:8765", timeout=10, token=None):
         self.url = url
         self.timeout = timeout
+        self.token = os.environ.get("OBS_TOKEN") if token is None else token
         self._socket = None
         self._reader = None
         self._pending = {}
@@ -32,7 +35,9 @@ class MinecraftClient:
     async def connect(self):
         if self._socket is not None:
             return
-        self._socket = await websockets.connect(self.url, max_size=16 * 1024 * 1024)
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else None
+        header_arg = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
+        self._socket = await websockets.connect(self.url, max_size=16 * 1024 * 1024, **{header_arg: headers})
         self._reader = asyncio.create_task(self._read())
 
     async def _read(self):

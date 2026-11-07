@@ -213,6 +213,15 @@ public class Observatory implements ClientModInitializer {
             }
         });
         WebSocketServer server = new WebSocketServer(new InetSocketAddress("127.0.0.1", 8765)) {
+            @Override public org.java_websocket.handshake.ServerHandshakeBuilder onWebsocketHandshakeReceivedAsServer(
+                    WebSocket socket, org.java_websocket.drafts.Draft draft, ClientHandshake handshake) throws org.java_websocket.exceptions.InvalidDataException {
+                String allowedOrigins = System.getProperty("observatory.allowedOrigins", System.getenv().getOrDefault("OBS_ALLOWED_ORIGINS", ""));
+                if (!HandshakePolicy.accepts(handshake.hasFieldValue("Origin"), handshake.getFieldValue("Origin"),
+                        handshake.getFieldValue("Authorization"), allowedOrigins, System.getenv("OBS_TOKEN"))) {
+                    throw new org.java_websocket.exceptions.InvalidDataException(1008, "Unauthorized WebSocket handshake");
+                }
+                return super.onWebsocketHandshakeReceivedAsServer(socket, draft, handshake);
+            }
             @Override public void onOpen(WebSocket socket, ClientHandshake handshake) {}
             @Override public void onClose(WebSocket socket, int code, String reason, boolean remote) {
                 subscribers.remove(socket); mc.execute(() -> { releases.clear(); releaseInputs(); });

@@ -44,3 +44,17 @@ async def test_disconnect_rejects_pending_request():
 async def test_not_connected():
     with pytest.raises(ConnectionError):
         await MinecraftClient().state()
+
+
+async def test_token_header_from_environment(monkeypatch):
+    monkeypatch.setenv("OBS_TOKEN", "test-token")
+    captured = []
+
+    async def handler(ws):
+        captured.append(ws.request.headers.get("Authorization"))
+        await ws.wait_closed()
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        async with MinecraftClient(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"):
+            pass
+    assert captured == ["Bearer test-token"]

@@ -249,7 +249,9 @@ class HoloAgent(BaseAgent):
                         {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]
         primer = PRIMER.format(goal=self.controller.goal, timing=timing)
         if self.config.reflex == "jev":
-            primer += "\nPrefer seek(target, max_s=8) over manual look+move to reach visible blocks. Then attack_until_broken(max_s=4), then collect(max_s=0.8,item='log'). Seek/collect use fast TypeSafe Jev on screenshots only. Outline gates mining; Jev hotbar scores are advisory, not pickup proof. If seek says not_visible, scan/clear leaves rather than repeating it."
+            start, end = primer.index("TREE:"), primer.index("CONTROLS:")
+            primer = primer[:start] + "TREE: seek('oak log trunk',max_s=8) -> attack_until_broken(max_s=4) -> collect(max_s=0.8,item='log') -> confirm LOG icon. Seek is the ONLY block approach tool. If leaves obstruct bark, seek('oak leaves'), attack_until_broken(max_s=0.6), then seek bark again. Leaf gone is progress, not a log. Scan with look when not_visible; reposition only to retreat/sidestep. Seek/collect use fast TypeSafe Jev on screenshots; outline gates mining and hotbar scores are advisory.\n\n" + primer[end:]
+            primer = primer.replace("Sprint+jump; sneak near cliffs.", "Avoid cliffs/lava; seek safe solid targets, never walk into lava.")
         return [{"role": "system", "content": primer}, {"role": "user", "content": content}]
 
     async def steps(self, client, goal, out):

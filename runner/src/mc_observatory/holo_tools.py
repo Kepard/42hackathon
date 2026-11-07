@@ -70,6 +70,9 @@ def tool_schemas(tier, reflex="none"):
     vocabulary = RAW if tier == "raw" else SKILLS
     if tier == "skills" and reflex == "jev":
         vocabulary = {**vocabulary, **JEV_SKILLS}
+        for legacy in ("approach_until_outline", "move", "aim_at", "mine", "attack"):
+            vocabulary.pop(legacy)
+        vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
         vocabulary["collect"] = ("Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
         vocabulary["attack_until_broken"] = ("Hold attack steadily until max_s (logs ~3.3s by hand), with existing pixel selection-outline gate before starting. Returned scene change is NOT proof of breaking or pickup. Then collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
@@ -123,7 +126,7 @@ def observation_prefix(calls, reflex="none"):
         except InvalidToolArgs:
             return calls[:index + 1], calls[index + 1:]
         if call["name"] in {"seek", "attack", "mine", "attack_until_broken", "mine_up", "approach_until_outline", "collect"} or (
-                call["name"] == "move" and call["arguments"]["seconds"] > .5):
+                call["name"] in ("move", "reposition") and call["arguments"]["seconds"] > .5):
             return calls[:index + 1], calls[index + 1:]
     return calls, []
 
@@ -345,6 +348,8 @@ class ToolExecutor:
                           hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
+        if self.jev is not None and outcome == "not_in_reach":
+            result["next_action"] = "call seek(<target>) first"
         if call["name"] == "collect" and self.jev is not None:
             try:
                 advice = await self.jev.ask(after, call["arguments"].get("item", "log"), hotbar=True)
@@ -359,6 +364,8 @@ class ToolExecutor:
 
     async def execute_inputs(self, call, tier):
         name, args = call["name"], call["arguments"]
+        if name == "reposition":
+            return await self.execute_inputs({"name": "move", "arguments": args}, tier)
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
         if self.jev is not None and name in ("mine", "attack") and not outline(self.current_frame or await self.observe()):

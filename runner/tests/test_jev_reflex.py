@@ -148,6 +148,26 @@ def test_opt_in_schemas_raw_unchanged_and_barrier():
         HoloConfig(tier="raw", reflex="jev")
 
 
+def test_jev_has_no_legacy_block_approach_and_prompt_uses_seek():
+    names = {t["function"]["name"] for t in tool_schemas("skills", "jev")}
+    assert not names & {"move", "approach_until_outline", "aim_at", "mine", "attack"}
+    assert {"seek", "reposition", "attack_until_broken"} <= names
+    text = HoloAgent(HoloConfig(reflex="jev"), object()).messages([(0, PNG)])[0]["content"]
+    assert "seek is the ONLY" in text or "Seek is the ONLY" in text
+    assert "mine(max_s=4)" not in text
+    assert "approach ->" not in text
+    with pytest.raises(ValueError):
+        parse_calls({"tool_calls": [call("reposition", direction="forward", seconds=.1)]}, "skills", "jev")
+
+
+async def test_not_in_reach_tells_model_to_seek_first(monkeypatch):
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    ex = executor(FakeJev())
+    r = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": .35}}, "skills")
+    assert r["outcome"] == "not_in_reach"
+    assert r["next_action"] == "call seek(<target>) first"
+
+
 async def test_agent_logs_jev_inputs_and_aggregate_cost_and_low_setting(tmp_path):
     client, fake = PixelClient(), FakeJev(p=.1)
     api = FakeAPI(client,response([call("seek",target="log",max_s=.2)]))

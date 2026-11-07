@@ -52,6 +52,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class Observatory implements ClientModInitializer {
     private static JsonObject overlay = new JsonObject();
     private static boolean overlayDrawn;
+    private static long objectiveUntil;
+    private static long completionUntil;
     private static boolean autoJump = true;
     private static int renderDistance = 2;
     private static int windowWidth = 854;
@@ -65,21 +67,47 @@ public class Observatory implements ClientModInitializer {
         }
         if (overlay.size() == 0 || (mc.currentScreen != null && !captures.isEmpty())) return;
         overlayDrawn = true;
-        int width = mc.getWindow().getScaledWidth() - 12;
-        context.fill(6, 6, width + 6, 68, 0xDD101A29);
+        int width = mc.getWindow().getScaledWidth() / 2 - 6;
+        context.fill(6, 6, width + 6, 30, 0xB0101A29);
         int complete = Math.max(0, Math.min(13, overlay.has("completed") ? overlay.get("completed").getAsInt() : 0));
-        context.fill(10, 24, width + 2, 27, 0xFF34445A);
-        context.fill(10, 24, 10 + (width - 8) * complete / 13, 27, 0xFF42D9B0);
+        long now = System.nanoTime();
+        boolean flash = now < completionUntil && (now / 200_000_000L) % 2 == 0;
+        for (int i = 0; i < 13; i++) {
+            int x = 10 + i * 3;
+            int color = flash ? 0xFFFFFFFF : i < complete ? 0xFF42D9B0 : i == complete ? 0xFFFFCF66 : 0xFF526077;
+            context.fill(x, 11, x + 2, 13, color);
+        }
+        double seconds = overlay.has("api_latency_ms") ? overlay.get("api_latency_ms").getAsDouble() / 1000 : 0;
+        String latency = String.format(Locale.ROOT, "API %.1fs", seconds);
+        String badges = Arrays.stream(label("badges", "").split("\\s+"))
+                .filter(badge -> badge.equals("PAUSED") || badge.equals("LISTENING"))
+                .distinct().reduce((a, b) -> a + " " + b).orElse("");
+        String suffix = " · " + latency + (badges.isEmpty() ? "" : " · " + badges);
+        float scale = .55f;
+        int available = (int)((width - 47) / scale);
+        String prefix = complete + "/13 ";
+        String summary = prefix + ellipsize(mc, label("current_rung", "log"),
+                available - mc.textRenderer.getWidth(prefix + suffix));
         context.getMatrices().push();
-        context.getMatrices().scale(.7f, .7f, 1);
-        String[] lines = {label("objective", "Minecraft Observatory"),
-                complete + "/13  " + label("current_rung", "log"),
-                label("intent", "Waiting for a run"), label("action", "No actions yet"),
-                "API " + label("api_latency_ms", "0") + " ms   " + label("badges", "PAUSED")};
-        int[] ys = {12, 43, 56, 69, 82};
-        for (int i = 0; i < lines.length; i++) context.drawText(mc.textRenderer,
-                mc.textRenderer.trimToWidth(lines[i], (int)((width - 8) / .7)), 15, ys[i], i == 4 ? 0x79E5CB : 0xEDF4FF, false);
+        context.getMatrices().scale(scale, scale, 1);
+        int x = (int)(51 / scale), y = (int)(9 / scale);
+        context.drawText(mc.textRenderer, summary, x, y, 0xEDF4FF, false);
+        x += mc.textRenderer.getWidth(summary);
+        context.drawText(mc.textRenderer, " · ", x, y, 0xEDF4FF, false);
+        x += mc.textRenderer.getWidth(" · ");
+        context.drawText(mc.textRenderer, latency, x, y, seconds < 2 ? 0x42D9B0 : seconds <= 5 ? 0xFFCF66 : 0xFF7474, false);
+        x += mc.textRenderer.getWidth(latency);
+        if (!badges.isEmpty()) context.drawText(mc.textRenderer, " · " + badges, x, y, 0xEDF4FF, false);
+        String detail = now < objectiveUntil ? label("objective", "")
+                : "↳ " + label("intent", "") + " → " + label("action", "");
+        context.drawText(mc.textRenderer, ellipsize(mc, detail.replaceAll("[\\r\\n]+", " "),
+                (int)((width - 8) / scale)), (int)(10 / scale), (int)(21 / scale), 0xEDF4FF, false);
         context.getMatrices().pop();
+    }
+
+    private static String ellipsize(MinecraftClient mc, String text, int width) {
+        if (mc.textRenderer.getWidth(text) <= width) return text;
+        return mc.textRenderer.trimToWidth(text, Math.max(0, width - mc.textRenderer.getWidth("…"))) + "…";
     }
 
     private static String label(String key, String fallback) {
@@ -473,6 +501,12 @@ public class Observatory implements ClientModInitializer {
                     JsonObject payload = request.getAsJsonObject("payload");
                     if (payload == null || payload.toString().length() > 8192) throw new IllegalArgumentException("Overlay payload must be an object under 8192 characters");
                     if (payload.has("completed")) payload.addProperty("completed", Math.max(0, Math.min(13, payload.get("completed").getAsInt())));
+                    long now = System.nanoTime();
+                    if (!Objects.equals(payload.get("objective"), overlay.get("objective"))
+                            || (payload.has("badges") && payload.get("badges").getAsString().contains("STARTING")
+                            && !label("badges", "").contains("STARTING"))) objectiveUntil = now + 3_000_000_000L;
+                    if (payload.has("completed") && payload.get("completed").getAsInt()
+                            > (overlay.has("completed") ? overlay.get("completed").getAsInt() : 0)) completionUntil = now + 2_000_000_000L;
                     overlay = payload.deepCopy();
                 }
                 case "screenshot" -> {

@@ -774,17 +774,19 @@ function App() {
             </nav>
           </LayoutGroup>
           <div className="sidebar-bottom">
-            <span
-              className={`connection-dot ${connected && wsConnected ? "online" : ""}`}
-            />
-            {connected && wsConnected
-              ? "Minecraft connected"
-              : "Connection pending"}
-            <small>
-              Local client · 640 × 480
-              <br />
-              Pixels in. Actions out.
-            </small>
+            <div className="sidebar-status">
+              <span
+                className={`connection-dot ${connected && wsConnected ? "online" : ""}`}
+              />
+              {connected && wsConnected
+                ? "Minecraft connected"
+                : "Connection pending"}
+              <small>
+                Local client · 640 × 480
+                <br />
+                Pixels in. Actions out.
+              </small>
+            </div>
             <button
               className="theme-toggle"
               aria-label="Toggle dark mode"

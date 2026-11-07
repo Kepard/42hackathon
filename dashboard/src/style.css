@@ -1088,8 +1088,15 @@ footer span {
   }
   .brand,
   .nav-label,
-  .sidebar-bottom {
+  .sidebar-status {
     display: none;
+  }
+  .sidebar-bottom {
+    border-top: none;
+    padding: 0;
+  }
+  .theme-toggle {
+    margin-top: 8px;
   }
   nav {
     display: flex;

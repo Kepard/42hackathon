@@ -224,7 +224,8 @@ reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe bef
 
 ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
 1 log: log icon/count. Full ladder: 4 logs -> planks (4/log), table (4 planks), sticks.
-Craft by recipe-book SEARCH, never remembered icon positions; shift-click output.
+Craft: click recipe-book search, Ctrl+A, type the item name FIRST; observe filtered results, then click the matching result. Never use unsearched icon positions.
+Observe the output slot: shift-click ONLY if visibly nonempty. If empty, re-search or obtain missing ingredients; never repeat empty-output clicks.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
 4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
 Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.

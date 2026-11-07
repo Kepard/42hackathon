@@ -84,6 +84,17 @@ def test_schema_and_sequential_parse():
             assert "intent" in tool["function"]["parameters"]["required"]
 
 
+def test_crafting_guidance_requires_search_and_visible_output():
+    from mc_observatory.holo import PRIMER
+    from mc_observatory.run import task_definition
+    goal=task_definition("nether_dev")["description"]
+    for text in (PRIMER,goal):
+        assert "type the item name FIRST" in text
+        assert "ONLY if visibly nonempty" in text
+        assert "never repeat empty-output clicks" in text
+    assert "ALWAYS shift-click output" not in goal
+
+
 @pytest.mark.parametrize("tier,name,args", [("raw", "key_press", {"key": "f3", "ms": 0}), ("skills", "toggle_debug", {})])
 async def test_f3_is_pixel_only_keyboard_input(tier, name, args):
     client = PixelClient()

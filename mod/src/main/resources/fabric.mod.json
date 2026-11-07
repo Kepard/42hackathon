@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "mc_observatory",
+  "version": "0.1.0",
+  "name": "MC Observatory Spike",
+  "environment": "client",
+  "entrypoints": {"client": ["dev.observatory.Observatory"]},
+  "mixins": ["observatory.mixins.json"],
+  "depends": {"fabricloader": ">=0.15", "minecraft": "1.20.4", "java": ">=17", "fabric-api": "*"}
+}

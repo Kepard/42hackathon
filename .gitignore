@@ -1,0 +1,12 @@
+mod/.gradle/
+mod/build/
+mod/run/
+__pycache__/
+runner/.venv/
+runner/.pytest_cache/
+runner/dist/
+runner/*.egg-info/
+spike/*client*.log
+spike/restart.log
+spike/live-tests.log
+spike/unit-tests.log

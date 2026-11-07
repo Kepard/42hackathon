@@ -1,0 +1,11 @@
+LIVE reset seed=12345 logs=4; pause stable; hidden-HUD capture; GUI crafted oak_planks=4; typing; frame/state stream=4+4; reward=1.0
+Saving tracing dataset to /home/ubuntu/repos/mc-observatory/spike/core/trajectory with images in /home/ubuntu/repos/mc-observatory/spike/core/trajectory/imgs
+Saving the dataset (0/1 shards):   0%|          | 0/14 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14/14 [00:00<00:00, 5522.45 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14/14 [00:00<00:00, 5271.59 examples/s]
+..
+=============================== warnings summary ===============================
+tests/test_live.py: 14 warnings
+  /home/ubuntu/repos/cua/libs/cua-bench/cua_bench/tracing.py:67: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "timestamp": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 passed, 14 warnings in 90.85s (0:01:30)

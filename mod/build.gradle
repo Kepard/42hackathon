@@ -1,0 +1,29 @@
+plugins {
+    id 'fabric-loom' version '1.6.12'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+version = '0.1.0'
+group = 'dev.observatory'
+java { withSourcesJar() }
+repositories {
+    removeIf { it instanceof MavenArtifactRepository && it.url.host == 'repo.maven.apache.org' }
+    maven { url = 'https://maven-central.storage-download.googleapis.com/maven2/' }
+}
+configurations { shade }
+dependencies {
+    minecraft 'com.mojang:minecraft:1.20.4'
+    mappings 'net.fabricmc:yarn:1.20.4+build.3:v2'
+    modImplementation 'net.fabricmc:fabric-loader:0.15.11'
+    modImplementation 'net.fabricmc.fabric-api:fabric-api:0.97.2+1.20.4'
+    implementation 'org.java-websocket:Java-WebSocket:1.5.6'
+    shade 'org.java-websocket:Java-WebSocket:1.5.6'
+}
+shadowJar {
+    configurations = [project.configurations.shade]
+    relocate 'org.java_websocket', 'dev.observatory.shaded.websocket'
+    exclude 'org/slf4j/**'
+    archiveClassifier = 'shadow'
+}
+remapJar { dependsOn shadowJar; inputFile = shadowJar.archiveFile }
+tasks.withType(JavaCompile).configureEach { options.release = 17 }
+loom { runs { client { programArgs '--width', '640', '--height', '480', '--username', 'Observatory' } } }

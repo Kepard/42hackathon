@@ -1,0 +1,199 @@
+{
+  "initial": {
+    "world_id": "observatory-11a0ef93-00ee-4900-a8c7-3276443b184a",
+    "seed": 12345,
+    "portal_entered": false,
+    "portal_lit": false,
+    "server_time": 14,
+    "time_of_day": 14,
+    "stats": {
+      "picked_up": {},
+      "crafted": {},
+      "mined": {},
+      "killed": {}
+    },
+    "advancements": [
+      "minecraft:recipes/misc/charcoal",
+      "minecraft:recipes/decorations/crafting_table",
+      "minecraft:recipes/building_blocks/oak_planks",
+      "minecraft:recipes/building_blocks/oak_wood"
+    ],
+    "in_world": true,
+    "resetting": false,
+    "paused": false,
+    "fps": 43,
+    "frames": 189,
+    "elapsed_seconds": 61.459875411,
+    "render_distance": 4,
+    "renderer": "llvmpipe (LLVM 15.0.7, 256 bits)",
+    "screen_open": false,
+    "screen": "",
+    "dimension": "minecraft:overworld",
+    "x": 95.5,
+    "y": 142.0,
+    "z": -41.5,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "health": 20.0,
+    "creative": false,
+    "inventory": [
+      {
+        "slot": 0,
+        "id": "minecraft:oak_log",
+        "count": 4
+      }
+    ]
+  },
+  "frozen": {
+    "world_id": "observatory-11a0ef93-00ee-4900-a8c7-3276443b184a",
+    "seed": 12345,
+    "portal_entered": false,
+    "portal_lit": false,
+    "server_time": 58,
+    "time_of_day": 58,
+    "stats": {
+      "picked_up": {},
+      "crafted": {},
+      "mined": {},
+      "killed": {}
+    },
+    "advancements": [
+      "minecraft:recipes/misc/charcoal",
+      "minecraft:recipes/decorations/crafting_table",
+      "minecraft:recipes/building_blocks/oak_planks",
+      "minecraft:recipes/building_blocks/oak_wood"
+    ],
+    "in_world": true,
+    "resetting": false,
+    "paused": true,
+    "fps": 54,
+    "frames": 339,
+    "elapsed_seconds": 64.298344578,
+    "render_distance": 4,
+    "renderer": "llvmpipe (LLVM 15.0.7, 256 bits)",
+    "screen_open": false,
+    "screen": "",
+    "dimension": "minecraft:overworld",
+    "x": 95.5,
+    "y": 142.0,
+    "z": -41.5,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "health": 20.0,
+    "creative": false,
+    "inventory": [
+      {
+        "slot": 0,
+        "id": "minecraft:oak_log",
+        "count": 4
+      }
+    ]
+  },
+  "still": {
+    "world_id": "observatory-11a0ef93-00ee-4900-a8c7-3276443b184a",
+    "seed": 12345,
+    "portal_entered": false,
+    "portal_lit": false,
+    "server_time": 58,
+    "time_of_day": 58,
+    "stats": {
+      "picked_up": {},
+      "crafted": {},
+      "mined": {},
+      "killed": {}
+    },
+    "advancements": [
+      "minecraft:recipes/misc/charcoal",
+      "minecraft:recipes/decorations/crafting_table",
+      "minecraft:recipes/building_blocks/oak_planks",
+      "minecraft:recipes/building_blocks/oak_wood"
+    ],
+    "in_world": true,
+    "resetting": false,
+    "paused": true,
+    "fps": 52,
+    "frames": 384,
+    "elapsed_seconds": 65.167145297,
+    "render_distance": 4,
+    "renderer": "llvmpipe (LLVM 15.0.7, 256 bits)",
+    "screen_open": false,
+    "screen": "",
+    "dimension": "minecraft:overworld",
+    "x": 95.5,
+    "y": 142.0,
+    "z": -41.5,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "health": 20.0,
+    "creative": false,
+    "inventory": [
+      {
+        "slot": 0,
+        "id": "minecraft:oak_log",
+        "count": 4
+      }
+    ]
+  },
+  "crafted": {
+    "world_id": "observatory-11a0ef93-00ee-4900-a8c7-3276443b184a",
+    "seed": 12345,
+    "portal_entered": false,
+    "portal_lit": false,
+    "server_time": 118,
+    "time_of_day": 118,
+    "stats": {
+      "picked_up": {},
+      "crafted": {
+        "minecraft:oak_planks": 4
+      },
+      "mined": {},
+      "killed": {}
+    },
+    "advancements": [
+      "minecraft:recipes/building_blocks/oak_slab",
+      "minecraft:recipes/decorations/oak_sign",
+      "minecraft:recipes/redstone/oak_trapdoor",
+      "minecraft:recipes/redstone/oak_fence_gate",
+      "minecraft:recipes/misc/charcoal",
+      "minecraft:recipes/redstone/oak_pressure_plate",
+      "minecraft:recipes/redstone/oak_door",
+      "minecraft:recipes/decorations/crafting_table",
+      "minecraft:recipes/misc/stick",
+      "minecraft:recipes/building_blocks/oak_stairs",
+      "minecraft:recipes/decorations/oak_fence",
+      "minecraft:recipes/building_blocks/oak_planks",
+      "minecraft:recipes/decorations/barrel",
+      "minecraft:recipes/building_blocks/oak_wood",
+      "minecraft:recipes/redstone/oak_button"
+    ],
+    "in_world": true,
+    "resetting": false,
+    "paused": false,
+    "fps": 49,
+    "frames": 520,
+    "elapsed_seconds": 68.362020258,
+    "render_distance": 4,
+    "renderer": "llvmpipe (LLVM 15.0.7, 256 bits)",
+    "screen_open": true,
+    "screen": "InventoryScreen",
+    "dimension": "minecraft:overworld",
+    "x": 95.5,
+    "y": 142.0,
+    "z": -41.5,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "health": 20.0,
+    "creative": false,
+    "inventory": [
+      {
+        "slot": 1,
+        "id": "minecraft:oak_planks",
+        "count": 4
+      }
+    ]
+  },
+  "events": {
+    "frame": 4,
+    "state": 4
+  }
+}

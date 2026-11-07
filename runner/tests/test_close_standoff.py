@@ -95,3 +95,12 @@ def test_native_outline_retains_close_geometry_without_jev():
     ImageDraw.Draw(im).rectangle((330,150,524,330),outline="black",width=2)
     out=io.BytesIO();im.save(out,format="PNG")
     assert close_face(outline_box(out.getvalue()),854,480)
+
+
+async def test_entity_attack_never_requires_a_block_face(monkeypatch):
+    from unittest.mock import AsyncMock
+    client,ex=setup(monkeypatch)
+    ex.approach_close=AsyncMock(side_effect=AssertionError("not a block action"))
+    await ex.execute({"name":"attack","arguments":{"seconds":.1}},"skills")
+    assert ("mouse",{"button":0,"pressed":True}) in client.events
+    assert client.walks==0

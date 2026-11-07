@@ -46,7 +46,7 @@ SKILLS = {
     "move": ("Hold direction with optional concurrent sprint/jump/sneak; release all afterwards. Jump is held for the whole move; do not sprint+sneak together.", {"direction": choice("forward", "back", "left", "right"), "seconds": number(0, 10), "sprint": {"type": "boolean", "default": False}, "jump": {"type": "boolean", "default": False}, "sneak": {"type": "boolean", "default": False}}),
     "jump": ("Tap space for a jump.", {}),
     "look": ("RELATIVE yaw/pitch degrees, not absolute orientation: positive yaw right, pitch down.", {"yaw_deg": number(-360, 360), "pitch_deg": number(-180, 180)}),
-    "attack": ("Hold left mouse to mine/attack; aim at a block within reach first.", {"seconds": number(0, 10)}),
+    "attack": ("Combat/entity attack: hold left mouse without a block-face gate. For blocks use attack_until_broken, which enforces close standoff.", {"seconds": number(0, 10)}),
     "use": ("Right click once.", {}),
     "select_hotbar": ("Select hotbar slot 1..9.", {"n": {"type": "integer", "minimum": 1, "maximum": 9}}),
     "open_inventory": ("Tap E. Only use if inventory is currently closed.", {}),
@@ -485,7 +485,7 @@ class ToolExecutor:
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
-        if tier == "skills" and name in ("attack", "mine") and not await self.approach_close():
+        if tier == "skills" and name == "mine" and not await self.approach_close():
             self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
             return "not_close"
         if name in ("approach_until_outline", "mine", "collect"):

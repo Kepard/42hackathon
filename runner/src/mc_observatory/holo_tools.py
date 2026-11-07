@@ -109,7 +109,7 @@ def parse_calls(message, tier, reflex="none"):
                     raise ValueError(f"Invalid string {key}")
                 if "enum" in spec and value not in spec["enum"]:
                     raise ValueError(f"Unknown {key}")
-            if name == "move" and args.get("sprint") and args.get("sneak"):
+            if args.get("sprint") and args.get("sneak"):
                 raise ValueError("Cannot sprint and sneak together")
             parsed.append({"name": name, "arguments": args})
         except (KeyError, TypeError, ValueError) as error:

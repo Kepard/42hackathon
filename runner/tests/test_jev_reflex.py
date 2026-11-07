@@ -168,6 +168,13 @@ async def test_not_in_reach_tells_model_to_seek_first(monkeypatch):
     assert r["next_action"] == "call seek(<target>) first"
 
 
+@pytest.mark.parametrize("name,reflex", [("move", "none"), ("reposition", "jev")])
+def test_all_movement_tools_reject_conflicting_modifiers(name, reflex):
+    with pytest.raises(ValueError, match="sprint and sneak"):
+        parse_calls({"tool_calls": [call(name, direction="left", seconds=.1, sprint=True, sneak=True)]}, "skills", reflex)
+    assert parse_calls({"tool_calls": [call(name, direction="left", seconds=.1, sprint=True)]}, "skills", reflex)
+
+
 async def test_agent_logs_jev_inputs_and_aggregate_cost_and_low_setting(tmp_path):
     client, fake = PixelClient(), FakeJev(p=.1)
     api = FakeAPI(client,response([call("seek",target="log",max_s=.2)]))

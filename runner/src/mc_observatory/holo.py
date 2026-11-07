@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import struct
 import time
 from dataclasses import dataclass
@@ -62,20 +63,54 @@ class HoloConfig:
             raise ValueError("A cost budget requires known model pricing")
 
 
+class HoloAPIError(RuntimeError):
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__(f"H Company HTTP {errors[-1]['status']}")
+
+
 class HoloAPI:
+    _locks = {}
+    _next = {}
     def __init__(self, api_key):
         if not api_key:
             raise ValueError("HCOMPANY_API_KEY is required")
         self.api_key = api_key
 
     async def complete(self, payload):
+        errors = []
+        self.last_errors = errors
         async with aiohttp.ClientSession() as session:
-            async with session.post("https://api.hcompany.ai/v1/chat/completions",
-                                    headers={"Authorization": f"Bearer {self.api_key}"}, json=payload) as response:
-                if response.status != 200:
-                    # Never serialize request headers or provider responses that could echo secrets.
-                    raise RuntimeError(f"H Company HTTP {response.status}")
-                return await response.json()
+            for attempt in range(3):
+                model = payload["model"]
+                lock = self._locks.setdefault(model, asyncio.Lock())
+                async with lock:
+                    await asyncio.sleep(max(0, self._next.get(model, 0) - time.monotonic()))
+                    self._next[model] = time.monotonic() + 2.05
+                async with session.post("https://api.hcompany.ai/v1/chat/completions",
+                                        headers={"Authorization": f"Bearer {self.api_key}"}, json=payload) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        result["_api_errors"] = errors
+                        return result
+                    try:
+                        raw = await response.content.readexactly(65537)
+                    except asyncio.IncompleteReadError as error:
+                        raw = error.partial
+                    body = raw[:65536].decode("utf-8", errors="replace")
+                    secrets = [self.api_key] + [value for key, value in os.environ.items()
+                                               if re.search(r"(?:KEY|TOKEN|SECRET)$", key) and len(value) >= 8]
+                    for secret in secrets:
+                        body = body.replace(secret, "[REDACTED]")
+                    body = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]", body)
+                    errors.append({"status": response.status, "body": body, "truncated": len(raw) > 65536})
+                    if response.status != 429 or attempt == 2:
+                        raise HoloAPIError(errors)
+                    try:
+                        delay = max(1, min(30, float(response.headers.get("Retry-After", 2 ** (attempt + 1)))))
+                    except ValueError:
+                        delay = 2 ** (attempt + 1)
+                await asyncio.sleep(delay)
 
 
 class RunController:
@@ -129,10 +164,12 @@ next subgoal, not hidden reasoning. Goal overrides route. Notes: visible invento
 REACH: crosshair aims; visible black block selection outline confirms reach (~4.5 blocks). Absence is
 ambiguous: very close faces have edges offscreen. Cracks appear within ~0.3s; swinging
 alone isn't progress. Inspect 2x crop. At height480/FOV70, a face at reach is ~76px high
-(16%); smaller usually farther, approximate. Walk ~4.3 blocks/s; short sneaking steps at cliffs.
+(16%); trunk width >=85px is usually in reach. Travel sprint+jump; sneak near cliffs.
 TREE: find vertical streaked brown trunk, NOT speckled dirt -> approach -> clear intervening
 green leaves (~0.35s each; hold ~0.6s) -> OBSERVE -> re-aim at exposed bark -> steady hold
-3.5-4s (log ~3s by hand) -> walk into drop -> confirm LOG icon/count in hotbar.
+use mine(max_s=4) (log ~3.3s by hand) -> collect(max_s=0.8) -> confirm LOG icon/count.
+approach_until_outline checks pixels while walking; mine releases on fresh break cues;
+collect checks hotbar pixels. All are fallible: verify frames. Get 4 logs, not just one.
 A leaf vanishing is progress, NOT a log. Don't retreat just because leaves fill the view.
 No cracks: change ONE variable per retry (closer/re-aim/pitch/short strafe), check GUI.
 
@@ -190,10 +227,11 @@ class HoloAgent(BaseAgent):
         summaries = [{"step": r["step"], "intent": r["intent"], "actions": r["tool_calls"], "skipped_tool_calls": r.get("skipped_tool_calls", []), "errors": r["errors"], "tool_results": r.get("tool_results", [])} for r in history]
         content = [{"type": "text", "text": "Your recent actions and visible effects you reported; skills pixel estimates are heuristics: " + json.dumps(summaries)},
                    {"type": "text", "text": "Your scratchpad: " + (notes or "(empty)")}]
-        selected = images[-self.config.history_images:]
+        selected = images[-min(3, self.config.history_images):]
         observations = [(f"Full screen from step {idx}", png) for idx, png in selected[:-1]]
         observations += [(f"Previous action pixel-evidence frame {idx}", png) for idx, png in enumerate(feedback_images)]
         observations += [(f"CURRENT full screen from step {selected[-1][0]}", selected[-1][1])]
+        observations = observations[-3:]
         observations += [("2x CURRENT center crop; coordinates still refer to the full screen", crop or center_crop(selected[-1][1]))]
         for label, png in observations:
             content += [{"type": "text", "text": label},
@@ -240,12 +278,12 @@ class HoloAgent(BaseAgent):
                         path.write_bytes(png)
                         record["screenshot_ref"] = str(path.relative_to(out))
                         images.append((idx, png))
-                        images = images[-config.history_images:]
+                        images = images[-min(3, config.history_images):]
                         record["image_refs"] = [f"screenshots/{image_idx:05d}.png" for image_idx, _ in images]
                         crop = center_crop(png)
                         record["crop_ref"] = f"screenshots/{idx:05d}-center.png"
                         (out / record["crop_ref"]).write_bytes(crop)
-                        record["input_image_refs"] = record["image_refs"][:-1] + feedback_refs + record["image_refs"][-1:] + [record["crop_ref"]]
+                        record["input_image_refs"] = (record["image_refs"][:-1] + feedback_refs + record["image_refs"][-1:])[-3:] + [record["crop_ref"]]
                         width, height = struct.unpack(">II", png[16:24])
                         if executor is None:
                             executor = ToolExecutor(client, width, height)
@@ -262,6 +300,7 @@ class HoloAgent(BaseAgent):
                         try:
                             async with asyncio.timeout(config.api_timeout):
                                 response = await self.api.complete(payload)
+                                record["api_errors"] = response.get("_api_errors", [])
                         except TimeoutError:
                             record["failure_tags"] += ["api_error", "timeout"]
                             raise
@@ -306,10 +345,14 @@ class HoloAgent(BaseAgent):
                     record["failure_tags"].append("invalid_tool_args")
                     record["errors"].append(str(error))
                 except TimeoutError:
+                    if api_start is not None:
+                        record["api_errors"] = getattr(self.api, "last_errors", [])
                     if "timeout" not in record["failure_tags"]:
                         record["failure_tags"].append("timeout")
                     record["errors"].append("Step or API time budget exceeded")
                 except Exception as error:
+                    if isinstance(error, HoloAPIError):
+                        record["api_errors"] = error.errors
                     if not record["failure_tags"]:
                         record["failure_tags"].append("api_error" if api_start is not None and action_start is None else "action_error")
                     record["errors"].append(f"{type(error).__name__}: {error}")

@@ -232,7 +232,7 @@ async def test_three_frames_crop_notes_and_pixel_boundary(tmp_path, tier):
     agent = HoloAgent(HoloConfig(max_steps=4, tier=tier), api)
     records = [r async for r in agent.steps(c, "get log", tmp_path)]
     assert len(records[-1]["image_refs"]) == 3
-    assert len(records[-1]["input_image_refs"]) == (5 if tier == "skills" else 4)
+    assert len(records[-1]["input_image_refs"]) == 4
     content = api.payloads[-1]["messages"][1]["content"]
     image_parts = [p for p in content if p["type"] == "image_url"]
     refs = records[-1]["input_image_refs"]

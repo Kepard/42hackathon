@@ -6,7 +6,7 @@ import math
 import time
 
 from .session import keycode
-from .vision import changes
+from .vision import changes, outline, broken_caption, hotbar_change
 
 
 class InvalidToolArgs(ValueError):
@@ -37,6 +37,9 @@ RAW = {
     "wait": ("Let the game run for ms milliseconds.", {"ms": number(0, 10000)}),
 }
 SKILLS = {
+    "approach_until_outline": ("Pixel reflex: walk toward the crosshair, checking thin dark rectangular selection edges every 0.2s; stop on an outline cue, two unchanged views, or max_s. False negatives/positives are possible; inspect returned frame. No game state.", {"max_s": number(.2, 10), "sprint": {"type": "boolean", "default": False}}),
+    "mine": ("Pixel reflex: hold attack; release on a NEW vanilla English Block broken subtitle plus strong center change, or no visible progress after 0.8s, or max_s. A pixel cue is not semantic proof: verify bark/target and drops. Uses screenshots only.", {"max_s": number(.2, 30)}),
+    "collect": ("Pixel reflex: step forward in 0.2s chunks, stop when hotbar slot pixels gain an item-like foreground or at max_s. Returns hotbar_changed, not item identity; visually confirm the log. Do not use near cliffs. No inventory lookup.", {"max_s": number(.2, 3)}),
     "move": ("Hold direction with optional concurrent sprint/jump/sneak; release all afterwards. Jump is held for the whole move; do not sprint+sneak together.", {"direction": choice("forward", "back", "left", "right"), "seconds": number(0, 10), "sprint": {"type": "boolean", "default": False}, "jump": {"type": "boolean", "default": False}, "sneak": {"type": "boolean", "default": False}}),
     "jump": ("Tap space for a jump.", {}),
     "look": ("RELATIVE yaw/pitch degrees, not absolute orientation: positive yaw right, pitch down.", {"yaw_deg": number(-360, 360), "pitch_deg": number(-180, 180)}),
@@ -49,7 +52,7 @@ SKILLS = {
     "aim_at": ("Aim the crosshair at a full-screen point (0..1000) using FOV70 camera geometry, not game state. Approximate at steep pitch; check the next frame.", XY),
     "set_pitch": ("Set pitch -90 up .. +90 down by clamping with mouse input, then rotating back. Reads no orientation state.", {"deg": number(-90, 90)}),
     "mine_up": ("Look straight up, attempt count overhead blocks (up to 4 seconds each). Pixel-change heuristic only; verify drops visually.", {"count": {"type": "integer", "minimum": 1, "maximum": 4}}),
-    "attack_until_broken": ("Legacy name: hold attack steadily for the FULL max_s, sampling screenshots every 0.35s; pixel changes never release it early. Use >=3.5s for a log by hand, ~0.5s for one leaf. Returns scene_changed/no_change, NOT block-gone or item-collected. Verify those from the next frame. All sampled frames are shown next turn.", {"max_s": number(.35, 10)}),
+    "attack_until_broken": ("Legacy full-duration attack. Prefer mine for closed-loop stopping. Returns scene_changed/no_change, NOT proof of break/pickup. Captures are saved; only representative frames fit the model image budget.", {"max_s": number(.35, 10)}),
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
     "shift_click_at": ("Shift-click a GUI slot at normalized screenshot coordinates.", XY),
@@ -59,7 +62,7 @@ SKILLS = {
 
 def tool_schemas(tier):
     vocabulary = RAW if tier == "raw" else SKILLS
-    return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck after two nearly unchanged moves. These are screenshot-only heuristics; source screenshots are shown next turn, never mod/game-state feedback." if tier == "skills" else ""),
+    return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
              "parameters": {"type": "object", "properties": {**fields, "intent": {"type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence explaining why you are taking this action."}},
                             "required": [*[key for key, spec in fields.items() if "default" not in spec], "intent"], "additionalProperties": False}}}
             for name, (description, fields) in vocabulary.items()]
@@ -145,6 +148,53 @@ class ToolExecutor:
         scene_changed |= settled["frame_change"] >= .002
         return "scene_changed" if scene_changed else "no_change"
 
+    async def reflex(self, name, seconds, sprint=False):
+        reference = self.current_frame or await self.observe()
+        previous, unchanged = reference, 0
+        caption = broken_caption(reference) if name == "mine" else 0
+        if name == "approach_until_outline" and outline(reference):
+            return "outline_pixel_cue"
+        started = time.monotonic()
+        try:
+            if name == "mine":
+                await self.button(0, True)
+            else:
+                await self.key("w", True)
+                if sprint:
+                    await self.key("ctrl", True)
+            while (remaining := seconds - (time.monotonic() - started)) > 0:
+                await self.primitive("wait", ms=min(.2, remaining) * 1000)
+                try:
+                    frame = await asyncio.wait_for(self.observe(), max(.001, seconds - (time.monotonic() - started)))
+                except asyncio.TimeoutError:
+                    return "timeout"
+                delta = changes(reference, frame)
+                if name == "mine":
+                    current = broken_caption(frame)
+                    if current > caption + 8 and delta["center_changed_fraction"] > .3 and delta["center_change"] > .04:
+                        return "block_gone_pixel_cue"
+                    caption = current
+                    if time.monotonic() - started >= .8 and delta["center_change"] < .0008:
+                        return "no_progress_cue"
+                elif name == "collect":
+                    if hotbar_change(reference, frame):
+                        return "hotbar_changed"
+                else:
+                    if outline(frame):
+                        return "outline_pixel_cue"
+                    unchanged = unchanged + 1 if changes(previous, frame)["frame_change"] < .002 else 0
+                    if unchanged >= 2:
+                        return "stuck"
+                previous = frame
+            return "timeout"
+        finally:
+            if name == "mine":
+                await self.button(0, False)
+            else:
+                await self.key("w", False)
+                if sprint:
+                    await self.key("ctrl", False)
+
     async def primitive(self, kind, **args):
         self.actions.append({"action": kind, **args})
         if kind == "wait":
@@ -200,7 +250,7 @@ class ToolExecutor:
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
-        after = self.current_frame if call["name"] == "attack_until_broken" else await self.observe()
+        after = self.current_frame if call["name"] in ("attack_until_broken", "approach_until_outline", "mine", "collect") else await self.observe()
         delta = changes(before, after)
         if call["name"] == "move":
             self.unchanged_moves = self.unchanged_moves + 1 if delta["frame_change"] < .002 else 0
@@ -209,6 +259,10 @@ class ToolExecutor:
         result = {"name": call["name"], **delta, "stuck": call["name"] == "move" and self.unchanged_moves >= 2}
         result.update(scene_changed=delta["frame_change"] >= .002 or outcome == "scene_changed",
                       block_gone=None, item_collected=None)
+        if call["name"] in ("approach_until_outline", "mine", "collect"):
+            result.update(outline_pixel_cue=outcome == "outline_pixel_cue",
+                          block_gone_pixel_cue=outcome == "block_gone_pixel_cue",
+                          hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
         self.results.append(result)
@@ -216,6 +270,8 @@ class ToolExecutor:
 
     async def execute_inputs(self, call, tier):
         name, args = call["name"], call["arguments"]
+        if name in ("approach_until_outline", "mine", "collect"):
+            return await self.reflex(name, args["max_s"], args.get("sprint", False))
         if name in ("key_down", "key_up"):
             await self.key(args["key"], name == "key_down")
         elif name == "key_press":

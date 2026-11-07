@@ -500,7 +500,7 @@ former seed12345 spawn required render distance **2**: 854x480 measured 41/49/48
 across three views; distances 8/6/4 dipped below 30 (8 also timed out a fresh reset).
 The recipe book and inventory grid fit side by side at this resolution.
 
-Both tiers receive the last three full frames and a nearest-neighbor 2x crosshair crop
+Both tiers receive at most three full frames and a nearest-neighbor 2x crosshair crop
 (160x120 source pixels). At height480/FOV70, a face-on block at4.5 blocks is about76px
 high; the prompt treats that as an approximate cue, not a distance sensor.
 
@@ -513,10 +513,22 @@ never end a log hold early. It reports `scene_changed`/`no_change`, not a break.
 `block_gone` and `item_collected` remain explicitly unknown (`null`); the model must
 verify removal and the log icon/count from pixels. Use ~0.6s for a blocking leaf,
 then observe/re-aim, and 3.5–4s for exposed wood by hand.
-It never checks a block ID, inventory, coordinates, or evaluator result. All source
-screenshots are attached on the next model turn and saved in `feedback_image_refs`;
+It never checks a block ID, inventory, coordinates, or evaluator result. Internal source
+screenshots are saved in `feedback_image_refs`; only the latest representative frames
+fit the next request's hard budget of three full frames plus crop (including feedback).
 `input_image_refs` records the exact ordered image payload including the crop.
-Extra evidence frames increase token cost. Raw receives no computed feedback.
+Raw receives no computed feedback. Provider error bodies are traced, redacting credentials
+and limiting bodies to64KiB. HTTP429s retry twice with bounded backoff; model requests
+are spaced by2.05s in this process to respect the shared30RPM allowance.
+
+Closed-loop `approach_until_outline` checks thin rectangular dark edges and stops on
+an outline cue, two unchanged views, or timeout. `mine` releases on a refreshed vanilla
+English "Block broken" subtitle plus center change, no visible progress after0.8s, or
+timeout. `collect` stops on an item-like hotbar/count change or timeout. These are
+screen-only heuristics calibrated for854x480, GUI2, vanilla English subtitles; not
+semantic guarantees. Internal reflex screenshots are recorded, not all sent to Holo.
+The log milestone now requires inventory/pickup/crafting evidence, never mining alone;
+other rung scoring and the created-obsidian exception are unchanged.
 
 Skills enforce an observation barrier after the first non-notes tool in each turn.
 Later requested calls are **discarded**, recorded in `skipped_tool_calls`, and shown

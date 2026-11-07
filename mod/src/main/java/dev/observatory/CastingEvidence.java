@@ -26,9 +26,13 @@ final class CastingEvidence {
 
     boolean active(long tick) { return active && tick <= expires; }
 
-    void reset() {
+    void clearAttempt() {
         before = Set.of();
         active = false;
+    }
+
+    void reset() {
+        clearAttempt();
         created = false;
     }
 }

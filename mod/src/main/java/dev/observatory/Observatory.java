@@ -26,6 +26,7 @@ import net.minecraft.registry.Registries;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.resource.DataConfiguration;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.stat.Stats;
 import net.minecraft.util.Identifier;
 import net.minecraft.world.Difficulty;
@@ -99,6 +100,7 @@ public class Observatory implements ClientModInitializer {
     private final List<PortalAttempt> portalAttempts = new ArrayList<>();
     private final CastingEvidence casting = new CastingEvidence();
     private ServerWorld castingWorld;
+    private MinecraftServer castingServer;
     private Vec3d castingOrigin;
 
     private Map<Long, Double> nearbyObsidian(ServerPlayerEntity player) {
@@ -211,7 +213,10 @@ public class Observatory implements ClientModInitializer {
         UseItemCallback.EVENT.register((player, world, hand) -> {
             if (world instanceof ServerWorld serverWorld && player instanceof ServerPlayerEntity serverPlayer
                     && player.getStackInHand(hand).isOf(Items.WATER_BUCKET)) {
-                if (castingWorld != serverWorld) casting.reset();
+                if (castingServer != serverWorld.getServer()) {
+                    casting.reset(); castingServer = serverWorld.getServer();
+                }
+                if (castingWorld != serverWorld) casting.clearAttempt();
                 castingWorld = serverWorld;
                 castingOrigin = player.getPos();
                 casting.begin(serverWorld.getTime(), serverPlayer.getStatHandler().getStat(Stats.USED.getOrCreateStat(Items.WATER_BUCKET)), nearbyObsidian(serverPlayer).keySet());
@@ -232,8 +237,11 @@ public class Observatory implements ClientModInitializer {
             if (server != mc.getServer()) return;
             if (server.getPlayerManager().getPlayerList().isEmpty()) return;
             ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
+            if (castingServer != server) {
+                casting.reset(); castingServer = server;
+            }
             if (castingWorld != player.getServerWorld()) {
-                casting.reset(); castingWorld = player.getServerWorld(); castingOrigin = null;
+                casting.clearAttempt(); castingWorld = player.getServerWorld(); castingOrigin = null;
             }
             if (!casting.active(player.getServerWorld().getTime())) castingOrigin = null;
             boolean obsidianCreated = casting.observe(player.getServerWorld().getTime(),

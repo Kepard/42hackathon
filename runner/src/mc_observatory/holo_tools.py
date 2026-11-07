@@ -176,6 +176,13 @@ class ToolExecutor:
         return "scene_changed" if scene_changed else "no_change"
 
     async def seek(self, target, seconds):
+        try:
+            return await self._seek(target, seconds)
+        finally:
+            await self.release()
+            await self.observe()
+
+    async def _seek(self, target, seconds):
         if self.jev is None:
             raise InvalidToolArgs("seek requires reflex=jev")
         deadline = time.monotonic() + seconds

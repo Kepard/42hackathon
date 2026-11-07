@@ -74,6 +74,34 @@ async def test_error_stops_without_walking_and_logs_unknown_cost(monkeypatch):
     assert not ex.held_keys
 
 
+@pytest.mark.parametrize("p,box,outline,error,expected", [
+    (.1, (.4,.3,.6,.7), False, None, "not_visible"),
+    (.9, (.4,.3,.6,.7), True, None, "in_reach"),
+    (.9, (.8,.8,1,1), False, None, "timeout"),
+    (.9, (.4,.3,.6,.7), False, RuntimeError("failed"), "vision_error"),
+])
+async def test_seek_always_captures_settled_feedback(monkeypatch, p, box, outline, error, expected):
+    from test_pixel_skills import png
+    dark, light = png("black", (640,480)), png("white", (640,480))
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: outline)
+
+    class Client(PixelClient):
+        captures = 0
+        async def screenshot(self):
+            self.captures += 1
+            return dark if self.captures == 1 else light
+
+    client, fake = Client(), FakeJev(p, box, error)
+    ex = ToolExecutor(client, 640,480, JevVision(fake))
+    ex.begin_step(dark)
+    result = await ex.execute({"name": "seek", "arguments": {"target": "log", "max_s": .01}}, "skills")
+    assert result["outcome"] == expected
+    assert client.captures == len(fake.inputs) + 1
+    assert ex.current_frame == ex.frames[-1] == light
+    assert result["scene_changed"]
+    assert not ex.held_keys and not ex.held_buttons
+
+
 async def test_mining_requires_existing_outline_not_jev_confidence(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
     fake = FakeJev()

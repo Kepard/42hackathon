@@ -169,6 +169,32 @@ async def test_attack_screenshot_error_releases_mouse():
     assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
 
 
+async def test_attack_final_sample_timeout_checks_released_settled_frame(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("mc_observatory.holo_tools.time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}))
+    async def timeout(capture, seconds):
+        capture.close()
+        raise asyncio.TimeoutError
+    monkeypatch.setattr("mc_observatory.holo_tools.asyncio.wait_for", timeout)
+    class Client(PixelClient):
+        async def screenshot(self):
+            assert not ex.held_buttons
+            return png("white")
+    class Executor(ToolExecutor):
+        async def primitive(self, kind, **args):
+            if kind == "wait":
+                clock[0] += args["ms"] / 1000
+            else:
+                await super().primitive(kind, **args)
+    ex = Executor(Client(), 854, 480)
+    ex.begin_step(png("black"))
+    result = await ex.execute(parsed("attack_until_broken", max_s=.35), "skills")
+    assert result["outcome"] == "scene_changed" and result["scene_changed"]
+    assert result["block_gone"] is None and result["item_collected"] is None
+    assert len(ex.frames) == 1
+    assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
+
+
 @pytest.mark.parametrize("name,args", [("move", {"direction": "forward", "seconds": 1, "jump": True}), ("attack_until_broken", {"max_s": 1})])
 async def test_action_error_releases_controls(name, args):
     class Executor(ToolExecutor):

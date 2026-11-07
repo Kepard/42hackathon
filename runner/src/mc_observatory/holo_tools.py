@@ -139,9 +139,11 @@ class ToolExecutor:
                     break
                 observed = changes(reference, frame)
                 scene_changed |= observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08
-            return "scene_changed" if scene_changed else "no_change"
         finally:
             await self.button(0, False)
+        settled = changes(reference, await self.observe())
+        scene_changed |= settled["frame_change"] >= .002
+        return "scene_changed" if scene_changed else "no_change"
 
     async def primitive(self, kind, **args):
         self.actions.append({"action": kind, **args})
@@ -198,7 +200,8 @@ class ToolExecutor:
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
-        delta = changes(before, await self.observe())
+        after = self.current_frame if call["name"] == "attack_until_broken" else await self.observe()
+        delta = changes(before, after)
         if call["name"] == "move":
             self.unchanged_moves = self.unchanged_moves + 1 if delta["frame_change"] < .002 else 0
         elif delta["frame_change"] >= .002:

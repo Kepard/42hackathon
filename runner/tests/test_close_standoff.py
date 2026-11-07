@@ -130,3 +130,20 @@ async def test_approach_only_releases_w_it_owns(monkeypatch,error):
     assert ex.held_keys=={"w"}
     assert ("key",87,{"pressed":False}) not in client.events
     await ex.release()
+
+
+@pytest.mark.parametrize("tool",["mine_up","mine_down"])
+async def test_vertical_mining_ignores_saved_horizontal_target(monkeypatch,tool):
+    client,ex=setup(monkeypatch,near=True)
+    ex.seek_target="oak log trunk"
+    targets=[]
+    class StoneVision:
+        async def ask(self,png,target):
+            targets.append(target)
+            return {"box":[.35,.3,.65,.7],"noul":0 if target=="oak log trunk" else .99}
+    ex.jev=StoneVision()
+    result=await ex.execute({"name":tool,"arguments":{"count":1}},"skills")
+    assert result["outcome"] != "not_close"
+    assert targets==["block face under the crosshair"]
+    assert ("mouse",{"button":0,"pressed":True}) in client.events
+    assert client.walks==0

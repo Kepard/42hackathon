@@ -301,7 +301,8 @@ class ToolExecutor:
                     self.close_checks.append({"decision": "not_close", "reason": danger})
                     return False
                 if self.jev is not None:
-                    decision = await asyncio.wait_for(self.jev.ask(frame, self.seek_target), max(.001, deadline - time.monotonic()))
+                    target = self.seek_target if walk else "block face under the crosshair"
+                    decision = await asyncio.wait_for(self.jev.ask(frame, target), max(.001, deadline - time.monotonic()))
                     decision.update(decision="close_check", frame_index=len(self.frames) - 1)
                     box = decision.get("box") if decision.get("noul", 0) >= self.visibility_threshold else None
                 else:

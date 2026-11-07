@@ -91,6 +91,13 @@ class MinecraftRunner:
         self.detector = FailureDetector(failure_window)
         self.tracing = tracing
 
+    @staticmethod
+    def achieved(task, evaluator, state):
+        goal = task["goal"]
+        return (state.get("stats", {}).get("crafted", {}).get(goal["crafted"], 0) > 0 if "crafted" in goal else
+                goal["milestone"] in evaluator.result()["completed"] if "milestone" in goal else
+                evaluator.has_item(goal["item"]))
+
     async def run(self, task_id):
         task = task_definition(task_id)
         self.out.mkdir(parents=True, exist_ok=True)
@@ -113,11 +120,22 @@ class MinecraftRunner:
                 try:
                     state = await self.client.state()
                     snapshot = evaluator.update(state)
+                    final_step = record["step"] + 1 == self.agent.config.max_steps or bool(
+                        {"timeout", "budget_exhausted"} & set(record["failure_tags"]))
+                    if final_step and not self.achieved(task, evaluator, state):
+                        try:
+                            if self.agent.config.timing == "freeze":
+                                await self.client.resume()
+                            await asyncio.sleep(.6)
+                        finally:
+                            if self.agent.config.timing == "freeze":
+                                await self.client.pause()
+                        state = await self.client.state()
+                        snapshot = evaluator.update(state)
+                        record["final_settle_ms"] = 600
                     for rung in snapshot["completed"]:
                         reached.setdefault(rung, time.monotonic() - start)
-                    success = (state.get("stats", {}).get("crafted", {}).get(task["goal"]["crafted"], 0) > 0 if "crafted" in task["goal"] else
-                               task["goal"]["milestone"] in snapshot["completed"] if "milestone" in task["goal"]
-                               else evaluator.has_item(task["goal"]["item"]))
+                    success = self.achieved(task, evaluator, state)
                     success = success and time.monotonic() - start <= task["time_limit_seconds"]
                     record["evaluator"] = snapshot
                     record["failure_tags"] += self.detector.update(record, state, (tuple(snapshot["completed"]), len(evaluator.obtained)))

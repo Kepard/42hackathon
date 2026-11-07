@@ -260,3 +260,20 @@ async def test_runner_enforces_task_deadline(tmp_path, monkeypatch, elapsed, exp
     agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(client))
     summary = await MinecraftRunner(agent, client, tmp_path, tracing=False).run("craft_planks")
     assert summary["success"] is expected
+
+
+@pytest.mark.parametrize("crafted", [True, False])
+async def test_final_step_settles_lagging_stats(tmp_path, crafted):
+    class Client(PixelClient):
+        reads = 0
+        async def reset(self, *args): return {}
+        async def state(self):
+            self.reads += 1
+            return {"stats": {"crafted": {"minecraft:oak_planks": 4}}} if crafted and self.reads > 1 else {}
+
+    client = Client()
+    agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(client))
+    summary = await MinecraftRunner(agent, client, tmp_path, tracing=False).run("craft_planks")
+    assert summary["success"] is crafted and client.reads == 2
+    assert json.loads((tmp_path / "steps.jsonl").read_text())["final_settle_ms"] == 600
+    assert client.events[-1] == "pause"

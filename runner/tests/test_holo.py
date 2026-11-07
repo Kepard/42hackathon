@@ -349,6 +349,26 @@ def test_inventory_slot_moves_do_not_count_as_resource_progress():
     assert tags == ["gui_stuck"]
 
 
+def test_cursor_slot_toggling_cannot_reset_gui_or_identical_action_detection():
+    detector = FailureDetector(window=2)
+    record = {"tool_calls": [{"name":"click_at", "arguments":{"x":500,"y":780}}], "executed_actions":[]}
+    for count in (4,0,4,0,4,0):
+        inventory = [{"id":"minecraft:oak_planks","count":count}] if count else []
+        tags = detector.update(record, {"screen_open":True,"inventory":inventory}, 1)
+    assert set(tags) == {"gui_stuck","repeated_action_loop"}
+    assert detector.inventory_max == {"minecraft:oak_planks":4}
+    assert detector.update(record, {"screen_open":True,"inventory":[{"id":"minecraft:oak_planks","count":8}]}, 1) == []
+
+
+def test_crafted_stat_reset_and_recovery_are_not_new_production():
+    detector = FailureDetector(window=2)
+    record = {"tool_calls":[],"executed_actions":[]}
+    for count in (4,0,4,0,4):
+        tags = detector.update(record, {"screen_open":True,"stats":{"crafted":{"minecraft:oak_planks":count}}}, 1)
+    assert tags == ["gui_stuck"]
+    assert detector.update(record, {"screen_open":True,"stats":{"crafted":{"minecraft:oak_planks":8}}}, 1) == []
+
+
 @pytest.mark.parametrize("reflex", ["none", "jev"])
 def test_private_inventory_progress_and_failure_tags_do_not_change_model_payload(reflex):
     agent = HoloAgent(HoloConfig(reflex=reflex), FakeAPI(PixelClient()))

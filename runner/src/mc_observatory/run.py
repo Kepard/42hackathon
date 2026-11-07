@@ -25,7 +25,8 @@ class FailureDetector:
         self.samples = []
         self.signatures = []
         self.progress = None
-        self.resources = None
+        self.inventory_max = {}
+        self.crafted_max = {}
         self.held = set()
 
     def update(self, record, state, progress):
@@ -34,10 +35,13 @@ class FailureDetector:
         for stack in state.get("inventory") or []:
             item = stack["id"]
             inventory[item] = inventory.get(item, 0) + stack["count"]
-        resources = (tuple(sorted(inventory.items())), tuple(sorted(((state.get("stats") or {}).get("crafted") or {}).items())))
-        advanced = self.progress != progress or self.resources != resources
+        advanced = self.progress != progress
+        for current, maxima in ((inventory, self.inventory_max), (((state.get("stats") or {}).get("crafted") or {}), self.crafted_max)):
+            for item, count in current.items():
+                if count > maxima.get(item, 0):
+                    maxima[item] = count
+                    advanced = True
         self.progress = progress
-        self.resources = resources
         self.gui_steps = self.gui_steps + 1 if state.get("screen_open") and not advanced else 0
         if self.gui_steps >= self.window:
             tags.append("gui_stuck")

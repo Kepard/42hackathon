@@ -92,8 +92,11 @@ def outline_box(png, target_box=None):
     return None
 
 
+CLOSE_FACE_WIDTH = 180 / 480
+
+
 def close_face(box, width, height):
-    return box is not None and box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3] and (box[2] - box[0]) * width >= 180 * height / 480
+    return box is not None and box[0] <= .5 <= box[2] and box[1] <= .5 <= box[3] and (box[2] - box[0]) * width >= CLOSE_FACE_WIDTH * height
 
 
 def large_face_box(png):
@@ -106,8 +109,9 @@ def large_face_box(png):
     ridge = ImageChops.subtract(band.filter(ImageFilter.MaxFilter(5)),band)
     p, light = ridge.load(),band.load()
     columns = [x for x in range(3,im.width-3) if sum(p[x,y]>18 and light[x,y]<130 for y in range(band.height)) >= band.height*.85]
-    left = max((x for x in columns if x < cx-120),default=None)
-    right = min((x for x in columns if x > cx+120),default=None)
+    half_width = CLOSE_FACE_WIDTH * im.height / 2
+    left = max((x for x in columns if x <= cx-half_width),default=None)
+    right = min((x for x in columns if x >= cx+half_width),default=None)
     if left is None or right is None:
         return None
     return (left/im.width,(cy-half)/im.height,right/im.width,(cy+half)/im.height)

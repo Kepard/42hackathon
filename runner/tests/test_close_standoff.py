@@ -147,3 +147,18 @@ async def test_vertical_mining_ignores_saved_horizontal_target(monkeypatch,tool)
     assert targets==["block face under the crosshair"]
     assert ("mouse",{"button":0,"pressed":True}) in client.events
     assert client.walks==0
+
+
+@pytest.mark.parametrize("width",[180,200,239])
+async def test_tall_close_faces_use_same_width_threshold(monkeypatch,width):
+    from PIL import ImageDraw
+    from unittest.mock import AsyncMock
+    from mc_observatory.vision import large_face_box
+    im=Image.new("RGB",(854,480),"gray")
+    ImageDraw.Draw(im).rectangle((427-width//2,40,427+width//2,440),outline="black",width=2)
+    out=io.BytesIO();im.save(out,format="PNG");png=out.getvalue()
+    assert outline_box(png) is None
+    assert close_face(large_face_box(png),854,480)
+    client,ex=setup(monkeypatch);ex.jev=None
+    client.screenshot=AsyncMock(return_value=png)
+    assert await ex.approach_close()

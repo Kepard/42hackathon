@@ -59,6 +59,15 @@ async def test_seek_proportional_aim_is_clamped_and_does_not_walk_off_target(mon
     assert not any(a["action"] == "key" for a in ex.actions)
 
 
+@pytest.mark.parametrize("box", [(.46,.4,.66,.6), (.3,.3,.7,.7)])
+async def test_seek_aligns_before_walking_and_does_not_press_into_close_face(monkeypatch, box):
+    monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
+    ex = executor(FakeJev(box=box))
+    assert await ex.seek("oak log trunk", .01) == "timeout"
+    assert not ex.jev.calls[0]["walking"]
+    assert not any(a["action"] == "key" and a.get("pressed") for a in ex.actions)
+
+
 async def test_unchanged_walking_stops_stuck(monkeypatch):
     monkeypatch.setattr("mc_observatory.holo_tools.outline", lambda _: False)
     ex = executor(FakeJev())

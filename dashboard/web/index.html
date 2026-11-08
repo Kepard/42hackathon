@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Watch HoloSpeed's autonomous Minecraft run. Live video, verified inventory, model decisions, and run controls.">
+  <title>HoloSpeed / Live</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/hls.min.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="HoloSpeed live observer"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>HoloSpeed<span class="brand-live">LIVE</span></span></a>
+    <div class="header-center"><span class="header-game"><span class="tiny-cube" aria-hidden="true"></span>Minecraft 1.21.1</span><span class="header-separator"></span><span>Powered by <b>Holo4</b> + <b>Jev</b></span></div>
+    <div class="header-right"><a class="journal-link" href="#journal-inspector">Run journal</a><a href="https://github.com/Kepard/42hackathon" target="_blank" rel="noopener noreferrer" class="repo-link">GitHub <span aria-hidden="true">↗</span></a></div>
+  </header>
+  <main>
+    <section class="page-heading">
+      <div class="mission-title"><span class="pixel-portal mission-portal" aria-hidden="true"></span><div><div class="eyebrow">AUTONOMOUS SPEEDRUN</div><h1>Next stop. The Nether.</h1></div></div>
+      <div class="session-status"><span id="agent-status" class="status-pill neutral"><i></i>Waiting for agent</span><span id="run-context">No run connected</span></div>
+    </section>
+
+    <div class="live-layout">
+      <div class="feed-column">
+        <section class="feed-panel" aria-labelledby="feed-title">
+          <div class="panel-heading feed-heading"><div><span class="viewfinder" aria-hidden="true"></span><h2 id="feed-title">Live camera</h2><span class="feed-edition">JAVA / FABRIC</span></div><div class="feed-tools"><span id="feed-status" class="feed-status"><i></i><span>Waiting</span></span><button id="fullscreen-button" class="icon-button" aria-label="Show Minecraft feed fullscreen" title="Fullscreen"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></button></div></div>
+          <div id="feed-stage" class="feed-stage">
+            <video id="game-video" muted autoplay playsinline preload="none" aria-label="Live Minecraft video" hidden></video>
+            <button id="play-video" class="video-play" hidden>Play live video</button>
+            <img id="game-frame" alt="Live Minecraft game window" hidden>
+            <div id="feed-empty" class="feed-empty"><div class="empty-world" aria-hidden="true"><span class="pixel-portal"></span><i class="world-block block-one"></i><i class="world-block block-two"></i><i class="world-block block-three"></i></div><h3 id="empty-title">Waiting for the world.</h3><p id="empty-description">The live game appears here when the camera connects.</p><span class="empty-footnote"><i></i>Actual gameplay · No simulated footage</span></div>
+            <div id="frame-notice" class="frame-notice" hidden><i></i><span>Last available frame</span></div><span id="fullscreen-label" class="fullscreen-label">HoloSpeed / Live</span>
+          </div>
+          <div class="feed-footer"><span id="capture-source">Minecraft window</span><span id="video-performance">Waiting for video</span><span id="capture-age">No capture received</span></div>
+        </section>
+        <section class="operator-panel" aria-label="Run controls">
+          <div class="operator-actions">
+            <button id="control-start_new" class="button control-primary" aria-label="Start a new recording in the current Minecraft world" title="New recording in the current world" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>New run</button>
+            <button id="control-resume" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6Z"/></svg>Resume</button>
+            <button id="control-pause" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4v12M13 4v12"/></svg>Pause</button>
+            <button id="control-stop" class="button control-stop" aria-label="Stop and archive the current run" title="Stop and archive" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5h10v10H5Z"/></svg>End run</button>
+          </div>
+          <div class="operator-heading"><span id="operator-status" class="operator-status">View only</span><button id="lock-controls" class="text-button" hidden>Lock</button></div>
+          <p id="control-feedback" role="status" aria-live="polite">Operator access is required to control runs.</p><span class="operator-world-note">New recording · Current world</span>
+        </section>
+        <section class="metrics-strip" aria-label="Run metrics">
+          <div class="timer-metric"><span class="metric-label"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="11" r="6"/><path d="M8 2h4m-2 3v6l3 2"/></svg>Run time</span><strong id="elapsed">—</strong><small>Including pauses</small></div>
+          <div><span class="metric-label">Actions</span><strong id="actions">—</strong><small>Completed</small></div>
+          <div><span class="metric-label">Recoveries</span><strong id="recoveries">—</strong><small>Replanned</small></div>
+          <div><span class="metric-label">API tokens</span><strong id="tokens">—</strong><small id="token-detail">Reported usage</small></div>
+          <div><span class="metric-label">Errors</span><strong id="errors">—</strong><small>Recorded</small></div>
+        </section>
+      </div>
+      <aside class="intent-column" aria-label="Agent intent and live telemetry">
+        <section class="intent-panel mission-panel" aria-label="Live agent activity">
+          <div class="intent-top"><span class="field-label">ON A MISSION</span><span class="intent-crosshair" aria-hidden="true">+</span></div>
+          <h3 id="objective">Ready when the agent is.</h3>
+          <div class="mission-flow-heading"><span id="mission-flow-state">Ready for the next step</span><span class="mission-flow-caption">LIVE ACTIVITY</span></div>
+          <div class="mission-pipeline">
+            <article id="mission-holo" class="mission-node"><div class="mission-node-heading"><span class="mission-provider">H</span><div><strong>Holo4</strong><span>Strategist</span></div><span id="mission-holo-status" class="mission-node-status">Standby</span></div><p id="mission-holo-task" class="mission-task">Chooses the next objective</p><div class="mission-node-meta"><span id="mission-holo-input" class="mission-input">No input recorded</span><span class="mission-latency"><small>Last</small><strong id="holo-latency">—</strong></span></div><div class="mission-decision"><span id="mission-holo-reason-label">AWAITING FIRST CALL</span><p id="mission-holo-rationale">No decision recorded yet.</p></div><p id="mission-holo-error" class="mission-error" hidden></p></article>
+            <article id="mission-jev" class="mission-node"><div class="mission-node-heading"><span class="mission-provider jev">J</span><div><strong>Jev</strong><span>Quick check</span></div><span id="mission-jev-status" class="mission-node-status">Standby</span></div><p id="mission-jev-task" class="mission-task">Checks the next skill</p><div class="mission-node-meta"><span id="mission-jev-input" class="mission-input">No input recorded</span><span class="mission-latency"><small>Last</small><strong id="jev-latency">—</strong></span></div><div class="mission-decision"><span id="mission-jev-reason-label">AWAITING FIRST CALL</span><p id="mission-jev-rationale">No decision recorded yet.</p></div><p id="mission-jev-error" class="mission-error" hidden></p></article>
+            <article id="mission-executor" class="mission-node executor-node"><div class="mission-node-heading"><span class="mission-provider local" aria-hidden="true"></span><div><strong>Local skills</strong><span>Move · mine · craft</span></div><span id="mission-executor-status" class="mission-node-status">Standby</span></div><div class="skill-card"><div class="skill-label"><span class="skill-pulse" aria-hidden="true"></span><span id="skill-state" class="field-label">Current skill</span><span id="skill-count">—</span></div><strong id="skill-name">No active skill recorded</strong><p id="skill-phase">Skill progress appears during a run.</p><progress id="executor-progress" max="1" aria-label="Local skill progress" hidden></progress></div></article>
+          </div>
+          <details class="reasoning-details"><summary>Decision details <span aria-hidden="true">+</span></summary><div><span class="field-label">STRATEGY</span><p id="strategy">The current plan will appear once a run begins.</p><span class="field-label">EXPECTED CHANGE</span><p id="expected-effect">Waiting for a decision.</p><a class="mission-evidence-link" href="#journal-inspector">Inspect the recorded events ↗</a></div></details>
+        </section>
+        <section class="inputs-panel"><div class="compact-heading"><h2>Live inputs</h2><span id="input-caption">Idle</span></div><div class="input-display"><div class="movement-keys"><div><kbd data-key="forward">W</kbd></div><div><kbd data-key="left">A</kbd><kbd data-key="back">S</kbd><kbd data-key="right">D</kbd></div></div><div class="modifier-keys"><kbd data-key="jump">Space</kbd><kbd data-key="sneak">Shift</kbd><kbd data-key="sprint">Ctrl</kbd></div><div class="mouse-keys"><kbd data-key="attack">LMB</kbd><kbd data-key="use">RMB</kbd></div></div><div class="input-footnote"><span id="extra-input">No held controls</span><span id="look-input">No camera input</span></div></section>
+        <button id="devin-open" class="devin-launch"><span class="devin-mark" aria-hidden="true">D</span><span><strong>Devin engineering</strong><small id="devin-launch-status">Find failures. Build better runs.</small></span><span class="devin-launch-arrow" aria-hidden="true">↗</span></button>
+        <div class="sponsor-note"><span>H Company</span><i>×</i><span>TypeSafe AI</span></div>
+      </aside>
+    </div>
+
+    <section class="milestone-panel" aria-labelledby="progression-title">
+      <div class="compact-heading"><h2 id="progression-title">The route</h2><span id="milestone-count">0 / 11 milestones</span></div>
+      <div class="preparation-strip"><span class="route-group-label">PREPARATION</span><ol class="milestones preparation-milestones" aria-label="Preparation checkpoints">
+        <li data-milestone="wood"><span class="milestone-dot item-log" aria-hidden="true"></span><div><strong>Wood</strong><span>Not recorded</span></div></li>
+        <li data-milestone="crafting_table"><span class="milestone-dot item-table" aria-hidden="true"></span><div><strong>Crafting table</strong><span>Not recorded</span></div></li>
+        <li data-milestone="wooden_pickaxe"><span class="milestone-dot item-pickaxe" aria-hidden="true"></span><div><strong>Wooden pickaxe</strong><span>Not recorded</span></div></li>
+        <li data-milestone="stone_tools"><span class="milestone-dot item-stone-pickaxe" aria-hidden="true"></span><div><strong>Stone tools</strong><span>Not recorded</span></div></li>
+      </ol></div>
+      <div class="portal-route-heading"><span class="route-group-label">NETHER ROUTE</span><span>Locate. Build. Cross.</span></div>
+      <ol id="milestones" class="milestones portal-milestones" aria-label="Nether entry checkpoints">
+        <li data-milestone="portal_located"><span class="milestone-dot item-locate" aria-hidden="true"></span><div><strong>Locate portal</strong><span>Not recorded</span></div></li>
+        <li data-milestone="chest_looted"><span class="milestone-dot item-chest" aria-hidden="true"></span><div><strong>Loot chest</strong><span>Not recorded</span></div></li>
+        <li data-milestone="obsidian_acquired"><span class="milestone-dot item-obsidian" aria-hidden="true"></span><div><strong>Obsidian</strong><span>Not recorded</span></div></li>
+        <li data-milestone="ignition_acquired"><span class="milestone-dot item-fire" aria-hidden="true"></span><div><strong>Ignition</strong><span>Not recorded</span></div></li>
+        <li data-milestone="portal_repaired"><span class="milestone-dot item-frame" aria-hidden="true"></span><div><strong>Repair frame</strong><span>Not recorded</span></div></li>
+        <li data-milestone="portal_lit"><span class="milestone-dot item-lit-portal" aria-hidden="true"></span><div><strong>Light portal</strong><span>Not recorded</span></div></li>
+        <li data-milestone="nether"><span class="milestone-dot item-portal" aria-hidden="true"></span><div><strong>Enter Nether</strong><span>Not recorded</span></div><b class="goal-tag">GOAL</b></li>
+      </ol>
+    </section>
+
+    <section class="resources-panel" aria-labelledby="resources-title">
+      <div class="resource-heading"><div class="compact-heading"><h2 id="resources-title">Inventory</h2><span id="resource-stamp">No state sample</span></div><dl class="player-stats"><div><dt><svg class="heart-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2 4h5v2h2V4h5v2h2v6h-2v2h-2v2h-2v2H8v-2H6v-2H4v-2H2Z"/></svg><span class="visually-hidden">Health</span></dt><dd id="player-health">—</dd></div><div><dt><svg class="food-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M9 2h6v2h2v6h-2v2h-4v2H9v2H7v2H3v-2H1v-4h2v-2h4V8h2Z"/><path d="M3 12h2v2h2v2H5v-2H3Z" fill="#f7dfbc"/></svg><span class="visually-hidden">Hunger</span></dt><dd id="player-hunger">—</dd></div></dl></div>
+      <div id="inventory-items" class="inventory-items" aria-label="Recorded inventory"></div>
+      <div class="inventory-footer"><p id="inventory-note" class="inventory-note">Inventory not recorded for this run.</p><span class="position-stat"><span class="position-crosshair" aria-hidden="true">⌖</span><span class="visually-hidden">Position X, Y, Z: </span><span id="player-position">—</span></span></div>
+    </section>
+
+    <details id="journal-inspector" class="journal-section">
+      <summary class="journal-disclosure"><span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12v14H4ZM7 7h6M7 10h6M7 13h3"/></svg><strong>Run journal</strong><small>Decisions, evidence &amp; saved runs</small></span><span class="disclosure-action">Open inspector <i aria-hidden="true"></i></span></summary>
+      <div class="journal-body">
+        <div class="journal-heading"><div><span class="eyebrow">THE COMPLETE PICTURE</span><h2 id="journal-title">Every decision. Every outcome.</h2></div><div class="journal-heading-actions"><button id="devin-open-journal" class="button devin-journal-button"><span class="devin-mini-mark" aria-hidden="true">D</span>Ask Devin</button><button id="download-journal" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Download JSON</button></div></div>
+        <div class="journal-layout"><aside class="run-sidebar" aria-labelledby="runs-title"><div class="runs-heading"><h3 id="runs-title">Runs <span id="runs-count">0</span></h3><button id="follow-live" class="text-button" aria-pressed="true">Follow live</button></div><div id="runs-list" class="runs-list"><p class="empty-list">Saved runs will appear here.</p></div></aside><div class="journal-content"><div class="journal-run-heading"><div><span id="journal-mode" class="small-tag">NO RUN SELECTED</span><h3 id="journal-run-title">Waiting for a run</h3></div><span id="journal-load-status" class="journal-load-status" aria-live="polite">No events yet</span></div><div class="journal-filters"><label class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="event-search" type="search" placeholder="Search events…" aria-label="Search journal events"></label><label class="type-filter"><span class="visually-hidden">Event type</span><select id="event-type"><option value="all">All event types</option></select></label><span id="filtered-count" class="filtered-count">0 events</span></div><div id="journal-alert" class="journal-alert" role="status" hidden></div><div id="event-list" class="event-list"><div class="journal-empty"><span class="journal-empty-mark" aria-hidden="true">[ ]</span><h4>Nothing to inspect yet.</h4><p>Choose a saved run or follow the current session.</p></div></div><button id="load-more" class="load-more" hidden>Show more events</button><div class="journal-footer"><span>Newest first · Expand for details</span><span id="journal-scope">Read-only evidence</span></div></div></div>
+      </div>
+    </details>
+    <footer class="site-footer"><span>HoloSpeed <span class="footer-divider">/</span> Intelligence in the wild.</span><span>Observe. Act. Verify.</span></footer>
+  </main>
+  <dialog id="devin-dialog" class="devin-dialog" aria-labelledby="devin-title">
+    <div class="devin-dialog-header"><span class="devin-mark" aria-hidden="true">D</span><div><span class="eyebrow">AUTOMATED ENGINEERING</span><h2 id="devin-title">Make the next run better.</h2></div><button id="devin-close" class="icon-button" aria-label="Close Devin investigator"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div>
+    <div class="devin-dialog-body">
+      <div class="devin-workflow"><span><i aria-hidden="true">⌕</i>Find the failure</span><b aria-hidden="true">→</b><span><i aria-hidden="true">[ ]</i>Generate tests</span><b aria-hidden="true">→</b><span><i aria-hidden="true">↗</i>Propose a fix</span></div>
+      <div class="devin-run-picker"><label for="devin-run">Investigate a recorded run</label><select id="devin-run"><option value="">No saved runs yet</option></select><button id="devin-prepare" class="button control-primary" disabled>Prepare brief</button></div>
+      <p id="devin-feedback" class="devin-feedback" role="status" aria-live="polite">Choose a run to prepare its redacted investigation brief.</p>
+      <section id="devin-review" class="devin-review" hidden><div class="devin-review-heading"><h3>Review what will be sent</h3><span class="devin-budget">Maximum 2 ACU</span></div><p>Only this redacted brief is submitted. Screenshots, credentials, and raw provider payloads are excluded.</p><details class="devin-prompt-details" open><summary>Exact investigation brief</summary><pre id="devin-prompt"></pre></details><span id="devin-digest" class="devin-digest"></span><div id="devin-confirmation"><label class="devin-confirm-label"><input id="devin-confirm" type="checkbox"><span>I reviewed this brief. Create one Devin investigation with a maximum of 2 ACU.</span></label><button id="devin-submit" class="button control-primary" disabled>Create investigation</button><span class="devin-submission-note">Starts a paid API session. No automatic resubmission.</span></div></section>
+      <section class="devin-session"><div><span class="field-label">RECORDED INVESTIGATION</span><h3 id="devin-session-status">No investigation yet</h3><p id="devin-session-detail">No session has been recorded for this run.</p></div><a id="devin-session-link" class="button secondary" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in Devin ↗</a><p id="devin-session-error" class="devin-session-error" hidden></p></section>
+      <section class="devin-findings"><div class="compact-heading"><h3>Findings &amp; proposals</h3><span>Review before applying</span></div><p id="devin-findings-summary">Devin’s findings will appear when the session reports them.</p><div class="devin-findings-grid"><article><h4><span aria-hidden="true">⌕</span>Likely causes</h4><ul id="devin-causes"><li class="finding-empty">Not reported yet</li></ul></article><article><h4><span aria-hidden="true">[ ]</span>Proposed tests</h4><ul id="devin-tests"><li class="finding-empty">Not reported yet</li></ul></article><article><h4><span aria-hidden="true">↗</span>Suggested fixes</h4><ul id="devin-fixes"><li class="finding-empty">Not reported yet</li></ul></article><article><h4><span aria-hidden="true">?</span>Missing evidence</h4><ul id="devin-missing"><li class="finding-empty">Not reported yet</li></ul></article></div><div id="devin-patches-section" class="devin-patches-section" hidden><h4>Proposed test patches</h4><div id="devin-patches"></div></div></section>
+    </div>
+  </dialog>
+  <div id="notification" class="notification" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

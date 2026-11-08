@@ -1,0 +1,4 @@
+hls.js 1.6.13
+Source: https://registry.npmjs.org/hls.js/-/hls.js-1.6.13.tgz
+Package SHA-1: fcf2823f17aaf9127b9011ef135cae5d2520ab75
+License: Apache-2.0; see HLS-LICENSE.txt

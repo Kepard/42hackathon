@@ -12,7 +12,7 @@ from pathlib import Path
 import aiohttp
 
 from .holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas, observation_prefix
-from .vision import center_crop, hotbar_rows_crop
+from .vision import center_crop, hotbar_rows_crop, container_gui_visible
 
 try:
     from cua_bench.agents.base import BaseAgent
@@ -235,6 +235,7 @@ reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe bef
 
 ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
 1 log: log icon/count. Full ladder: convert ALL4 logs to16 planks BEFORE table (4 planks), sticks and pickaxe; logs cannot substitute for planks.
+Prefer craft(item,count) in an OPEN inventory/table; atomic search/select/take, pixels-only.
 Craft: use search_recipe(query) to ensure craftable-only filter (GREEN check, not red X) and type the item name FIRST. Blank results mean check item name/grid or missing ingredients. Then click the matching filtered result; unsearched recipe clicks are blocked.
 Observe the output slot: shift-click ONLY if visibly nonempty AND NOT a red-tinted ghost. Red ghost ingredients/output are NOT owned/craftable items. If empty/red, obtain missing ingredients first; never repeat empty-output clicks.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
@@ -376,6 +377,9 @@ class HoloAgent(BaseAgent):
                                    "temperature": config.temperature, "max_tokens": 4096}
                         if config.reasoning_effort is not None:
                             payload["reasoning_effort"] = config.reasoning_effort
+                        if config.model == "holo4-27b" and container_gui_visible(png):
+                            payload["reasoning_effort"] = "low"
+                        record["request_reasoning_effort"] = payload.get("reasoning_effort")
                         if config.seed is not None:
                             payload["seed"] = config.seed
                         record["request_bytes"] = len(json.dumps(payload).encode("utf-8"))

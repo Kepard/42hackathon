@@ -1,17 +1,17 @@
 """Install the wrapper-pinned distribution for CI, checking its SHA256 first.
 
-The public release GET redirect intermittently returns 504 before Gradle starts.
-Resolve the official redirect with HEAD, then fetch its asset with bounded retries.
+The release-page redirect returns 504 on some CI networks, including HEAD requests.
+Use Gradle's official GitHub release-assets API instead of that web frontend.
 The wrapper remains the source of both the version and the required checksum.
 """
 
 import hashlib
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
-import time
 import zipfile
 from pathlib import Path
 
@@ -27,7 +27,6 @@ def main() -> None:
     if not match or not re.fullmatch(r"[a-f0-9]{64}", checksum):
         raise ValueError("A stable official Gradle URL and pinned SHA256 are required")
     version = match.group(1)
-    url = url.replace("https://services.gradle.org/", "https://downloads.gradle.org/")
     destination = Path(sys.argv[1]).resolve()
     curl = [
         "curl",
@@ -38,48 +37,48 @@ def main() -> None:
         "=https",
         "--proto-redir",
         "=https",
+        "--fail",
+        "--retry",
+        "2",
+        "--retry-delay",
+        "2",
     ]
     with tempfile.TemporaryDirectory(prefix="holospeed-gradle-download-") as temporary:
         archive = Path(temporary) / "gradle.zip"
-        resolved = None
-        for attempt in range(4):
-            probe = subprocess.run(
-                curl
-                + [
-                    "--head",
-                    "--max-time",
-                    "60",
-                    "--output",
-                    os.devnull,
-                    "--write-out",
-                    "%{http_code}\n%{url_effective}",
-                    url,
-                ],
-                check=False,
-                text=True,
-                capture_output=True,
-            )
-            status, _, candidate = probe.stdout.partition("\n")
-            if probe.returncode == 0 and status == "200" and candidate.startswith("https://"):
-                resolved = candidate
-                break
-            if attempt < 3:
-                time.sleep(2)
-        if resolved is None:
-            raise OSError("Official Gradle download was unavailable after four attempts")
+        metadata = subprocess.check_output(
+            curl
+            + [
+                "--max-time",
+                "30",
+                "--header",
+                "Accept: application/vnd.github+json",
+                f"https://api.github.com/repos/gradle/gradle-distributions/releases/tags/v{version}",
+            ],
+            text=True,
+        )
+        assets = json.loads(metadata).get("assets", [])
+        asset = next(
+            (item for item in assets if item.get("name") == f"gradle-{version}-bin.zip"), None
+        )
+        if not isinstance(asset, dict) or not re.fullmatch(
+            r"https://api\.github\.com/repos/gradle/gradle-distributions/releases/assets/[0-9]+",
+            asset.get("url", ""),
+        ):
+            raise ValueError("Official release does not contain the wrapper-pinned Gradle asset")
+        print(
+            f"Downloading official Gradle {version} asset {asset['id']} through the release API",
+            flush=True,
+        )
         subprocess.run(
             curl
             + [
-                "--fail",
-                "--retry",
-                "3",
-                "--retry-delay",
-                "2",
+                "--header",
+                "Accept: application/octet-stream",
                 "--max-time",
                 "180",
                 "--output",
                 str(archive),
-                resolved,
+                asset["url"],
             ],
             check=True,
         )
@@ -101,5 +100,5 @@ if __name__ == "__main__":
     try:
         main()
     except (KeyError, ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
-        print(f"Gradle bootstrap failed: {type(error).__name__}", file=sys.stderr)
+        print(f"Gradle bootstrap failed: {type(error).__name__}: {error}", file=sys.stderr)
         sys.exit(1)

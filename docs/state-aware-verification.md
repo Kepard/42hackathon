@@ -91,11 +91,22 @@ required obsidian and ignition item; those skipped checkpoints remain unearned.
 
 ## Current automated verification
 
-The integrated Python suite passed **499 tests**, Ruff lint/format checks passed,
-and the Fabric build/remap passed **64 tests**. The dashboard passed **69 tests**
+The integrated Python suite passed **529 tests**, Ruff lint/format checks passed,
+and the Fabric build/remap passed **64 tests**. The dashboard passed **86 tests**
 and its Worker bundle built successfully. Production HTTP checks verified public
 viewing, protected commands, detailed archives, and current video playlists.
 Six downloaded one-second hosted video segments decoded to **360 H.264 frames**
 at **960×540, 60 FPS**. Their playlist capture age at publication was approximately
 three seconds. Delivered browser FPS is measured by the UI, not inferred from
 that encoder measurement.
+
+The hosted mission panel follows real inference request IDs and terminal events,
+including cancellation and local fallback. Holo4 proposals now receive a fresh-state
+Jev check before another local eligibility check and dispatch. The trial above
+predates this handoff; its model evidence is Holo4-only.
+
+The deployed Devin workflow prepared a 19,443-byte private brief through the
+operator command queue with an exact SHA-256 match and fixed 2-ACU cap.
+Unauthenticated command inspection returned 401. The public historical report
+contains two proposed test patches and no prompt. This check created no new
+paid investigation; the existing session is suspended for inactivity.

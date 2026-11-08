@@ -74,6 +74,17 @@ def test_portal_hint_distinguishes_crying_blocks_and_requires_safe_ground():
     assert len(PRIMER.split()) <= 550
 
 
+def test_nether_route_requires_stone_iron_and_hostile_kill_before_portal():
+    from mc_observatory.holo import PRIMER
+    from mc_observatory.run import task_definition
+    goal = task_definition("nether_dev")["description"]
+    assert "ONLY AFTER iron gear and a hostile mob kill, visit ruined portal" in goal
+    assert "BEFORE digging for iron" not in goal
+    assert "not mandatory if loot" not in goal
+    assert goal.index("mine at least14 cobblestone") < goal.index("Mine/smelt at least7 iron") < goal.index("Find a hostile") < goal.index("visit ruined portal")
+    assert PRIMER.index("4 cobblestone") < PRIMER.index("8 ingot") < PRIMER.index("9 hostile kill") < PRIMER.index("12 portal") < PRIMER.index("Portal: purple tears")
+
+
 @pytest.mark.parametrize("bad", [call("unknown"), call(seconds=-1), call(seconds=True), call(seconds=float("nan")),
                                   call(seconds=1, extra=1), {"function": {"name": "wait", "arguments": "{"}},
                                   {"function": {"name": "wait", "arguments": "null"}}, call("select_hotbar", n=1.2),

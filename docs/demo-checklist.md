@@ -66,9 +66,9 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
 - [ ] Confirm live HLS playback, current capture age, and measured browser playback
   FPS. The encoder target does not establish 60 distinct game frames per second.
   Check the one-FPS JPEG fallback if video is unavailable.
-- [ ] Share the public viewer URL separately from the private operator link.
-  Verify that New recorded run, Resume, Pause, and Stop & archive require operator
-  access. A new recorded run uses the current Minecraft world; it does not reset it.
+- [ ] Share the public URL separately from the private operator link. Verify that
+  **New run** works without a password and loads a fresh prepared-world copy.
+  Resume, Pause, End run, voice, and Devin actions still require operator access.
 - [ ] Check command results and the 30-second delivery deadline. Refocus Minecraft
   when guarded rearming reports an unavailable or unfocused game.
 - [ ] Keep complete local journals, frames, and compressed state assets. Hosted
@@ -146,7 +146,7 @@ must be checked independently.
 - [ ] Check that **On a mission** shows actual Holo4 and Jev request lifecycles,
   input sources, recorded decisions, and latency. A completed call must not remain
   animated as live inference. Local skill progress is a separate stage.
-- [ ] Unlock operator access before using the microphone or typed commands.
+- [ ] Open the private operator link before using the microphone or typed commands.
   Start the microphone with an explicit click; check partial captions and final
   transcripts separately. Partial captions must never execute an action.
 - [ ] Test a spoken pause/stop, then a bounded resume only in a ready world.

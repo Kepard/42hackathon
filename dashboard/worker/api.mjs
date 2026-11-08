@@ -1,14 +1,10 @@
 import {handleVideo} from "./video.mjs";
 
-// Public observer with separate publisher and operator capabilities. Commands
-// are short-lived requests; only the local publisher can execute/acknowledge them.
+// Public viewing and New run requests; other actions require an operator
+// capability. Only the local publisher can execute/acknowledge commands.
 const STATE_KEY = "observer/state.json";
 const COMMAND_QUEUE_KEY = "observer/commands/current.json";
 const COMMAND_TTL = 30_000;
-const LOGIN_ATTEMPTS_KEY = "observer/operator/attempts.json";
-const LOGIN_WINDOW_MS = 60_000;
-const LOGIN_CLIENT_LIMIT = 8;
-const LOGIN_GLOBAL_LIMIT = 60;
 const VOICE_CREATE_KEY = "observer/voice/current.json";
 const COMMAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMMAND_ACTIONS = new Set(["start_new", "resume", "pause", "stop", "prepare_investigation", "investigate", "voice"]);
@@ -314,48 +310,6 @@ async function commandBody(request, maximum = 4096) {
   return parseJson(new TextDecoder().decode(raw));
 }
 
-async function admitLogin(request, env) {
-  // Cloudflare supplies this header. Never trust an arbitrary forwarded-for
-  // chain; deployments without a trusted client address share the stricter cap.
-  const address = (request.headers.get("CF-Connecting-IP") || "unknown").slice(0, 128);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${env.CONTROL_TOKEN}\n${address}`));
-  const client = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  // One bounded object, at most 60 hashed clients. A failed conditional write
-  // never grants an uncounted password guess, even across Worker instances.
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const stored = await env.BUCKET.get(LOGIN_ATTEMPTS_KEY);
-    const previous = stored ? await stored.json() : null;
-    const now = Date.now();
-    const current = previous && now >= previous.started_at && now < previous.started_at + LOGIN_WINDOW_MS ? previous : {started_at: now, total: 0, clients: {}};
-    const retryAfter = String(Math.max(1, Math.ceil((current.started_at + LOGIN_WINDOW_MS - now) / 1000)));
-    if (current.total >= LOGIN_GLOBAL_LIMIT || (current.clients[client] || 0) >= LOGIN_CLIENT_LIMIT) throw new ApiError(429, "Too many login attempts. Try again shortly.", {"Retry-After": retryAfter});
-    const next = {started_at: current.started_at, total: current.total + 1, clients: {...current.clients, [client]: (current.clients[client] || 0) + 1}};
-    const committed = await env.BUCKET.put(LOGIN_ATTEMPTS_KEY, JSON.stringify(next), {
-      httpMetadata: {contentType: "application/json", cacheControl: "no-store"},
-      onlyIf: stored ? {etagMatches: stored.etag} : {etagDoesNotMatch: "*"},
-    });
-    if (committed) return;
-  }
-  throw new ApiError(429, "Login is busy. Try again shortly.", {"Retry-After": "2"});
-}
-
-async function operatorLogin(request, env) {
-  const origin = new URL(request.url).origin;
-  const site = request.headers.get("Sec-Fetch-Site");
-  if (request.headers.get("Origin") !== origin || (site && site !== "same-origin")) throw new ApiError(403, "Operator login requires a same-origin request");
-  if (typeof env.OPERATOR_PASSWORD_SHA256 !== "string" || !DIGEST_HASH.test(env.OPERATOR_PASSWORD_SHA256) || typeof env.CONTROL_TOKEN !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(env.CONTROL_TOKEN) || env.CONTROL_TOKEN === env.INGEST_TOKEN) throw new ApiError(503, "Operator login is not configured");
-  const body = await commandBody(request, 2048);
-  knownFields(body, new Set(["password"]), "login");
-  if (typeof body.password !== "string" || !body.password.length || new TextEncoder().encode(body.password).byteLength > 1024) throw new ApiError(400, "Invalid password input");
-  await admitLogin(request, env);
-  const actual = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body.password)));
-  const expected = new Uint8Array(env.OPERATOR_PASSWORD_SHA256.match(/../g).map((byte) => parseInt(byte, 16)));
-  let difference = 0;
-  for (let index = 0; index < 32; index++) difference |= actual[index] ^ expected[index];
-  if (difference !== 0) throw new ApiError(401, "Incorrect operator password");
-  return json({token: env.CONTROL_TOKEN});
-}
-
 async function voiceSession(request, env) {
   await authorized(request, env, true);
   const site = request.headers.get("Sec-Fetch-Site");
@@ -426,9 +380,12 @@ async function saveCommand(env, command, item) {
   });
 }
 async function createCommand(request, env) {
-  await authorized(request, env, true);
   const body = await commandBody(request);
   object(body, "command");
+  if (body.action === "start_new") {
+    const site = request.headers.get("Sec-Fetch-Site");
+    if (request.headers.get("Origin") !== new URL(request.url).origin || (site && site !== "same-origin")) throw new ApiError(403, "New run requires a same-origin request");
+  } else await authorized(request, env, true);
   const id = commandId(body.id);
   if (!COMMAND_ACTIONS.has(body.action)) throw new ApiError(400, "Invalid command action");
   const parameters = commandParameters(body, env);
@@ -465,9 +422,9 @@ async function nextCommand(request, env) {
   return json({command: current.status === "pending" ? current : null});
 }
 async function readCommand(request, env, id) {
-  await authorized(request, env, true);
   const {command} = await commandRecord(env, commandId(id));
   if (!command) throw new ApiError(404, "Command is unavailable");
+  if (command.action !== "start_new") await authorized(request, env, true);
   return json({command: commandStatus(command)});
 }
 async function commandResult(request, env, id) {
@@ -625,15 +582,16 @@ async function run(request, env, id) {
 
 export async function handleApi(request, env) {
   const path = new URL(request.url).pathname;
+  // Retired completely: old passwords/configuration never issue a capability.
+  if (path === "/api/operator/login") return json({error: "Not found"}, 404);
   if (path.startsWith("/api/live/")) return handleVideo(request, env);
   const runMatch = path.match(/^\/api\/runs\/([^/]+)$/);
   const commandMatch = path.match(/^\/api\/commands\/([^/]+)(\/result)?$/);
-  if (!["/api/state", "/api/capture", "/api/frame.jpg", "/api/ingest", "/api/commands", "/api/commands/next", "/api/operator/login", "/api/voice/session"].includes(path) && !runMatch && !commandMatch) return null;
-  const allowed = ["/api/ingest", "/api/commands", "/api/operator/login", "/api/voice/session"].includes(path) || commandMatch?.[2] ? ["POST"] : runMatch ? ["GET", "POST"] : ["GET"];
+  if (!["/api/state", "/api/capture", "/api/frame.jpg", "/api/ingest", "/api/commands", "/api/commands/next", "/api/voice/session"].includes(path) && !runMatch && !commandMatch) return null;
+  const allowed = ["/api/ingest", "/api/commands", "/api/voice/session"].includes(path) || commandMatch?.[2] ? ["POST"] : runMatch ? ["GET", "POST"] : ["GET"];
   if (!allowed.includes(request.method)) return json({ error: "Method not allowed" }, 405, { Allow: allowed.join(", ") });
   try {
     if (!env.BUCKET) throw new ApiError(503, "Observer storage is unavailable");
-    if (path === "/api/operator/login") return await operatorLogin(request, env);
     if (path === "/api/voice/session") return await voiceSession(request, env);
     if (path === "/api/state") return json(publicState((await storedState(env.BUCKET)).value));
     if (path === "/api/capture") {

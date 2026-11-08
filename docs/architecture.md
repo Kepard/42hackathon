@@ -148,7 +148,8 @@ run independently. HLS is a rolling live buffer rather than a full video archive
 The mission panel animates actual fresh Holo4/Jev requests and local execution,
 then retains completed decisions without implying continuous inference.
 
-Public viewers cannot control the game. Private operator commands have a
+Anyone can start a fresh run through public New run. Pause, Resume, End run,
+voice, and Devin actions require the private operator capability. Commands have a
 30-second dispatch window and durable claims against accidental replay.
 New run saves and unloads the previous world, copies the verified pristine
 template into a unique save, and loads it through Minecraft's normal client API.

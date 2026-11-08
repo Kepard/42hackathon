@@ -1,8 +1,9 @@
 # Gladia voice steering
 
-The live dashboard has a microphone button beside the game feed. Unlock operator
-access at the bottom of the page, click **Talk to the agent**, and grant microphone
-permission. Partial transcription appears as a caption; only finalized utterances
+Open the dashboard through a private `#control=<CONTROL_TOKEN>` operator link,
+click **Speak** in **Talk to HoloSpeed** beside the game feed, and grant microphone
+permission. Public New run access does not enable voice controls. Partial
+transcription appears as a caption; only finalized utterances
 enter the authenticated command queue. The text field uses the same command path
 when a microphone is unavailable.
 
@@ -32,7 +33,7 @@ request from completed execution.
 Set `GLADIA_API_KEY` as a **secret** in the dashboard's Sites runtime environment,
 then deploy a saved version to apply that environment revision. The local
 publisher still needs its existing Sites and ingest capabilities; the browser
-uses the separate operator capability after password login or a private link.
+uses the separate operator capability from the private link.
 No Gladia API credential is embedded in browser assets or returned to visitors.
 The optional local `.env` entry is used only for separate integration checks.
 

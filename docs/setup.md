@@ -153,11 +153,11 @@ controller. H.264/fMP4 HLS targets 60 FPS with this command; omitting
 to one FPS. Target capture rate, measured playback FPS, and Minecraft render
 rate are distinct. Only the named Minecraft window is captured.
 
-Unlock **Operator access** with the configured password at the page footer to
-enable **New run**, **Resume**, **Pause**, and **End run**. A private
-`#control=<CONTROL_TOKEN>` link also works; keep it separate from the public
-viewing URL and publisher credentials. **Lock controls** removes access from
-the current tab.
+Anyone can choose **New run** without a password or token. **Resume**, **Pause**,
+**End run**, voice steering, and Devin investigations require a private
+`#control=<CONTROL_TOKEN>` operator link. Keep that link separate from the public
+URL and publisher credentials. **Lock controls** removes operator access from
+the current tab; public New run remains available.
 
 **New run** saves the previous world, copies the prepared empty-inventory
 template into a new save, loads it, verifies the starting state, and starts the

@@ -1,0 +1,5 @@
+{
+  "key.holospeed.emergency": "Stop HoloSpeed agent",
+  "key.holospeed.start": "Start / resume HoloSpeed agent",
+  "category.holospeed": "HoloSpeed"
+}

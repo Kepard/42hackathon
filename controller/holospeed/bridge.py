@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from typing import Any
+
+from fastapi import WebSocket
+
+from .game_state import GameState
+from .models import Action, Observation
+
+
+class BridgeError(RuntimeError):
+    pass
+
+
+class GameBridge:
+    def __init__(self) -> None:
+        self.socket: WebSocket | None = None
+        self.pending: dict[str, asyncio.Future] = {}
+        self.lock = asyncio.Lock()
+        self.frames: dict[str, float] = {}
+        self.ready = False
+        self.journal = None
+
+    @property
+    def connected(self) -> bool:
+        return self.socket is not None and self.ready
+
+    async def attach(self, socket: WebSocket) -> bool:
+        async with self.lock:
+            if self.socket is not None:
+                await socket.close(code=1008, reason="A Minecraft client is already connected")
+                return False
+            await socket.accept()
+            self.socket = socket
+            return True
+
+    async def detach(self, socket: WebSocket) -> None:
+        if self.socket is not socket:
+            return
+        self.socket = None
+        self.ready = False
+        self.frames.clear()
+        for future in list(self.pending.values()):
+            if not future.done():
+                future.set_exception(BridgeError("Minecraft disconnected"))
+        self.pending.clear()
+
+    async def receive(self, message: dict[str, Any]) -> None:
+        if message.get("type") in {"ack", "skill_ack"} and self.journal:
+            self.journal("bridge_ack", message)
+        if message.get("type") == "hello":
+            if message.get("protocol") != 1 or message.get("minecraft") != "1.21.1":
+                raise BridgeError("This controller requires protocol 1 / Minecraft 1.21.1")
+            self.ready = True
+            return
+        future = self.pending.get(message.get("id", ""))
+        if future and not future.done():
+            future.set_result(message)
+
+    async def send(self, message: dict[str, Any]) -> None:
+        if self.socket is None:
+            raise BridgeError("Minecraft is not connected")
+        async with self.lock:
+            if message.get("type") != "status" and self.journal:
+                self.journal("bridge_command", message)
+            await self.socket.send_json(message)
+
+    async def request(self, message: dict[str, Any], timeout: float) -> dict[str, Any]:
+        if not self.connected:
+            raise BridgeError("Minecraft has not completed the bridge handshake")
+        if self.pending:
+            raise BridgeError("Only one game request may be in flight")
+        message["id"] = str(uuid.uuid4())
+        future = asyncio.get_running_loop().create_future()
+        self.pending[message["id"]] = future
+        try:
+            await self.send(message)
+            return await asyncio.wait_for(future, timeout)
+        except TimeoutError as error:
+            await self.stop("bridge response timed out")
+            raise BridgeError("Minecraft response timed out; controls released") from error
+        finally:
+            self.pending.pop(message["id"], None)
+
+    async def observe(self) -> Observation:
+        message = await self.request({"type": "observe"}, timeout=8)
+        if message.get("type") != "observation":
+            raise BridgeError("Unexpected observation response")
+        observation = Observation.model_validate(message)
+        self.frames = {observation.frame_id: time.monotonic()}
+        return observation
+
+    async def execute(self, action: Action, frame_id: str, ttl_ms: int) -> dict[str, Any]:
+        captured = self.frames.get(frame_id)
+        if captured is None or (time.monotonic() - captured) * 1000 >= ttl_ms:
+            raise BridgeError("Action rejected: observation expired")
+        message = await self.request(
+            {
+                "type": "action",
+                "frame_id": frame_id,
+                "ttl_ms": ttl_ms,
+                "action": action.model_dump(),
+            },
+            timeout=action.duration_ticks / 20 + 4,
+        )
+        if message.get("type") != "ack" or message.get("status") not in {
+            "completed",
+            "rejected",
+            "cancelled",
+        }:
+            raise BridgeError("Invalid action acknowledgment")
+        return message
+
+    async def game_state(self) -> GameState:
+        message = await self.request({"type": "state"}, timeout=5)
+        if message.get("type") != "game_state":
+            raise BridgeError("The Fabric mod does not support structured game state")
+        state = GameState.model_validate(message)
+        if not state.is_fresh(time.time() * 1000):
+            raise BridgeError("Structured game state is stale")
+        return state
+
+    async def arm(self) -> None:
+        """Explicit operator start can rearm F8 and resume the pause menu."""
+        message = await self.request({"type": "arm"}, timeout=5)
+        if message.get("type") != "arm_ack" or message.get("status") != "ready":
+            raise BridgeError(str(message.get("reason") or "Minecraft cannot be armed"))
+
+    async def start_skill(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        if candidate.get("skill") not in {"mine", "craft", "portal"}:
+            raise BridgeError("Unsupported normal-mechanics skill")
+        packet = {key: candidate[key] for key in ("skill", "item", "target_count", "max_ticks")}
+        if type(packet["target_count"]) is not int or not 1 <= packet["target_count"] <= 64:
+            raise BridgeError("Invalid skill inventory target")
+        if type(packet["max_ticks"]) is not int or not 20 <= packet["max_ticks"] <= 1800:
+            raise BridgeError("Invalid skill deadline")
+        if packet["skill"] == "portal":
+            if packet["item"] != "minecraft:nether_portal" or packet["target_count"] != 1:
+                raise BridgeError("Invalid portal objective")
+            target = candidate.get("target")
+            if not isinstance(target, dict) or set(target) != {"x", "y", "z"}:
+                raise BridgeError("Portal requires a bounded landmark")
+            if any(type(value) is not int for value in target.values()) or not (
+                -64 <= target["y"] <= 320
+                and abs(target["x"]) <= 29_999_984
+                and abs(target["z"]) <= 29_999_984
+            ):
+                raise BridgeError("Invalid portal landmark")
+            packet["target"] = target.copy()
+        message = await self.request({"type": "skill", **packet}, timeout=5)
+        if message.get("type") != "skill_ack" or message.get("status") not in {
+            "accepted",
+            "completed",
+            "rejected",
+        }:
+            raise BridgeError("Invalid skill acknowledgment")
+        return message
+
+    async def stop(self, reason: str) -> None:
+        if self.socket:
+            try:
+                await self.send({"type": "stop", "reason": reason})
+            except (RuntimeError, OSError):
+                logging.getLogger(__name__).warning(
+                    "Could not send stop; mod watchdog must release controls"
+                )

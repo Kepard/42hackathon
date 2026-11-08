@@ -299,8 +299,9 @@ async def test_probe_respects_max_s_and_releases_on_immediate_break(monkeypatch,
                 await super().primitive(kind, **args)
     ex = Executor(Client(),640,480,JevVision(FakeJev()))
     result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": seconds}}, "skills")
-    assert clock[0] == pytest.approx(min(.6, seconds - .1))
-    assert clock[0] <= seconds and not ex.held_buttons
+    held_s = clock[0] - (.35 if broke else 0)
+    assert held_s == pytest.approx(min(.6, seconds - .1))
+    assert held_s <= seconds and not ex.held_buttons
     assert result["outcome"] == ("scene_changed" if broke else "not_in_reach")
     assert result["mining_probes"][0]["succeeded"] is broke
     assert result["mining_probes"][0]["broke_pixel_cue"] is broke

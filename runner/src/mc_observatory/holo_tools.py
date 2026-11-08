@@ -83,7 +83,7 @@ def tool_schemas(tier, reflex="none"):
             vocabulary.pop(legacy)
         vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. Refused while vanilla 'Lava pops' subtitle shows: lava sound nearby, turn toward visible safe ground instead. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
         vocabulary["collect"] = ("Pick up visible drops AFTER mining, never use for block approach (call seek). Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
-        vocabulary["attack_until_broken"] = (SKILLS["attack_until_broken"][0] + " Close approach uses fast TypeSafe Jev on screenshots. ONLY once close, an absent outline permits a probe up to0.6s, bounded by max_s; continue ONLY on target-centre progress and release on break pixels. Probe use/success is logged. Otherwise seek first. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
+        vocabulary["attack_until_broken"] = (SKILLS["attack_until_broken"][0] + " Close approach uses fast TypeSafe Jev on screenshots. ONLY once close, an absent outline permits a probe up to0.6s, bounded by max_s; continue ONLY on target-centre progress. Settle0.35s after walking and after releasing attack; ONLY persistent target-core change confirms a break, not swing/crack/bobbing transients. Probe use/success is logged. Otherwise seek first. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
              "parameters": {"type": "object", "properties": {**fields, "intent": {"type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence explaining why you are taking this action."}},
                             "required": [*[key for key, spec in fields.items() if "default" not in spec], "intent"], "additionalProperties": False}}}
@@ -196,11 +196,15 @@ class ToolExecutor:
         return outcomes
 
     async def attack_until_broken(self, seconds):
+        approach_start = len(self.actions)
         if not await self.approach_close():
             self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
             return "not_close"
-        reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
+        walked = any(a.get("action")=="key" and a.get("key")=="w" and a.get("pressed") for a in self.actions[approach_start:])
+        if walked: await self.primitive("wait",ms=350)
+        reference = await self.observe() if self.jev is not None or walked else self.current_frame or await self.observe()
         probe = {"used": self.jev is not None and not outline(reference), "succeeded": None}
+        probe["reference_settle_ms"] = 350 if walked else 0
         target_box = self.close_checks[-1].get("box") if probe["used"] and self.close_checks else None
         if target_box is not None:
             probe["target_box"] = target_box
@@ -251,9 +255,20 @@ class ToolExecutor:
                         probe["broke_pixel_cue"] |= target_broke(frame,changes(reference,frame,target_box))
         finally:
             await self.button(0, False)
-        settled = changes(reference, await self.observe())
+        if probe["used"] and probe["succeeded"] is True:
+            await self.primitive("wait",ms=350)
+        settled_frame = await self.observe()
+        settled = changes(reference, settled_frame)
+        if probe["used"]:
+            probe["candidate_break"] = probe.get("broke_pixel_cue",False)
+            probe["broke_pixel_cue"] = target_broke(settled_frame,settled)
+            probe.update(settled_center_change=settled["center_change"],settled_changed_fraction=settled["center_changed_fraction"])
+            if target_box is not None:
+                target = changes(reference,settled_frame,target_box)
+                probe["broke_pixel_cue"] |= target_broke(settled_frame,target)
+                probe.update(settled_target_center_change=target["center_change"],settled_target_changed_fraction=target["center_changed_fraction"])
         center_progress = max(center_progress, settled["center_change"])
-        scene_changed |= settled["frame_change"] >= .002 or probe.get("broke_pixel_cue", False)
+        scene_changed = settled["frame_change"] >= .002 or probe.get("broke_pixel_cue", False)
         self.failed_mining_frame = reference if seconds >= .35 and center_progress < .01 and probe["succeeded"] is not True else None
         if probe["succeeded"] is False:
             return "not_in_reach"
@@ -548,6 +563,8 @@ class ToolExecutor:
             result["scene_changed"] = outcome == "scene_changed"
         if len(self.mining_probes) > probe_start:
             result["mining_probes"] = self.mining_probes[probe_start:]
+            if result["mining_probes"][-1].get("candidate_break") and not result["mining_probes"][-1].get("broke_pixel_cue"):
+                result["next_action"] = "Transient mining pixels did not survive settling; no break confirmed. Hold continuously longer from a still view, then verify hotbar pixels."
         if outcome in ("not_in_reach", "not_close"):
             result["next_action"] = "call seek(<target>) first"
         if outcome == "search_recipe_first":

@@ -85,7 +85,7 @@ async def test_probe_holds_for_real_off_center_cracks_without_new_jev_questions(
     assert probe["succeeded"] is cracks
     assert probe["center_change"] == 0
     assert (probe["target_center_change"] >= .002) is cracks
-    assert clock[0] == pytest.approx(.6 if not cracks else .95 if breaks else 3.5)
+    assert clock[0] == pytest.approx(.6 if not cracks else 1.30 if breaks else 3.85)
     assert not ex.held_buttons
     assert result["outcome"] == ("scene_changed" if cracks else "not_in_reach")
 

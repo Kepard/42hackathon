@@ -123,6 +123,13 @@ goal completion also requests singleplayer pause.
 
 ## A live demonstration you can supervise
 
+Actual Minecraft gameplay with the in-game HoloSpeed telemetry overlay:
+
+| Autonomous wood gathering | Smelted iron acquired |
+| --- | --- |
+| ![Minecraft wood mining with the HoloSpeed in-game HUD](docs/assets/live-mining-ui.png) | ![Minecraft inventory holding four smelted iron ingots with the HoloSpeed in-game HUD](docs/assets/live-inventory-ui.png) |
+| Recorded decisions: Holo4 **2.9 s**, Jev **297 ms**. | Four iron ingots in inventory; latest Jev decision **270 ms**. |
+
 The [dashboard](https://holospeed-live-kepard.kepard.chatgpt.site) combines an
 H Company-inspired interface, Minecraft inventory and progression visuals, and
 [Cal Sans](https://github.com/calcom/sans).
@@ -200,9 +207,11 @@ freeze at goal completion, terminal failure, or the run budget. Later diagnostic
 events retain their full wall timestamps. Explicit resume includes the paused
 interval and starts the timer moving again.
 
-**Current validation:** real trials have acquired stone tools. The new complete
-portal-construction route and fresh-world launcher are implemented; their combined
-live acceptance run is still pending. The present scope ends at Nether entry.
+**Current validation:** hosted **New run** has launched a verified fresh world.
+An autonomous run completed fourteen skills through gathering, crafting, mining,
+smelting four iron ingots, and crafting a bucket and flint and steel. Full portal
+construction and Nether entry still await live verification. The present scope
+ends at Nether entry.
 [Verification](docs/state-aware-verification.md) · [Independent judge](docs/run-judge.md).
 
 [Architecture](docs/architecture.md) · [Live setup](docs/setup.md) ·

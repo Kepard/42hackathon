@@ -98,11 +98,14 @@ requires actual gathering, crafting, mining, and smelting before casting; it
 never substitutes a chest-loot shortcut. See [seed setup](demo-seed.md) and
 [verified resource research](new-route-research.md).
 
-The nominal empty-inventory plan has 16 bounded skills: logs, planks, table,
-sticks, wooden pickaxe, three cobblestone, stone pickaxe, eight furnace materials,
-furnace, four raw iron, flint, four smelted ingots, bucket, flint and steel, nine
+The nominal empty-inventory plan has 15 bounded skills: logs, planks, table,
+sticks, wooden pickaxe, eleven cobblestone, stone pickaxe, furnace,
+four raw iron, flint, four smelted ingots, bucket, flint and steel, nine
 mold blocks, and portal casting/entry. Extra materials acquired during navigation
 can remove a redundant gathering step; failures can require additional attempts.
+The first stone visit gathers the pickaxe's three blocks and furnace's eight
+together, avoiding a separate trip back to the crafting table. Existing stone
+and an already available furnace reduce that target.
 The two-minute objective is a live performance target, not a fixed delay or a
 claim that this sequence has already achieved that time.
 

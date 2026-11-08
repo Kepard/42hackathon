@@ -884,3 +884,141 @@ test("New run stays disabled for old controllers until the clean-launch capabili
   assert.equal(ui.element("control-start_new").disabled, false);
   assert.equal(ui.element("operator-world-note").textContent, "Fresh world · Automatic start");
 });
+
+test("a fresh-run request masks the previous attempt immediately and waits for its own launch ID", async () => {
+  let finish;
+  const requests = [];
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Promise((resolve) => {finish = resolve;});
+  }});
+  const previous = {status: "paused", connected: true, run_id: "previous", elapsed_ms: 123000, metrics: {actions: 99}, milestones: [{id: "nether", verification: "game_state"}], events: [inference(1, "holo", "complete", {rationale: "Previous plan"})], launch: {id: "previous-launch", status: "interrupted", stage: "interrupted", detail: "The previous attempt was interrupted.", world_name: "previous-world"}};
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: previous});
+  ui.renderControls();
+  const pending = ui.submitCommand("start_new");
+  assert.equal(ui.element("launch-heading").textContent, "Requesting a fresh run");
+  assert.equal(ui.element("launch-state").textContent, "REQUESTED");
+  assert.equal(ui.element("elapsed").textContent, "—");
+  assert.equal(ui.element("actions").textContent, "—");
+  assert.equal(ui.element("route-panel").hidden, true);
+  assert.equal(ui.element("mission-holo-rationale").textContent, "No decision recorded yet.");
+  assert.equal(ui.element("launch-world").hidden, true);
+  assert.equal(ui.element("launch-stages").hidden, true, "No actual preparation stage has been published");
+  finish({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", detail: "Preparation accepted."}})});
+  await pending;
+  assert.equal(ui.element("launch-heading").textContent, "Fresh run accepted");
+  assert.equal(ui.element("launch-state").textContent, "ACCEPTED");
+  assert.equal(ui.element("agent-status").textContent, "Awaiting launch status");
+  assert.equal(ui.element("control-start_new").disabled, true);
+  assert.equal(ui.element("control-resume").disabled, true);
+  assert.equal(ui.element("control-pause").disabled, false);
+  assert.equal(ui.element("control-stop").disabled, false);
+  await ui.submitCommand("start_new");
+  assert.equal(requests.length, 1, "Acceptance must not reopen New run during publication lag");
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {...previous, connected: false, launch: {...previous.launch, status: "failed", detail: "An old failure."}}});
+  ui.renderState();
+  assert.equal(ui.element("launch-heading").textContent, "Fresh run accepted");
+  assert.equal(ui.element("control-pause").disabled, false, "An accepted launch remains cancellable while Minecraft reloads");
+  assert.equal(ui.element("control-stop").disabled, false);
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {...previous, launch: {id, status: "preparing", stage: "loading", world_name: "new-world", detail: "Loading the new copy."}}});
+  ui.renderState();
+  assert.equal(ui.element("launch-heading").textContent, "Loading Minecraft");
+  assert.equal(ui.element("launch-stages").hidden, false);
+  assert.equal(ui.element("launch-world").textContent, "new-world");
+});
+
+test("cancelling an accepted launch keeps its identity until the matching cancellation arrives", async () => {
+  let serial = 0;
+  const requests = [];
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", randomUUID: () => `attempt-${++serial}`, fetch: async (_url, options) => {
+    const command = JSON.parse(options.body); requests.push(command);
+    return {ok: true, json: async () => ({command: {...command, status: "completed", detail: "Accepted."}})};
+  }});
+  const previous = {status: "idle", connected: true, run_id: null, launch: {id: "old", status: "failed", stage: "failed", detail: "Old failure."}};
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: previous});
+  ui.renderControls(); await ui.submitCommand("start_new"); await ui.submitCommand("stop");
+  ui.renderState();
+  assert.deepEqual(requests.map((request) => request.action), ["start_new", "stop"]);
+  assert.equal(ui.element("launch-heading").textContent, "Fresh run accepted");
+  assert.equal(ui.element("control-start_new").disabled, true);
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {...previous, launch: {id: "attempt-1", status: "cancelled", stage: "cancelled", detail: "This launch was cancelled."}}});
+  ui.renderState();
+  assert.equal(ui.element("launch-heading").textContent, "Launch cancelled");
+  assert.equal(ui.element("launch-detail").textContent, "This launch was cancelled.");
+  assert.equal(ui.element("control-start_new").disabled, false);
+});
+
+test("only the requested launch can supply an immediate failed or running outcome", async () => {
+  for (const status of ["failed", "running"]) {
+    const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+    const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async () => ({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed"}})})});
+    const state = {status: "idle", connected: true, run_id: null, launch: {id: "old", status, stage: status}};
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state}); ui.renderControls();
+    await ui.submitCommand("start_new");
+    assert.equal(ui.element("launch-heading").textContent, "Fresh run accepted");
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {...state, launch: {id, status, stage: status, detail: "The matching outcome."}}}); ui.renderState();
+    assert.equal(ui.element("launch-heading").textContent, status === "running" ? "Fresh run started" : "Launch failed");
+    assert.equal(ui.element("launch-detail").textContent, "The matching outcome.");
+    assert.equal(ui.element("route-panel").hidden, false);
+  }
+});
+
+test("a pending New run still polls a real 404 without retrying its POST and releases after the existing deadline", async () => {
+  const requests = [];
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (_url, options) => {
+    requests.push(options.method);
+    return options.method === "POST" ? {ok: true, json: async () => ({command: {id, action: "start_new", status: "pending"}})} : {ok: false, status: 404, json: async () => ({error: "Command not found."})};
+  }});
+  const state = {status: "idle", connected: true, run_id: null, launch: {id: "old", status: "interrupted", stage: "interrupted"}};
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state}); ui.renderControls();
+  await ui.submitCommand("start_new");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests, ["POST", "GET"]);
+  assert.equal(ui.element("launch-heading").textContent, "Requesting a fresh run");
+  assert.equal(ui.element("control-start_new").disabled, true);
+  ui.setNow(NOW + 45001); ui.set({updated_at: NOW + 45001, feed_status: "online", runs: [], state});
+  await ui.refreshCommand();
+  assert.deepEqual(requests, ["POST", "GET", "GET"]);
+  assert.equal(ui.element("launch-heading").textContent, "Launch interrupted");
+  assert.equal(ui.element("control-start_new").disabled, false);
+  assert.match(ui.element("control-feedback").textContent, /No command acceptance was confirmed/);
+});
+
+test("definitive New run rejection or expiration clears the pending launch presentation", async () => {
+  for (const outcome of ["failed", "expired", "rejected"]) {
+    const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+    const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async () => outcome === "rejected" ? {ok: false, status: 409, json: async () => ({error: "Another command is pending."})} : {ok: true, json: async () => ({command: {id, action: "start_new", status: outcome}})}});
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {status: "idle", connected: true, run_id: null, launch: null}});
+    ui.renderControls(); await ui.submitCommand("start_new");
+    assert.equal(ui.element("run-launch").hidden, true);
+    assert.equal(ui.element("control-start_new").disabled, false);
+    assert.equal(ui.element("route-panel").hidden, false);
+  }
+});
+
+test("locking during a pending New run cannot strand an unconfirmed launch after unlock", async () => {
+  let finish;
+  const token = "test-operator-capability-with-at-least-32-characters";
+  const ui = observerHarness({token, fetch: (url) => {
+    if (url === "/api/operator/login") return Promise.resolve({ok: true, json: async () => ({token})});
+    return new Promise((resolve) => {finish = resolve;});
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {status: "idle", connected: true, run_id: null, launch: null}});
+  ui.renderControls();
+  const pending = ui.submitCommand("start_new");
+  assert.equal(ui.element("launch-heading").textContent, "Requesting a fresh run");
+  ui.lockControls("Controls locked by the operator.");
+  assert.equal(ui.element("run-launch").hidden, true, "Lock discards an expectation that can no longer be reconciled by command polling");
+  assert.equal(ui.element("route-panel").hidden, false);
+  finish({ok: false, status: 409, json: async () => ({error: "The request was not accepted."})});
+  await pending;
+  assert.equal(ui.element("control-feedback").textContent, "Controls locked by the operator.");
+  assert.equal(ui.stored.has("holospeed.command"), false);
+  ui.element("operator-password").value = "test-password";
+  await ui.unlockControls();
+  assert.equal(ui.element("operator-status").textContent, "Operator access");
+  assert.equal(ui.element("control-start_new").disabled, false);
+  assert.equal(ui.element("run-launch").hidden, true);
+});

@@ -139,7 +139,7 @@ performed during implementation.
 Live run `20261108T114834-a16d6d05` completed logs, planks, a table, and sticks,
 then rejected wooden-pickaxe crafting because acacia leaves blocked every safe
 placement ray. The saved complete local cube shows that clearing the leaf at
-`(-12,65,-4)` exposes a grass-floor face only1.85 blocks from the eye, without
+`(-12,65,-4)` exposes a grass-floor face only 1.85 blocks from the eye, without
 recorded entity intersection or an adjacent fluid hazard. The new shared
 placement helper supports that normal bounded clearance for tables/furnaces;
 a recorded-coordinate regression checks the geometry. Independent source
@@ -150,3 +150,25 @@ The combined workstation-recovery and transparent-pause artifact builds and
 remaps with **95 Java tests passing**, zero failures/errors. F9 now waits for
 the same arm readiness checks as dashboard Start before emitting its start
 event; the transparent screen retains vanilla integrated-server pause behavior.
+
+Live run `20261108T115915-30150c0a` subsequently exercised
+`clearing_table_space` and completed wooden-pickaxe crafting at 40.790 seconds,
+then mined three cobblestone and returned to craft a stone pickaxe. The table
+was placed on a leaf support at `(-11,66,-3)`; the return-and-craft skill took
+29.875 seconds. The next patch prefers eligible non-leaf solid supports before
+distance, retaining leaf supports as a checked fallback. This preference is
+tested against the recorded 1.51-block leaf/1.85-block ground alternatives;
+its live timing benefit has not yet been measured.
+
+The same run completed all fourteen gathering, crafting, and smelting skills,
+then placed its mold and water. Its first lava approach failed at 293.803
+seconds with zero obsidian cast. Baritone logged an exhausted start node
+(22 movements considered, no open nodes); source inspection confirms that
+Baritone 1.11.3 rejects flowing-water movement. The recorded player was standing
+in construction runoff. The new bounded local walking fallback handles shallow
+runoff and return to the pad, and waits for grounded footing after placement
+jumps. Nine pure regressions cover the recorded two-step dry exit, route bounds, dry margins, exact pad goals,
+headroom, immutable cardinal routes, and rejection of deep water/unsafe terrain.
+The final artifact builds and remaps with **105 Java tests passing**, zero
+failures/errors. Independent source review found no remaining critical blocker.
+The movement fix and full ten-block construction still require live validation.

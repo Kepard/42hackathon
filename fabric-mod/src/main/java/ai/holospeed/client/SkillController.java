@@ -670,6 +670,7 @@ public final class SkillController {
         JsonArray verified = new JsonArray();
         if (portal != null) portal.verifiedSteps().forEach(verified::add);
         result.add("verified_steps", verified);
+        if (portal != null && request != null && request.kind().equals("cast_portal")) result.add("cast", portal.diagnostics());
         BlockPos knownFurnace = furnace.knownFurnace();
         if (knownFurnace == null) result.add("known_furnace", JsonNull.INSTANCE);
         else {

@@ -107,9 +107,8 @@ def test_zero_inventory_reaches_full_casting_prerequisites_without_loot_or_optio
         ("craft", "minecraft:crafting_table", 1),
         ("craft", "minecraft:stick", 4),
         ("craft", "minecraft:wooden_pickaxe", 1),
-        ("mine", "minecraft:cobblestone", 3),
+        ("mine", "minecraft:cobblestone", 11),
         ("craft", "minecraft:stone_pickaxe", 1),
-        ("mine", "minecraft:cobblestone", 8),
         ("craft", "minecraft:furnace", 1),
         ("mine", "minecraft:raw_iron", 4),
         ("mine", "minecraft:flint", 1),
@@ -133,6 +132,65 @@ def ready_inventory(**overrides):
         "dirt": 9,
         **overrides,
     }
+
+
+@pytest.mark.parametrize(
+    "owned,expected",
+    [
+        ({}, 11),
+        ({"cobblestone": 2}, 11),
+        ({"cobblestone": 2, "cobbled_deepslate": 3}, 8),
+        ({"furnace": 1}, 3),
+        ({"iron_ingot": 4}, 3),
+        ({"bucket": 1, "flint_and_steel": 1}, 3),
+    ],
+)
+def test_combined_stone_visit_credits_existing_recipe_materials_and_finished_items(owned, expected):
+    value = nether_fixture({"crafting_table": 1, "wooden_pickaxe": 1, "stick": 2, **owned})
+    candidate = next(item for item in options(value) if item["item"] == "minecraft:cobblestone")
+    assert candidate["skill"] == "mine"
+    assert candidate["target_count"] == expected
+
+
+def test_combined_stone_visit_crafts_both_recipes_without_another_mine_and_preserves_mold():
+    inventory = {
+        "minecraft:crafting_table": 1,
+        "minecraft:wooden_pickaxe": 1,
+        "minecraft:stick": 2,
+        "minecraft:cobblestone": 11,
+        "minecraft:dirt": 9,
+    }
+    value = nether_fixture(inventory)
+    candidate = options(value)[0]
+    assert candidate["item"] == "minecraft:stone_pickaxe"
+    apply_recipe(inventory, candidate)
+    set_inventory(value, inventory)
+    candidate = options(value)[0]
+    assert candidate["skill"] == "craft" and candidate["item"] == "minecraft:furnace"
+    apply_recipe(inventory, candidate)
+    assert inventory["minecraft:cobblestone"] == 0
+    assert inventory["minecraft:dirt"] == 9
+
+
+def test_existing_stone_without_a_pickaxe_crafts_tool_before_furnace_mining():
+    value = nether_fixture({"crafting_table": 1, "stick": 2, "cobblestone": 3})
+    candidate = options(value)[0]
+    assert candidate["skill"] == "craft" and candidate["item"] == "minecraft:stone_pickaxe"
+
+
+def test_missing_furnace_capability_does_not_prefetch_unusable_furnace_materials():
+    value = nether_fixture({"crafting_table": 1, "stick": 2, "wooden_pickaxe": 1})
+    value["skill"]["capabilities"].remove("craft:minecraft:furnace")
+    assert options(value)[0]["target_count"] == 3
+
+
+def test_failed_combined_mine_can_upgrade_from_partial_real_materials():
+    value = nether_fixture({"crafting_table": 1, "stick": 2, "wooden_pickaxe": 1, "cobblestone": 4})
+    value["skill"].update(
+        kind="mine", item="minecraft:cobblestone", status="failed", phase="failed"
+    )
+    candidate = options(value)[0]
+    assert candidate["skill"] == "craft" and candidate["item"] == "minecraft:stone_pickaxe"
 
 
 def test_default_route_never_chooses_ruined_portal_even_with_its_seed_and_capability():

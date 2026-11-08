@@ -13,6 +13,11 @@ complete ten-block obsidian frame with natural lava and water. **Structure loot
 and pre-existing portal frames are excluded.** Roughly two minutes is a target
 for actual gameplay, not an achieved result or an artificial minimum duration.
 
+The first stone-mining visit gathers eleven cobblestone for both the stone
+pickaxe and furnace, then crafts both during the same table visit. Existing
+materials and an available furnace reduce the gathering requirement. This
+avoids a second mining-to-table round trip; live timing still requires measurement.
+
 The original [three-pool seed report](https://www.reddit.com/r/minecraftseeds/comments/1n87raa/3_lava_pools_at_spawn/)
 used Java 1.20.1. We independently generated and inspected it in **1.21.1**:
 world spawn is `(0,64,0)`, with three nearby surface lava pools, wood and water,

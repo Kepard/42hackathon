@@ -130,12 +130,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/pause")
     async def pause():
-        await engine.pause()
+        await engine.pause(pause_world=True)
         return {"ok": True}
 
     @app.post("/api/finish")
     async def finish():
-        await engine.finish()
+        await engine.finish(pause_world=True)
         return {"ok": True}
 
     @app.post("/api/voice")

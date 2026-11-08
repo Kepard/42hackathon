@@ -143,3 +143,63 @@ async def test_demo_start_never_arms_a_real_minecraft_bridge(tmp_path, monkeypat
         assert calls == ["engine_start"]
     finally:
         await close_engine(app)
+
+
+@pytest.mark.parametrize("route,expected_status", [("pause", "paused"), ("finish", "idle")])
+async def test_operator_pause_and_finish_freeze_world_after_stopping_agent(
+    tmp_path, monkeypatch, route, expected_status
+):
+    app = application(tmp_path)
+    engine = app.state.engine
+    calls = []
+    started = asyncio.Event()
+
+    async def run():
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            calls.append("agent_cancelled")
+
+    async def send_json(message):
+        if message["type"] == "stop":
+            calls.append("stop")
+
+    async def game_request(message, timeout):
+        assert message == {"type": "pause_game"}
+        assert engine.task.done(), "Pause the world after the agent releases control"
+        calls.append("pause_game")
+        return {"type": "pause_game_ack", "status": "paused"}
+
+    monkeypatch.setattr(engine, "run", run)
+    monkeypatch.setattr(app.state.bridge.socket, "send_json", send_json)
+    monkeypatch.setattr(app.state.bridge, "request", game_request)
+    try:
+        await engine.start()
+        await started.wait()
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8768"
+        ) as client:
+            response = await client.post("/api/" + route)
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        assert calls == ["stop", "agent_cancelled", "pause_game"]
+        assert engine.state["status"] == expected_status
+        assert engine.state["keys"] == [] and engine.state["action"] is None
+        assert engine.recorder.closed is (route == "finish")
+    finally:
+        await close_engine(app)
+
+
+async def test_internal_finish_for_world_launcher_does_not_add_game_pause(tmp_path, monkeypatch):
+    app = application(tmp_path)
+
+    async def forbidden_game_pause():
+        pytest.fail("Internal finish must preserve the launcher's normal unload sequence")
+
+    monkeypatch.setattr(app.state.bridge, "pause_game", forbidden_game_pause)
+    try:
+        await app.state.engine.finish()
+        assert app.state.engine.state["status"] == "idle"
+    finally:
+        await close_engine(app)

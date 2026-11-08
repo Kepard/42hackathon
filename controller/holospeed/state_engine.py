@@ -13,6 +13,46 @@ from .game_state import GameState, item_counts
 from .providers import ProviderError, ReplanRequired
 from .skills import confirmed_milestones, goal_reached, next_skills
 
+TERMINAL_PAUSE_TIMEOUT_S = 5.0
+
+
+async def pause_world_after_terminal(engine, reason: str) -> None:
+    """Freeze a failed/budget-limited live world without reentering engine.lock."""
+    if engine.settings.mode != "live":
+        return
+    if not hasattr(engine.bridge, "pause_game"):
+        engine.log(
+            "event",
+            {
+                "name": "world_pause_unavailable",
+                "after": reason,
+                "detail": "This bridge does not support pausing the world",
+            },
+        )
+        return
+    try:
+        # The run budget is already exhausted on this path. Give cleanup its
+        # own short deadline instead of routing it through engine.bounded().
+        paused = await asyncio.wait_for(
+            engine.bridge.pause_game(), timeout=TERMINAL_PAUSE_TIMEOUT_S
+        )
+    except Exception as error:  # noqa: BLE001 - never replace the original run failure.
+        engine.log(
+            "event",
+            {
+                "name": "world_pause_unavailable",
+                "after": reason,
+                "class": type(error).__name__,
+                "detail": "World pause acknowledgment timed out"
+                if isinstance(error, TimeoutError)
+                else str(error)[:300],
+            },
+        )
+        return
+    engine.log("event", {"name": "world_paused_after_terminal", "after": reason, "paused": paused})
+    if paused:
+        engine.state["expected_effect"] += " World paused."
+
 
 async def read_state(engine, transitioning: bool = False) -> GameState:
     deadline = time.monotonic() + (5 if transitioning else 0)
@@ -357,6 +397,7 @@ async def run_state_agent(engine) -> None:
     rejections = 0
     blocked: set[tuple] = set()
     planned_phase = None
+    terminal_reason = None
     try:
         while engine.state["status"] == "running" and generation == engine.generation:
             if engine.state["metrics"]["actions"] >= engine.settings.max_actions:
@@ -586,6 +627,7 @@ async def run_state_agent(engine) -> None:
             engine.checkpoint()
             engine.broadcast()
     except RunBudgetReached as error:
+        terminal_reason = "run_budget_reached"
         engine.state.update(
             status="paused", expected_effect="Run budget reached; controls released."
         )
@@ -594,14 +636,29 @@ async def run_state_agent(engine) -> None:
         engine.log("event", {"name": "skill_loop_cancelled", "detail": "Pause or shutdown"})
         raise
     except Exception as error:  # noqa: BLE001 - always release controls on failure.
+        terminal_reason = "error"
         engine.state.update(
             status="error", expected_effect="Inputs released; inspect the failure event."
         )
         engine.state["metrics"]["errors"] += 1
         engine.log("error", {"message": str(error), "class": type(error).__name__})
     finally:
-        await engine.bridge.stop("State-aware agent loop stopped")
+        try:
+            await engine.bridge.stop("State-aware agent loop stopped")
+        except Exception as error:  # noqa: BLE001 - keep primary error/cancellation intact.
+            engine.log(
+                "event",
+                {
+                    "name": "controls_release_unavailable",
+                    "class": type(error).__name__,
+                    "detail": str(error)[:300],
+                },
+            )
         engine.state.update(keys=[], action=None)
+        # Cancellation is also used by the launcher while unloading a world.
+        # Only a terminal failure or exhausted budget should add a world pause.
+        if terminal_reason is not None:
+            await pause_world_after_terminal(engine, terminal_reason)
         engine.checkpoint()
         await engine.hud()
         engine.broadcast()

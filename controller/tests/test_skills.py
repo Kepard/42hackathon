@@ -83,6 +83,23 @@ def set_inventory(value, items):
     ]
 
 
+def test_first_log_candidate_advertises_navigation_without_inventing_a_valid_path():
+    value = fixture()
+    value["nearby_blocks"] = [cell(7, 65, 0, "oak_log", True)]
+    value["local_blocks"] = [
+        cell(**block["position"]) if block["id"] == "minecraft:oak_log" else block
+        for block in value["local_blocks"]
+    ]
+    candidate = next_skills(GameState.model_validate(value))[0]
+    assert candidate["skill"] == "mine"
+    assert candidate["nearest_target"]["distance"] > value["player"]["block_interaction_range"]
+    assert candidate["execution_mode"] == "navigate_mine_collect"
+    assert candidate["navigation_included"] is True
+    assert candidate["initial_target_reach_required"] is False
+    assert candidate["path_validated"] is False
+    assert candidate["tool_requirement"] == "none"
+
+
 def candidates(items=None):
     return next_skills(GameState.model_validate(fixture(items)))
 

@@ -263,6 +263,109 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
 
 def _execution_contract(candidate: dict) -> dict:
     """Describe the real executor's entry phase without claiming future success."""
+    if candidate.get("skill") == "mine":
+        tool = candidate.get("tool_requirement")
+        if tool is None:
+            item = candidate.get("item", "")
+            tool = (
+                "stone_pickaxe_or_better"
+                if item == "minecraft:raw_iron"
+                else (
+                    "suitable_pickaxe"
+                    if item
+                    in {
+                        "minecraft:stone",
+                        "minecraft:cobblestone",
+                        "minecraft:deepslate",
+                        "minecraft:cobbled_deepslate",
+                        "minecraft:coal",
+                    }
+                    else "none"
+                )
+            )
+        return {
+            "validation_scope": "May a bounded navigate-mine-collect skill start? This is not an in-place attack.",
+            "start_action": "Start Baritone navigation/search toward the requested resource, then mine and collect its drops with normal survival controls.",
+            "start_requirements": [
+                "Living ready Survival player; closed GUI, empty cursor and idle controls.",
+                "Baritone available and the requested mining capability supported.",
+                f"Owned harvesting tool requirement: {tool}. Logs, dirt and gravel need no tool; empty inventory is a normal log-gathering start.",
+                "No observed concrete danger or executed failure that makes this attempt unsuitable.",
+            ],
+            "executor_guards": [
+                "Baritone computes/replans movement and mining after start; nearest_target is evidence, not a forced attack coordinate.",
+                "Approach first, then interact through normal Minecraft mechanics. Current 4.5-block interaction reach is not the navigation radius.",
+                "Stop on focus/world/player/GUI change, pause, F8, disconnect, deadline, or stalled position/inventory progress.",
+                "Completion requires the actual owned inventory target. Navigation success and hazard-free terrain are not guaranteed.",
+            ],
+            "not_start_requirements": [
+                "Target already inside interaction reach, current crosshair on target, or a precomputed path.",
+                "path_validated=false means not precomputed, not failed. A truncated nearby scan means incomplete observations, not an obstructed route.",
+                "Already owning the requested output, a crafting table, or an axe for logs.",
+            ],
+        }
+    if candidate.get("skill") == "craft":
+        return {
+            "validation_scope": "May normal recipe execution and any required table approach/placement start?",
+            "start_action": "Use owned ingredients via vanilla recipe-book and inventory slot interactions; open the needed crafting interface normally.",
+            "start_requirements": [
+                "Living ready Survival player; closed GUI, inventory GUI or crafting GUI; empty cursor and idle controls.",
+                "Supported recipe and actual owned ingredients for the next recipe batch; the local planner accounts for exact recipe quantities.",
+                "For a 3x3 recipe: open/reachable table, carried table for guarded placement, or remembered table plus Baritone navigation.",
+            ],
+            "executor_guards": [
+                "A carried table is placed only on a checked solid support with reachable visible face, clear space and no adjacent placement hazards.",
+                "A remembered table is approached then checked for actual presence, reach and raycast before opening it.",
+                "Checks matching unlocked recipe, ingredients, empty grid and correct handler; verifies inventory increases and stabilizes.",
+                "Loss of readiness, failed placement/recipe, navigation stall or deadline stops the skill; success is not assumed.",
+            ],
+            "not_start_requirements": [
+                "Axe/pickaxe for crafting; already owning the finished item; pre-opened recipe GUI.",
+                "A crafting table for 2x2 recipes, or an already-placed table when a carried table can be placed safely.",
+                "Precomputed path or initial reach of a remembered table when table_navigation_required is true.",
+            ],
+        }
+    if candidate.get("skill") == "smelt":
+        return {
+            "validation_scope": "Start a bounded normal furnace batch; its iron output need not exist yet.",
+            "start_action": "Place a carried furnace on a checked reachable face or open an owned reachable furnace, load remaining iron and fuel, wait for vanilla cooking, and collect ingots.",
+            "start_requirements": [
+                "Living ready Survival player, empty cursor, closed GUI or the executor's own furnace GUI.",
+                "Carried furnace with valid nearby placement space, or a currently reachable previously self-placed furnace; no navigation to distant furnaces.",
+                "Enough actual raw iron/iron ore and accepted fuel, crediting pending input/output in the owned furnace.",
+            ],
+            "executor_guards": [
+                "Checks placement support, clear space, adjacent hazards and visible face within actual reach before normal placement/opening.",
+                "Uses owned inputs and normal GUI transfers; refuses unrelated furnace contents and only burns coal, charcoal, accepted planks or logs.",
+                "Vanilla iron takes 200 cooking ticks each; four ingots need about40 seconds. Three ordinary planks can fuel four ingots; coal is optional.",
+                "Checks cooking/inventory progress and deadline; completion requires a fresh server inventory synchronization confirming the target ingots.",
+            ],
+            "not_start_requirements": [
+                "Already owning ingots, a pre-opened furnace screen, or a pre-placed furnace when one is carried.",
+                "Coal when enough accepted wood fuel is owned; instantaneous cooking or a precomputed navigation path.",
+            ],
+        }
+    if candidate.get("skill") == "cast_portal":
+        return {
+            "validation_scope": "Start guarded construction of a complete new portal from natural lava and water; later phases require their own evidence.",
+            "start_action": "With an empty bucket, approach and collect natural water; then build the mold, fetch natural lava, cast all ten frame blocks, ignite, and enter.",
+            "start_requirements": [
+                "Living ready Overworld Survival player, closed GUI, empty cursor, idle controls and Baritone/cast_portal support.",
+                "Owned empty bucket OR water bucket, flint and steel, stone pickaxe, and nine combined dirt/cobblestone blocks.",
+                "Configured natural-lava landmark within128 blocks; no observed contradiction or immediate danger preventing the initial step.",
+            ],
+            "executor_guards": [
+                "Before control actions, scan loaded terrain for ten exposed lava sources, water if needed, and a clear solid construction site with checked water flow.",
+                "Navigation approaches sources/site; actual bucket/block interactions require visible targets within normal reach. Path success is not guaranteed.",
+                "Require server evidence for fluid pickup, source depletion and every new obsidian placement; never credit pre-existing portal frames.",
+                "Deadline, focus/player/world changes or failed phase checks release controls. Completion requires the full frame, actual lit portal and actual Nether arrival.",
+            ],
+            "not_start_requirements": [
+                "Already owning obsidian, a water bucket when an empty bucket is owned, or already having a built/lit portal.",
+                "Sources/site within the small model sample, initial interaction reach, or path_validated=true; the executor performs a larger loaded-terrain preflight.",
+                "Lava near the landmark is the required resource, not by itself evidence that the player is in immediate danger.",
+            ],
+        }
     if candidate.get("skill") != "portal":
         return {
             "validation_scope": "Check whether this bounded skill may start in the current state.",
@@ -295,6 +398,32 @@ def _execution_contract(candidate: dict) -> dict:
 
 def _choice_criterion(candidate: dict) -> str:
     contract = candidate["execution_contract"]
+    if candidate["skill"] == "mine":
+        return (
+            "Start bounded Baritone navigation, mining and pickup for this resource when the living player, "
+            "available executor and required harvesting tool permit it. Logs need no tool and may start with empty inventory. "
+            "Distance beyond interaction reach, crosshair miss, path_validated=false and truncated scans alone are not blockers: "
+            "movement is part of this skill. Reject concrete immediate danger, missing required tool/executor or an unchanged executed failure."
+        )
+    if candidate["skill"] == "craft":
+        return (
+            "Start the supported recipe with actual owned ingredients. The executor opens its GUI and can place an owned table "
+            "or approach a remembered table before interacting. For 2x2 recipes no table is needed. "
+            "Missing ingredients, an incompatible occupied GUI/cursor, unavailable required table, or concrete danger are blockers."
+        )
+    if candidate["skill"] == "smelt":
+        return (
+            "Start the normal furnace batch with enough owned iron inputs and accepted fuel, plus a carried or reachable owned furnace. "
+            "The skill places/opens the furnace and waits for cooking; no pre-opened GUI or existing ingots are needed. "
+            "Coal is optional when planks/logs provide enough fuel. Missing input/fuel, unavailable furnace access or concrete danger are blockers."
+        )
+    if candidate["skill"] == "cast_portal":
+        return (
+            "Start the guarded full-frame casting route with empty bucket OR water bucket, flint and steel, stone pickaxe, "
+            "nine dirt/cobblestone, Baritone and nearby natural-lava landmark. Water collection and navigation are included. "
+            "No initial obsidian, water bucket, built portal or precomputed path is required. The executor verifies sources/site before actions. "
+            "Missing actual starting tools/materials, incompatible world or concrete immediate danger are blockers."
+        )
     if candidate["skill"] == "portal":
         return (
             "Start the guarded ruined-portal route by approaching and inspecting its chest when "

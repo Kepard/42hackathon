@@ -329,6 +329,22 @@ class _Planner:
             "nearest_target": evidence[0] if evidence else None,
             "observed_targets": len(evidence),
             "path_validated": False,
+            "execution_mode": "navigate_mine_collect"
+            if skill == "mine"
+            else "normal_recipe_interactions"
+            if skill == "craft"
+            else "normal_furnace_interactions",
+            "navigation_included": skill == "mine" or navigate_table,
+            "initial_target_reach_required": False if skill == "mine" or navigate_table else None,
+            "tool_requirement": (
+                "stone_pickaxe_or_better"
+                if item == RAW_IRON
+                else "suitable_pickaxe"
+                if item in {"minecraft:cobblestone", "minecraft:cobbled_deepslate", COAL}
+                else "none"
+            )
+            if skill == "mine"
+            else None,
             "risks": risks,
             "sample_tick": self.state.tick,
             "completed_milestones": self.completed.copy(),

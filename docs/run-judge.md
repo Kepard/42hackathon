@@ -112,3 +112,41 @@ paused state does not itself pause Minecraft.
 This fixed-seed trial is historical evidence. The next requested demonstration
 uses a different seed and a full crafting, mining, and portal-building route;
 that route requires its own fresh acceptance run.
+
+## From-scratch launcher smoke: 20261108T114224-365835f0
+
+This pre-merge smoke used commit
+`1254e88a495f7efbff8f3f5249cd4b52109e78e3`. It is not the final merged-code
+acceptance run.
+
+**Judgment: fresh-world launch and initial conditions verified; gameplay blocked
+by repeated model vetoes before any skill executed.**
+
+- The hosted launcher created clone
+  `holospeed-demo-ec770456548641e7923fa0613d7ead2b` from the prepared world on seed
+  `-7131204740862824481`. Preparation took approximately 15.87 seconds, separately
+  from gameplay timing. The journal links launch
+  `ec770456-5486-41e7-923f-a0613d7ead2b` to template level hash
+  `1388f793d7e9a905c0d750a7d7ee11c280a0504dae5a7aaf65a9ef51b735b269`.
+- Independent clone NBT inspection confirmed Survival, Easy, commands disabled,
+  bonus chest disabled, an empty inventory, full health, and Overworld spawn
+  `(-6.5,65,-6.5)`. Initial recorded state
+  `f520ca5a-c482-4a4c-90ed-33300275dfcc` at 113 ms also confirms **41 empty slots**,
+  health/hunger 20, no verified steps, and the same position.
+- Holo4 repeatedly selected gathering three acacia logs. Jev rejected the
+  proposed skill eight consecutive times. The controller stopped at
+  **24.827 seconds** with zero dispatched skills, zero milestones, and released
+  controls. Its bounded rejection policy worked; progression did not begin.
+- The candidate exposed a target 5.123 blocks away, beyond current interaction
+  reach, without explicitly describing the navigation-first mining contract.
+  The supplied local sample contained no fluid or hostile entity. These facts
+  identify a contract/prompt issue to investigate; Jev's choice-only responses
+  do not establish its internal reason for rejection.
+- All **17 state asset hashes** and **eight screenshot hashes** match the
+  journal; health remained 20 throughout those recorded snapshots. The journal
+  contains only state, observation, and stop requests, plus the verified
+  pre-start snapshot supplied by the launcher.
+
+The independent judge sent no gameplay or lifecycle controls. Full mining,
+crafting, smelting, ten-block casting, and living Nether arrival remain pending
+for this route.

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .bridge import BridgeError, GameBridge
 from .config import Settings
 from .engine import AgentEngine
+from .engineering import Engineering
 from .recording import read_events
 
 STATIC = Path(__file__).parent / "static"
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raise ValueError("RUN_GOAL must be early_game or nether")
     bridge = GameBridge()
     engine = AgentEngine(settings, bridge)
+    engineering = Engineering(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -51,17 +53,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await asyncio.sleep(0.5)
 
         ticker = asyncio.create_task(heartbeat())
+        investigations = asyncio.create_task(engineering.run())
         try:
             yield
         finally:
             ticker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await ticker
+            investigations.cancel()
             await engine.close()
+            await engineering.close()
+            done, _ = await asyncio.wait((ticker, investigations), timeout=2)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()
 
     app = FastAPI(title="HoloSpeed", lifespan=lifespan)
     app.state.engine = engine
     app.state.bridge = bridge
+    app.state.engineering = engineering
 
     @app.middleware("http")
     async def protect_local_control(request: Request, call_next):
@@ -114,6 +122,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not (path / "summary.json").is_file():
             raise HTTPException(404, "Unknown run")
         return path
+
+    @app.post("/api/devin/{run_id}/brief")
+    async def investigation_brief(run_id: str):
+        run_path(run_id)
+        try:
+            return {"ok": True, "data": await engineering.prepare(run_id)}
+        except (OSError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/devin/{run_id}/investigate")
+    async def investigate(run_id: str, request: Request):
+        run_path(run_id)
+        raw = await request.body()
+        if len(raw) > 512:
+            raise HTTPException(400, "Invalid investigation request")
+        try:
+            value = json.loads(raw)
+            if not isinstance(value, dict) or set(value) != {"digest_hash"}:
+                raise ValueError("Supply only the reviewed digest_hash")
+            return {"ok": True, "data": await engineering.investigate(run_id, value["digest_hash"])}
+        except (OSError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.get("/api/devin/{run_id}")
+    async def investigation_status(run_id: str):
+        run_path(run_id)
+        try:
+            return {"ok": True, "engineering": engineering.latest(run_id)}
+        except (OSError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
 
     @app.get("/api/runs")
     async def runs():

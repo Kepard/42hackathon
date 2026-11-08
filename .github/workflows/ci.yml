@@ -37,7 +37,10 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew build --no-daemon
+      - name: Install checksum-pinned Gradle
+        working-directory: fabric-mod
+        run: python3 scripts/bootstrap-gradle.py "$RUNNER_TEMP/holospeed-gradle"
+      - run: gradle build --no-daemon
         working-directory: fabric-mod
       - uses: actions/upload-artifact@v4
         with:

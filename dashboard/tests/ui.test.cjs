@@ -43,8 +43,9 @@ function observerHarness(options = {}) {
     }
     addEventListener() {}
     setAttribute() {}
-    append() {}
+    append(...children) {this.appended = [...(this.appended || []), ...children];}
     replaceChildren(...children) {
+      this.nodes = children;
       this.textContent = children.map((child) => typeof child === "string" ? child : child.textContent || "").join("");
     }
   }
@@ -79,7 +80,7 @@ function observerHarness(options = {}) {
     Date: class extends Date {static now() {return now;}},
     setInterval() {}, setTimeout(callback, delay) {timers.push({callback, delay});}, clearTimeout() {},
     Number, String, Set, Map, encodeURIComponent, URLSearchParams, AbortController,
-    crypto: {randomUUID: () => "ad67598a-6d1f-4e66-8730-0e2e76c1cd28"},
+    crypto: {randomUUID: options.randomUUID || (() => "ad67598a-6d1f-4e66-8730-0e2e76c1cd28")},
     Hls: options.Hls,
     location: {hash: options.hash || "", pathname: "/", search: ""},
     history: {replaceState(_state, _title, url) {replacedUrls.push(url);}},
@@ -92,6 +93,9 @@ function observerHarness(options = {}) {
     globalThis.observerTest = {
       set(value, online = true) {envelope = value; reachable = online;},
       updateCapture, renderState, renderControls, submitCommand, refreshCommand, lockControls, pollCapture, renderVideo, trackVideoFrame,
+      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun,
+      engineering(runId, value) {engineeringRun = runId; if (value) engineeringByRun.set(runId, value);},
+      journal(value, runId) {journal = value; selectedRun = runId;},
       videoMetadata(value) {videoMetadata = value; videoReachable = true; startVideo(value);},
       resources(state, fresh = true) {renderResources(state, {fresh});}
     };
@@ -412,4 +416,173 @@ test("the visual route names all eleven preparation and Nether checkpoints", () 
   for (const [id, label] of Object.entries({portal_located: "Locate the portal", chest_looted: "Loot the portal chest", obsidian_acquired: "Acquire obsidian", ignition_acquired: "Acquire ignition", portal_repaired: "Repair the portal", portal_lit: "Light the portal"})) {
     assert.equal(helpers.eventDescription({type: "milestone", data: {id, verification: "game_state"}}), `Confirmed from game state: ${label}`);
   }
+});
+
+function inference(seq, provider, phase, data = {}) {
+  return {seq, timestamp: new Date(NOW).toISOString(), type: "inference", data: {provider, phase, request_id: `request-${seq}`, task: "Choose the next route", input_source: provider === "holo" ? "screenshot_and_state" : "state", ...data}};
+}
+
+test("model animation requires an actual fresh pending request and stops on terminal events", () => {
+  const thinking = inference(1, "holo", "thinking");
+  const running = {status: "running"};
+  assert.equal(helpers.inferenceStage([thinking], "holo", running, true, NOW).active, true);
+  assert.equal(helpers.inferenceStage([thinking], "jev", running, true, NOW).status, "Standby");
+  assert.equal(helpers.inferenceStage([thinking], "holo", running, false, NOW).active, false);
+  assert.equal(helpers.inferenceStage([thinking], "holo", {status: "paused"}, true, NOW).active, false);
+  assert.equal(helpers.inferenceStage([thinking], "holo", running, true, NOW + 16000).active, false);
+  assert.equal(helpers.inferenceStage([thinking], "holo", running, true, NOW + 16000).status, "No result recorded");
+  assert.equal(helpers.inferenceStage([thinking], "holo", {status: "paused"}, true, NOW).status, "No result recorded");
+  assert.equal(helpers.inferenceStage([{...thinking, timestamp: undefined}], "holo", running, true, NOW).active, false);
+  const completed = inference(2, "holo", "complete", {rationale: "The portal is nearby; prepare ignition first."});
+  const stage = helpers.inferenceStage([completed, thinking], "holo", running, true, NOW);
+  assert.equal(stage.active, false);
+  assert.equal(stage.rationale, "The portal is nearby; prepare ignition first.");
+  assert.equal(stage.status, "Decision recorded");
+  const cancelled = inference(3, "holo", "failed", {cancelled: true, reason: "Agent paused"});
+  assert.equal(helpers.inferenceStage([thinking, completed, cancelled], "holo", running, true, NOW).status, "Cancelled");
+  const local = {seq: 4, type: "skill_decision", data: {provider: "local", reason: "Fallback"}};
+  assert.equal(helpers.inferenceStage([local], "jev", running, true, NOW).status, "Standby");
+});
+
+test("mission keeps real recorded decisions across event windows without mixing runs or archives", () => {
+  const ui = observerHarness();
+  const state = {run_id: "live", status: "running", events: [inference(1, "holo", "complete", {rationale: "Reach the visible portal."}), inference(2, "jev", "thinking")]};
+  ui.renderMission(state, {fresh: true});
+  assert.equal(ui.element("mission-flow-state").textContent, "Jev is checking");
+  assert.equal(ui.element("mission-jev").classList.contains("active"), true);
+  assert.equal(ui.element("mission-holo-input").textContent, "Vision + game state");
+  assert.equal(ui.element("mission-jev-input").textContent, "Game state");
+  ui.journal({events: [inference(100, "holo", "complete", {rationale: "Archived and unrelated"})]}, "archive");
+  ui.renderMission({...state, events: []}, {fresh: true});
+  assert.equal(ui.element("mission-holo-rationale").textContent, "Reach the visible portal.");
+  ui.renderMission({...state, events: [inference(3, "jev", "failed", {cancelled: true, reason: "Paused before dispatch"})], status: "paused"}, {fresh: true});
+  assert.equal(ui.element("mission-jev").classList.contains("active"), false);
+  assert.equal(ui.element("mission-jev-error").textContent, "Paused before dispatch");
+  assert.equal(ui.element("mission-flow-state").textContent, "Agent paused");
+  ui.renderMission({run_id: "new", status: "running", events: []}, {fresh: true});
+  assert.equal(ui.element("mission-holo-rationale").textContent, "No decision recorded yet.");
+  assert.equal(ui.element("mission-holo-status").textContent, "Standby");
+});
+
+test("Devin preview is bound to one run, exact digest, and the capped budget", () => {
+  const preview = {run_id: "run-1", prompt: "Analyze this exact brief.\nKeep newlines.", digest_hash: "a".repeat(64), max_acu_limit: 2, can_submit: true, existing: null};
+  assert.equal(helpers.investigationPreview(preview, "run-1").prompt, preview.prompt);
+  assert.equal(helpers.investigationPreview(preview, "run-2"), null);
+  assert.equal(helpers.investigationPreview({...preview, digest_hash: "short"}, "run-1"), null);
+  assert.equal(helpers.investigationPreview({...preview, max_acu_limit: 3}, "run-1"), null);
+  assert.equal(helpers.investigationPreview({...preview, prompt: ""}, "run-1"), null);
+  assert.equal(helpers.investigationPreview({...preview, existing: {status: "unknown"}}, "run-1").can_submit, false);
+  assert.equal(helpers.devinSessionUrl("https://app.devin.ai/sessions/devin-abc_123"), "https://app.devin.ai/sessions/devin-abc_123");
+  for (const url of ["https://evil.example/sessions/123", "https://app.devin.ai.evil.example/sessions/123", "javascript:alert(1)", "https://app.devin.ai/sessions/123?token=private"]) assert.equal(helpers.devinSessionUrl(url), null);
+  assert.equal(helpers.engineeringStatus({status: "running"}), "Devin is investigating");
+  assert.equal(helpers.engineeringStatus({status: "running", status_detail: "finished"}), "Investigation finished");
+  assert.equal(helpers.engineeringStatus({status: "running", status_detail: "waiting_for_user"}), "Waiting for operator input");
+  assert.equal(helpers.engineeringStatus({status: "running", updated_at: NOW - 61000}, NOW), "Last recorded: running");
+  assert.equal(helpers.engineeringStatus({status: "running", updated_at: NOW - 1000}, NOW), "Devin is investigating");
+  assert.equal(helpers.engineeringStatus({status: "unknown"}), "Submission unconfirmed");
+});
+
+test("unavailable Devin submission never invents an existing investigation", () => {
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters"});
+  ui.set({updated_at: NOW, state: {}, runs: [{id: "run-1"}]});
+  ui.engineering("run-1");
+  const data = {run_id: "run-1", prompt: "Prepared redacted brief", digest_hash: "b".repeat(64), max_acu_limit: 2, can_submit: false, existing: null};
+  ui.handleEngineeringCommand({id: "unavailable", action: "prepare_investigation", status: "completed", data});
+  ui.renderEngineering();
+  assert.match(ui.element("devin-feedback").textContent, /submission is unavailable/);
+  assert.doesNotMatch(ui.element("devin-feedback").textContent, /already has/);
+  assert.equal(ui.element("devin-prompt").textContent, data.prompt);
+  assert.equal(ui.element("devin-submit").disabled, true);
+  ui.handleEngineeringCommand({id: "existing", action: "prepare_investigation", status: "completed", data: {...data, existing: {status: "unknown"}}});
+  ui.renderEngineering();
+  assert.match(ui.element("devin-feedback").textContent, /already has a recorded investigation/);
+});
+
+test("Devin submits only after private preparation and explicit confirmation of that brief", async () => {
+  const token = "test-operator-capability-with-at-least-32-characters";
+  const requests = [];
+  let serial = 0;
+  const preview = {run_id: "run-1", prompt: "Exact redacted brief\nNo screenshots included.", digest_hash: "b".repeat(64), max_acu_limit: 2, can_submit: true, existing: null};
+  const ui = observerHarness({token, randomUUID: () => `command-${++serial}`, fetch: async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({url, options, body});
+    return {ok: true, json: async () => ({command: {...body, status: "completed", data: body.action === "prepare_investigation" ? preview : {run_id: "run-1", status: "submitting", max_acu_limit: 2}}})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "controller-offline", state: {}, runs: [{id: "run-1"}]});
+  ui.engineering("run-1"); ui.renderEngineering();
+  assert.equal(ui.element("devin-prepare").disabled, false, "An online publisher can investigate archived logs while gameplay is paused or offline");
+  await ui.submitCommand("investigate", {run_id: "run-1", digest_hash: preview.digest_hash});
+  assert.equal(requests.length, 0);
+  await ui.submitCommand("prepare_investigation", {run_id: "run-1"});
+  assert.equal(requests.length, 1);
+  assert.equal(ui.element("devin-prompt").textContent, preview.prompt);
+  assert.equal(ui.element("devin-review").hidden, false);
+  assert.equal(ui.element("devin-submit").disabled, true);
+  await ui.submitCommand("investigate", {run_id: "run-1", digest_hash: preview.digest_hash});
+  assert.equal(requests.length, 1);
+  ui.element("devin-confirm").checked = true; ui.renderEngineering();
+  assert.equal(ui.element("devin-submit").disabled, false);
+  await ui.submitCommand("investigate", {run_id: "run-1", digest_hash: "c".repeat(64)});
+  assert.equal(requests.length, 1, "An unreviewed digest cannot be submitted");
+  await ui.submitCommand("investigate", {run_id: "run-1", digest_hash: preview.digest_hash});
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].body, {id: "command-2", action: "investigate", run_id: "run-1", digest_hash: preview.digest_hash});
+  assert.equal(requests[1].options.headers.Authorization, `Bearer ${token}`);
+  assert.ok(!requests[1].options.body.includes(preview.prompt));
+  assert.equal(ui.element("devin-prompt").textContent, "");
+  assert.equal(ui.element("devin-submit").disabled, true);
+  assert.equal(ui.element("devin-session-status").textContent, "Submitting to Devin");
+});
+
+test("public findings remain viewable but public viewers cannot prepare or submit investigations", async () => {
+  const ui = observerHarness();
+  ui.set({updated_at: NOW, state: {}, runs: [{id: "run-1"}]});
+  ui.engineering("run-1", {status: "running", status_detail: "finished", url: "https://app.devin.ai/sessions/session-1", structured_output: {summary: "<script>Never execute report text</script>", likely_causes: ["Route was blocked"], proposed_tests: ["Test blocked route recovery"], test_patches: [{relative_path: "tests/test_route.py", purpose: "Exercise recovery", code: "<script>plain code only</script>", validation_status: "not_run"}]}});
+  ui.renderEngineering();
+  assert.equal(ui.element("devin-prepare").disabled, true);
+  assert.equal(ui.element("devin-submit").disabled, true);
+  assert.equal(ui.element("devin-findings-summary").textContent, "<script>Never execute report text</script>");
+  assert.equal(ui.element("devin-causes").textContent, "Route was blocked");
+  assert.equal(ui.element("devin-session-link").hidden, false);
+  const patch = ui.element("devin-patches").nodes[0];
+  assert.equal(patch.appended[2].textContent, "<script>plain code only</script>");
+  ui.renderEngineering();
+  assert.equal(ui.element("devin-patches").nodes[0], patch, "Polling must not collapse an open test proposal");
+  await ui.submitCommand("prepare_investigation", {run_id: "run-1"});
+  assert.equal(ui.element("devin-review").hidden, true);
+});
+
+test("locking controls during preparation ignores the late private brief", async () => {
+  let finish;
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: () => new Promise((resolve) => {finish = resolve;})});
+  ui.set({updated_at: NOW, state: {}, runs: [{id: "run-1"}]});
+  ui.engineering("run-1");
+  const pending = ui.submitCommand("prepare_investigation", {run_id: "run-1"});
+  ui.lockControls();
+  finish({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "prepare_investigation", status: "completed", data: {run_id: "run-1", prompt: "PRIVATE PREVIEW", digest_hash: "a".repeat(64), max_acu_limit: 2, can_submit: true, existing: null}}})});
+  await pending;
+  assert.equal(ui.element("devin-review").hidden, true);
+  assert.equal(ui.element("devin-prompt").textContent, "");
+  assert.equal(ui.element("devin-submit").disabled, true);
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+});
+
+test("local execution requires fresh matching skill evidence and does not invent portal item progress", () => {
+  const ui = observerHarness();
+  const action = {skill: "mine", item: "minecraft:stone", target_count: 3};
+  const event = {seq: 2, timestamp: new Date(NOW).toISOString(), type: "skill_progress", data: {inventory_count: 1, skill: {kind: "mine", item: "minecraft:stone", target_count: 3, active: true, phase: "mining"}}};
+  const state = {run_id: "live", status: "running", action, events: [{seq: 1, type: "skill_started"}, event]};
+  ui.resources(state); ui.renderMission(state, {fresh: true});
+  assert.equal(ui.element("mission-executor").classList.contains("active"), true);
+  assert.equal(ui.element("executor-progress").value, 1);
+  assert.equal(ui.element("executor-progress").max, 3);
+  ui.setNow(NOW + 6000); ui.renderMission(state, {fresh: true});
+  assert.equal(ui.element("mission-executor").classList.contains("active"), false);
+  assert.equal(ui.element("executor-progress").hidden, true);
+  ui.setNow(NOW);
+  const portal = {run_id: "portal", status: "running", action: {skill: "portal", item: "minecraft:nether_portal", target_count: 1}, events: [{...event, data: {inventory_count: 0, skill: {kind: "portal", item: "minecraft:nether_portal", target_count: 1, active: true, phase: "repairing_frame"}}}]};
+  ui.resources(portal); ui.renderMission(portal, {fresh: true});
+  assert.equal(ui.element("mission-executor").classList.contains("active"), true);
+  assert.equal(ui.element("skill-count").textContent, "Portal route");
+  assert.equal(ui.element("skill-name").textContent, "Navigate · build · enter Nether");
 });

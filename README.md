@@ -1,7 +1,8 @@
 # HoloSpeed
 
-A state-aware Minecraft speedrunning agent with **Holo4 strategy**, **Jev skill
-selection**, a custom Fabric bridge, and local navigation, mining, and crafting.
+A state-aware Minecraft speedrunning agent with **Holo4 strategy**, **Jev fresh-state
+validation and skill selection**, a custom Fabric bridge, and local navigation,
+mining, and crafting.
 The current target is **Nether entry**, with verified checkpoints for resources,
 portal discovery, chest loot, repair, ignition, and dimension transfer. Stone tools
 remain an independently verified early-game checkpoint. The agent uses normal
@@ -10,6 +11,10 @@ survival interactions and checks progress against game state.
 **[Watch the live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site)**
 H.264 live video, private operator controls, detailed event logs, input telemetry, model latency,
 objectives, and run archives. Its H Company-inspired design uses Cal Sans.
+The **On a mission** panel follows actual Holo4 and Jev requests through planning,
+validation, and local execution, with input sources, decisions, and measured latency.
+**Devin engineering** turns a selected run into a reviewable investigation brief,
+then displays session status, findings, and proposed regression tests.
 The publisher must remain running alongside Minecraft; stale/offline states are explicit.
 See [dashboard setup and source](dashboard/README.md).
 
@@ -58,8 +63,9 @@ loopback and authenticates with a local token.
    effort `none`, `jev-1.14.0`, and a 30-second model request timeout.
    `GAMEPLAY_MODE=state` and `RUN_GOAL=nether` are the live defaults. Set
    `RUN_GOAL=early_game` to stop at stone tools. Holo4 chooses objectives at phase
-   boundaries using structured state and screenshots. Jev selects routine skills;
-   local prerequisites and inventory checks govern execution. Model planning is
+   boundaries using structured state and screenshots. Jev validates its proposal
+   against fresh state and selects routine skills; local prerequisites and
+   inventory checks govern execution. Model planning is
    bounded to eight seconds with a logged deterministic fallback. Keep provider
    credentials in the controller environment, not the mod configuration.
 3. Generate matching controller/mod credentials from the repository root:

@@ -61,6 +61,40 @@ def test_digest_is_bounded_valid_json_and_reports_omissions():
     assert digest["omitted_event_count"] + len(digest["recent_events"]) == 300
 
 
+def test_digest_preserves_public_planning_and_validation_evidence_amid_telemetry():
+    events = [
+        {
+            "seq": 1,
+            "type": "inference",
+            "data": {
+                "task": "choose_skill",
+                "request_id": "holo-request-1",
+                "decision_role": "strategic_planner",
+                "rationale": "Gather sufficient cobblestone before returning to the table.",
+                "candidate": {"candidate_id": "mine-cobblestone", "target_count": 6},
+                "private_reasoning": "must not be included",
+            },
+        },
+        {
+            "seq": 2,
+            "type": "strategy_rejected",
+            "data": {
+                "inference_request_id": "holo-request-1",
+                "validation_provider": "jev",
+                "validation_request_id": "jev-request-2",
+                "reason": "Current candidate is outside interaction range",
+            },
+        },
+    ] + [{"seq": n, "type": "telemetry", "data": {"fps": 30}} for n in range(3, 100)]
+    prompt = build_analysis_prompt({}, events)
+    digest = json.loads(prompt.split("RUN_DIGEST_JSON\n", 1)[1])
+    inference = next(item for item in digest["recent_events"] if item["type"] == "inference")
+    assert inference["data"]["candidate"]["target_count"] == 6
+    assert inference["data"]["decision_role"] == "strategic_planner"
+    assert "Gather sufficient cobblestone" in prompt and "jev-request-2" in prompt
+    assert "private_reasoning" not in prompt and "must not be included" not in prompt
+
+
 @pytest.mark.parametrize("settings", [Settings(), Settings(devin_api_key="test-key")])
 async def test_submit_requires_configuration_without_network(settings):
     def unexpected_call(request):
@@ -105,7 +139,7 @@ async def test_submit_sends_one_bounded_v3_request_with_configured_secrets_redac
     assert "attachment_urls" not in payload
     assert "unusual-secret" not in payload["prompt"]
     assert "bridge-private" not in payload["prompt"]
-    assert "feat/holospeed-agent" in payload["prompt"]
+    assert "current default branch" in payload["prompt"]
 
 
 async def test_timeout_does_not_retry_or_expose_request_details():

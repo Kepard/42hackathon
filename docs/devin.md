@@ -4,6 +4,37 @@ Devin runs outside the Minecraft control loop. It reviews a bounded diagnostic
 digest, investigates failures, generates proposed regression-test source, and
 suggests minimal improvements. Gameplay never waits for its response.
 
+## Use the dashboard
+
+Open **Devin engineering**, select a recorded run, and choose **Prepare
+investigation**. Operator access is required for this action. The controller
+prepares and persists the exact redacted prompt; the dashboard displays that
+prompt, its SHA-256 digest, and the fixed **2-ACU cap**. Review the brief and
+confirm **Create investigation** to submit it. The browser sends only the run ID
+and reviewed digest, so a later gameplay event cannot silently change the
+approved prompt.
+
+Submission runs asynchronously. The controller stores a durable receipt before
+contacting Devin and accepts only one investigation per recorded run. Duplicate
+clicks return that existing receipt. A timeout, interrupted submission, or restart
+with an unfinished receipt becomes **unknown** and is never submitted again
+automatically; inspect Devin history before taking further action.
+
+Session status and findings update outside the game loop. Public viewers can
+read the last published status, session link, findings, and proposed test source.
+They cannot prepare briefs or create paid sessions. The full prompt is restricted
+to the authenticated operator command result and local brief file; it is never
+included in public run events or the public engineering record. Proposed source
+is displayed as text and is not executed or applied.
+
+Run artifacts are stored under `runs/<run-id>/engineering/`: immutable
+`brief-<sha256>.json`, the creation/session responses, and a bounded public
+`latest.json`. Publishing copies only the public record into the run archive.
+The existing real [table-return investigation](devin-investigation.md) is attached
+to its historical run for inspection without creating a new session.
+
+## Use the CLI
+
 The integration uses the **Devin v3 API** with a personal access token and an
 organization ID. Keep `DEVIN_API_KEY` and `DEVIN_ORG_ID` in the ignored `.env`.
 Read the accessible organization information without creating a session:
@@ -72,19 +103,23 @@ keys, local paths, and configured credentials are omitted or redacted. Current
 engineering notes use the same text redaction and a bounded field allowlist.
 The complete original journal and compressed state snapshots remain local.
 
-Sessions target only `Kepard/42hackathon`, branch `feat/holospeed-agent`, with
+Sessions target only `Kepard/42hackathon` and its current default branch, with
 memory disabled and no secret/knowledge attachments. The prompt requests
 analysis and test/patch suggestions only; it forbids pushes, PR creation, merges,
 deployments, live Minecraft/model sessions, and access to other repositories.
 Remote source can lag local changes, so the analysis must identify missing code
-and evidence rather than invent verification results.
+and evidence rather than invent verification results. Dashboard briefs include the
+controller checkout commit when available and explicitly note that uncommitted
+changes may differ. Submission ownership is durably claimed across controller
+processes before contacting Devin; an uncertain response is never automatically retried.
 
 ## Verification
 
-The integration has 15 focused tests covering v3 requests, the 2-ACU limit,
+Focused tests cover v3 requests, the 2-ACU limit,
 credential and artifact redaction, strict state/inventory evidence, event-priority
-budgeting, context updates, structured test source, and ambiguous failures without
-retries. A real v3 identity request and one capped investigation were submitted
+budgeting, public planning/validation evidence, context updates, structured test
+source, exact reviewed prompts, concurrent controller ownership, cancellation-safe
+game shutdown, and ambiguous failures without retries. A real v3 identity request and one capped investigation were submitted
 on 2026-11-08 against the recorded table-return failure. It returned structured
 analysis and two proposed test patches; those patches use assumed APIs and were
 tested only against Devin's own stubs. See the [investigation report](devin-investigation.md)

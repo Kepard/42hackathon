@@ -96,6 +96,23 @@
       count: typeof value === "number" && Number.isFinite(value) ? value : null,
       phase: matches ? skill.phase || "" : "", event: matches ? progress : null};
   }
+  function concise(value, words = 20) {
+    const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
+    return parts.length > words ? `${parts.slice(0, words).join(" ")}…` : parts.join(" ");
+  }
+  function inferenceStage(events, provider, state, fresh, now = Date.now()) {
+    const calls = events.filter((event) => event.type === "inference" && event.data?.provider === provider);
+    const latest = latestEvent(calls, "inference");
+    const result = latestEvent(calls.filter((event) => event.data?.phase === "complete"), "inference");
+    const failed = latestEvent(calls.filter((event) => event.data?.phase === "failed"), "inference");
+    const stamp = timestamp(latest?.timestamp);
+    const age = stamp == null ? null : now - stamp;
+    const pending = latest?.data?.phase === "thinking";
+    // A heartbeat cannot keep an abandoned request looking active indefinitely.
+    const active = Boolean(fresh && state?.status === "running" && pending && age != null && age >= -2000 && age < 15000);
+    const status = active ? "Thinking" : !fresh && latest ? "Last recorded" : pending ? "No result recorded" : latest?.data?.phase === "failed" ? latest.data.cancelled ? "Cancelled" : latest.data.rejected ? "Action rejected" : "Last call failed" : latest?.data?.phase === "complete" ? "Decision recorded" : "Standby";
+    return {latest, result, failed, active, status, task: concise(latest?.data?.task || ""), rationale: concise(result?.data?.rationale || ""), inputSource: latest?.data?.input_source || null};
+  }
   function actionDescription(action) {
     if (!action || typeof action !== "object") return "Input requested";
     if (action.skill) return `${itemName(action.skill)} · ${itemName(action.item)}${action.target_count != null ? ` · target ${action.target_count}` : ""}`;
@@ -109,6 +126,7 @@
   }
   function eventDescription(event) {
     const data = event.data || {};
+    if (event.type === "inference") return `${providerName(data.provider)} · ${data.phase || "request"}${data.task ? ` · ${data.task}` : ""}${data.rationale ? ` · ${data.rationale}` : data.reason ? ` · ${data.reason}` : ""}`;
     if (event.type === "state_summary") return `Game state · tick ${data.tick ?? "—"} · ${Object.keys(data.inventory || {}).length} inventory item types`;
     if (event.type === "skill_decision") return `${providerName(data.provider)} · ${actionDescription(data.candidate)}${data.rationale ? ` · ${data.rationale}` : ""}`;
     if (event.type === "skill_started") return actionDescription(data);
@@ -163,14 +181,30 @@
     };
   }
 
+  function investigationPreview(value, runId) {
+    if (!value || value.run_id !== runId || typeof value.prompt !== "string" || !value.prompt.trim() || value.prompt.length > 100000 || !/^[a-f0-9]{64}$/.test(value.digest_hash || "") || value.max_acu_limit !== 2 || typeof value.can_submit !== "boolean") return null;
+    return {run_id: value.run_id, prompt: value.prompt, digest_hash: value.digest_hash, max_acu_limit: 2, can_submit: value.can_submit && !value.existing, existing: value.existing || null};
+  }
+  function engineeringStatus(value, now = Date.now()) {
+    if (!value) return "No investigation yet";
+    if (value.status_detail === "finished" && ["running", "exit"].includes(value.status)) return "Investigation finished";
+    if (value.status_detail === "waiting_for_user") return "Waiting for operator input";
+    const recordedAt = timestamp(value.updated_at);
+    const ongoing = {submitting: "submitting", new: "queued", created: "session created", claimed: "assigned", running: "running", resuming: "resuming"};
+    if (recordedAt != null && now - recordedAt > 60000 && ongoing[value.status]) return `Last recorded: ${ongoing[value.status]}`;
+    return ({submitting: "Submitting to Devin", unknown: "Submission unconfirmed", failed: "Submission failed", new: "Queued with Devin", created: "Session created", claimed: "Assigned to Devin", running: "Devin is investigating", exit: "Session ended", error: "Needs attention", suspended: "Session paused", resuming: "Session resuming"})[value.status] || "Status recorded";
+  }
+  function devinSessionUrl(value) {
+    return typeof value === "string" && /^https:\/\/app\.devin\.ai\/sessions\/[A-Za-z0-9_-]+$/.test(value) ? value : null;
+  }
   // Pure helpers can be tested in Node without a browser or network.
   if (typeof module === "object" && module.exports) {
-    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability};
+    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl};
     return;
   }
 
   const $ = (id) => document.getElementById(id);
-  const text = (id, value) => { $(id).textContent = value; };
+  const text = (id, value) => { const element = $(id); if (element.textContent !== String(value)) element.textContent = value; };
   let envelope = null;
   let reachable = false;
   let cameraEnvelope = null;
@@ -202,6 +236,17 @@
   let lastLiveEventSignature = "";
   let evidenceRun = null;
   let resourceEvidence = [];
+  let inferenceRun = null;
+  let inferenceEvidence = [];
+  let engineeringRun = null;
+  let engineeringPreview = null;
+  let engineeringMessage = "";
+  let engineeringBusy = false;
+  let engineeringLastFetched = 0;
+  let engineeringSelectionVersion = 0;
+  let handledEngineeringCommand = null;
+  let engineeringFindingsSignature = null;
+  const engineeringByRun = new Map();
   const expandedEvents = new Set();
   let storage = null;
   try { storage = typeof sessionStorage !== "undefined" ? sessionStorage : null; } catch { /* Private browsing may deny storage. */ }
@@ -380,6 +425,8 @@
     text("holo-latency", latency(state.holo_latency_ms));
     text("jev-latency", latency(state.jev_latency_ms));
     renderResources(state, telemetry);
+    renderMission(state, telemetry);
+    renderEngineering();
     const action = telemetry.fresh ? state.action || {} : {};
     const held = new Set(telemetry.fresh && state.status === "running" ? (state.keys || []) : []);
     if (telemetry.fresh && state.status === "running" && action.cursor?.button === "left") held.add("attack");
@@ -434,7 +481,10 @@
     try { storage?.removeItem("holospeed.operator"); storage?.removeItem("holospeed.command"); } catch { /* Memory is cleared regardless. */ }
     commandMessage = message;
     operatorCommand = null;
+    engineeringPreview = null;
+    $("devin-confirm").checked = false;
     renderControls();
+    renderEngineering();
   }
   async function commandRequest(path, body) {
     const controller = new AbortController();
@@ -451,25 +501,35 @@
       return result.command;
     } finally { clearTimeout(timer); }
   }
-  async function submitCommand(action) {
-    if ($(`control-${action}`).disabled || !operatorToken || commandBusy) return;
+  async function submitCommand(action, payload = {}) {
+    const engineering = ["prepare_investigation", "investigate"].includes(action);
+    if (engineering) {
+      renderEngineering();
+      if ($(action === "prepare_investigation" ? "devin-prepare" : "devin-submit").disabled || payload.run_id !== engineeringRun) return;
+      if (action === "investigate" && (!engineeringPreview || payload.digest_hash !== engineeringPreview.digest_hash)) return;
+    } else if ($(`control-${action}`).disabled) return;
+    if (!operatorToken || commandBusy) return;
     const id = crypto.randomUUID();
     operatorCommand = {id, action, status: "pending", submitted_at: Date.now()};
     try { storage?.setItem("holospeed.command", JSON.stringify({id, submitted_at: operatorCommand.submitted_at})); } catch { /* Still track within this page. */ }
-    commandBusy = true; commandMessage = "Sending command…"; renderControls();
+    commandBusy = true; commandMessage = "Sending command…";
+    if (engineering) { engineeringMessage = action === "prepare_investigation" ? "Preparing the exact redacted brief…" : "Requesting one capped Devin investigation…"; renderEngineering(); }
+    renderControls();
     const submittedAt = operatorCommand.submitted_at;
     const submittedToken = operatorToken;
     try {
-      const result = await commandRequest("/api/commands", {id, action});
+      const result = await commandRequest("/api/commands", {id, action, ...(engineering ? payload : {})});
       if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
-      operatorCommand = {...result, submitted_at: submittedAt};
+      operatorCommand = {...result, action: result.action || action, submitted_at: submittedAt};
       commandMessage = operatorCommand.status === "pending" ? "Command accepted; waiting for the local agent." : operatorCommand.detail || `Command ${operatorCommand.status}.`;
+      handleEngineeringCommand(operatorCommand);
     } catch (error) {
       if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
       if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status && error.status < 500) { operatorCommand = null; commandMessage = error.message; }
       else commandMessage = "Acceptance is unconfirmed. Checking this command ID; it will not be resubmitted.";
-    } finally { commandBusy = false; renderControls(); }
+      if (engineering) engineeringMessage = commandMessage;
+    } finally { commandBusy = false; renderControls(); renderEngineering(); }
   }
   async function refreshCommand() {
     if (!operatorCommand || !operatorToken || commandChecking) return;
@@ -480,12 +540,13 @@
       if (operatorCommand?.id !== id) return;
       operatorCommand = {...result, submitted_at: operatorCommand.submitted_at};
       commandMessage = result.status === "completed" ? result.detail || "Command completed." : result.status === "failed" ? `Command failed · ${result.detail || "Inspect the agent status."}` : result.status === "expired" ? "Command expired without a confirmed result. Check the current agent state." : "Command accepted; waiting for the local agent.";
+      handleEngineeringCommand(operatorCommand);
     } catch (error) {
       if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status === 404 && operatorCommand?.id === id && Date.now() - n(operatorCommand.submitted_at) > 45000) {
         operatorCommand = null; commandMessage = "No command acceptance was confirmed. Check the current agent state before retrying.";
       } else commandMessage = "Command result is unavailable; checking again automatically.";
-    } finally { commandChecking = false; renderControls(); }
+    } finally { commandChecking = false; renderControls(); renderEngineering(); }
   }
   function renderResources(state, telemetry) {
     // Keep only the latest evidence of each kind, scoped to the current run.
@@ -498,8 +559,8 @@
     const skill = skillTelemetry(state.action, resourceEvidence);
     const active = telemetry.fresh && state.status === "running";
     text("skill-state", skill ? active ? "Current skill" : "Last reported skill" : "Current skill");
-    text("skill-name", skill ? `${skill.name} · ${skill.item}` : "No active skill recorded");
-    text("skill-count", skill ? `${skill.count == null ? "—" : count(skill.count)} / ${skill.target == null ? "—" : count(skill.target)}` : "—");
+    text("skill-name", skill ? state.action.skill === "portal" ? "Navigate · build · enter Nether" : `${skill.name} · ${skill.item}` : "No active skill recorded");
+    text("skill-count", skill ? state.action.skill === "portal" ? "Portal route" : `${skill.count == null ? "—" : count(skill.count)} / ${skill.target == null ? "—" : count(skill.target)}` : "—");
     text("skill-phase", skill ? `${skill.phase || "Awaiting progress"}${skill.event ? ` · sampled ${elapsed(skill.event.elapsed_ms)}` : ""}` : "Skill progress will appear during a state-aware run.");
     text("resource-stamp", sample ? `${telemetry.fresh ? "Recorded" : "Last recorded"} ${elapsed(sample.elapsed_ms)} · tick ${sample.data.tick ?? "—"}` : "No state sample");
     const data = sample?.data || {};
@@ -516,6 +577,175 @@
     });
     $("inventory-items").replaceChildren(...chips);
     text("inventory-note", !recorded ? "Inventory not recorded for this run." : !items.length ? "Inventory empty at this sample." : items.length > 12 ? `${items.length - 12} more item types in the journal. Sampled at skill boundaries.` : "Inventory and player status are sampled at skill boundaries.");
+  }
+  function renderMission(state, telemetry) {
+    if (inferenceRun !== state.run_id) { inferenceRun = state.run_id; inferenceEvidence = []; }
+    const available = state.run_id ? [...inferenceEvidence, ...(Array.isArray(state.events) ? state.events : []), ...(selectedRun === state.run_id ? journal.events : [])] : [];
+    const retained = [];
+    for (const provider of ["holo", "jev"]) {
+      const stage = inferenceStage(available, provider, state, telemetry.fresh);
+      for (const event of [stage.latest, stage.result, stage.failed]) if (event) retained.push(event);
+      const card = $(`mission-${provider}`);
+      card.classList.toggle("active", stage.active);
+      card.classList.toggle("recorded", stage.latest?.data?.phase === "complete");
+      card.classList.toggle("failed", stage.latest?.data?.phase === "failed");
+      text(`mission-${provider}-status`, stage.status);
+      text(`mission-${provider}-task`, stage.task || (provider === "holo" ? "Chooses the next objective" : "Checks the next skill"));
+      $(`mission-${provider}-task`).title = String(stage.latest?.data?.task || "");
+      text(`mission-${provider}-rationale`, stage.rationale || "No decision recorded yet.");
+      $(`mission-${provider}-rationale`).title = String(stage.result?.data?.rationale || "");
+      text(`mission-${provider}-reason-label`, stage.result ? "LAST DECISION" : "AWAITING FIRST CALL");
+      text(`mission-${provider}-input`, stage.inputSource === "screenshot_and_state" ? "Vision + game state" : stage.inputSource === "state" ? "Game state" : "No input recorded");
+      $(`mission-${provider}-input`).dataset.source = stage.inputSource || "none";
+      text(`mission-${provider}-error`, stage.latest?.data?.phase === "failed" ? concise(stage.latest.data.reason || "Request did not complete.") : "");
+      $(`mission-${provider}-error`).hidden = stage.latest?.data?.phase !== "failed";
+    }
+    inferenceEvidence = mergeEvents([], retained);
+    const holo = inferenceStage(inferenceEvidence, "holo", state, telemetry.fresh);
+    const jev = inferenceStage(inferenceEvidence, "jev", state, telemetry.fresh);
+    const skill = skillTelemetry(state.action, resourceEvidence);
+    const skillStamp = timestamp(skill?.event?.timestamp);
+    const skillAge = skillStamp == null ? null : Date.now() - skillStamp;
+    const executing = Boolean(telemetry.fresh && state.status === "running" && skill?.event?.data?.skill?.active === true && skillAge != null && skillAge >= -2000 && skillAge < 5000);
+    $("mission-executor").classList.toggle("active", executing);
+    text("mission-executor-status", executing ? "Executing" : !telemetry.fresh && skill ? "Last recorded" : state.action?.skill && state.status === "running" ? "Awaiting progress" : "Standby");
+    const phase = !telemetry.fresh ? "Telemetry unavailable" : holo.active ? "Holo4 is planning" : jev.active ? "Jev is checking" : executing ? "Acting in Minecraft" : state.status === "paused" ? "Agent paused" : state.status === "error" ? "Needs attention" : "Ready for the next step";
+    text("mission-flow-state", phase);
+    $("mission-flow-state").classList.toggle("active", holo.active || jev.active || executing);
+    const progress = $("executor-progress");
+    const quantified = executing && state.action?.skill !== "portal" && Number.isFinite(skill?.count) && Number.isFinite(skill?.target) && skill.target > 0;
+    progress.hidden = !executing;
+    if (quantified) { progress.max = skill.target; progress.value = Math.min(skill.target, Math.max(0, skill.count)); }
+    else progress.removeAttribute?.("value");
+    progress.setAttribute("aria-label", quantified ? `${skill.count} of ${skill.target} items confirmed` : "Local skill is executing; completion is not quantified");
+  }
+  function engineeringCanPrepare() {
+    const age = timestamp(envelope?.updated_at);
+    const publisherFresh = reachable && age != null && Date.now() - age >= -2000 && Date.now() - age < FRESH_FRAME_MS;
+    return Boolean(operatorToken && publisherFresh && engineeringRun && !commandBusy && operatorCommand?.status !== "pending");
+  }
+  function handleEngineeringCommand(command) {
+    if (!operatorToken) return;
+    if (!["prepare_investigation", "investigate"].includes(command?.action) || command.status === "pending") return;
+    const identity = `${command.id}:${command.status}`;
+    if (handledEngineeringCommand === identity) return;
+    handledEngineeringCommand = identity;
+    if (command.status !== "completed") {
+      engineeringMessage = command.detail || `Investigation command ${command.status}. No request will be retried automatically.`;
+      return;
+    }
+    if (command.action === "prepare_investigation") {
+      const preview = investigationPreview(command.data, engineeringRun);
+      if (!preview) { engineeringMessage = "The prepared brief could not be verified. Prepare it again before submitting."; engineeringPreview = null; return; }
+      engineeringPreview = preview;
+      $("devin-confirm").checked = false;
+      if (preview.existing) engineeringByRun.set(engineeringRun, preview.existing);
+      engineeringMessage = preview.can_submit ? "Review the exact brief below, then confirm one investigation." : preview.existing ? "This run already has a recorded investigation. Open its session or review the findings." : "The brief is ready, but submission is unavailable. Check the local Devin API configuration.";
+    } else {
+      if (command.data?.run_id) engineeringByRun.set(command.data.run_id, command.data);
+      engineeringPreview = null;
+      $("devin-confirm").checked = false;
+      engineeringMessage = command.detail || "Investigation submitted. Status and findings will appear here.";
+      engineeringLastFetched = 0;
+    }
+  }
+  function selectEngineeringRun(runId) {
+    if (engineeringRun === runId) return;
+    engineeringRun = runId || null;
+    engineeringPreview = null; engineeringMessage = "";
+    engineeringLastFetched = 0; engineeringBusy = false; engineeringSelectionVersion++;
+    $("devin-confirm").checked = false;
+    renderEngineering();
+    if (engineeringRun) fetchEngineering();
+  }
+  function openEngineering() {
+    const next = selectedRun || envelope?.state?.run_id || envelope?.runs?.[0]?.id || null;
+    if (operatorCommand?.status !== "pending" || !["prepare_investigation", "investigate"].includes(operatorCommand.action)) selectEngineeringRun(next);
+    const dialog = $("devin-dialog");
+    if (!dialog.open) {
+      if (dialog.showModal) dialog.showModal();
+      else { dialog.open = true; dialog.setAttribute("open", ""); }
+    }
+    renderEngineering();
+    if (engineeringRun && !engineeringBusy) fetchEngineering();
+  }
+  function closeEngineering() {
+    const dialog = $("devin-dialog");
+    if (dialog.close) dialog.close();
+    else { dialog.open = false; dialog.removeAttribute?.("open"); }
+  }
+  async function fetchEngineering() {
+    if (!engineeringRun || engineeringBusy) return;
+    engineeringBusy = true;
+    const runId = engineeringRun, version = engineeringSelectionVersion;
+    try {
+      const result = await get(`/api/runs/${encodeURIComponent(runId)}`);
+      if (version !== engineeringSelectionVersion || runId !== engineeringRun) return;
+      if (result.engineering) engineeringByRun.set(runId, result.engineering);
+      engineeringLastFetched = Date.now();
+      renderEngineering();
+    } catch (error) {
+      if (version !== engineeringSelectionVersion || runId !== engineeringRun) return;
+      engineeringLastFetched = Date.now();
+      if (!engineeringByRun.has(runId)) engineeringMessage = error.name === "AbortError" ? "The investigation status request timed out." : "Investigation status is not available yet.";
+      renderEngineering();
+    } finally { if (version === engineeringSelectionVersion) engineeringBusy = false; }
+  }
+  function renderEngineering() {
+    const runs = envelope?.runs || [];
+    const select = $("devin-run");
+    const signature = runs.map((run) => run.id).join("|");
+    if (select.dataset.runs !== signature) {
+      select.dataset.runs = signature;
+      const options = runs.map((run) => {const option = document.createElement("option"); option.value = run.id; option.textContent = `${run.id}${run.metrics?.errors ? ` · ${run.metrics.errors} errors` : ""}`; return option;});
+      if (!options.length) { const option = document.createElement("option"); option.value = ""; option.textContent = "No saved runs yet"; options.push(option); }
+      select.replaceChildren(...options);
+    }
+    if (engineeringRun) select.value = engineeringRun;
+    const pending = commandBusy || operatorCommand?.status === "pending";
+    select.disabled = pending;
+    const value = engineeringByRun.get(engineeringRun) || null;
+    const preview = operatorToken && engineeringPreview?.run_id === engineeringRun ? engineeringPreview : null;
+    const canPrepare = engineeringCanPrepare();
+    $("devin-prepare").disabled = !canPrepare;
+    $("devin-submit").disabled = !canPrepare || !preview?.can_submit || Boolean(value) || !$("devin-confirm").checked;
+    $("devin-review").hidden = !preview;
+    $("devin-confirmation").hidden = !preview?.can_submit;
+    text("devin-prompt", preview?.prompt || "");
+    text("devin-digest", preview ? `SHA-256 ${preview.digest_hash}` : "");
+    text("devin-feedback", engineeringMessage || (!operatorToken ? "Open your private operator link to prepare an investigation. Existing findings remain viewable." : engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
+    text("devin-session-status", engineeringStatus(value));
+    text("devin-session-detail", value?.status_detail ? `Reported state: ${value.status_detail}${value.updated_at ? ` · updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : ""}` : value?.updated_at ? `Updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : "No session has been recorded for this run.");
+    const sessionUrl = devinSessionUrl(value?.url);
+    $("devin-session-link").hidden = !sessionUrl;
+    $("devin-session-link").href = sessionUrl || "#";
+    text("devin-session-error", value?.error || "");
+    $("devin-session-error").hidden = !value?.error;
+    const current = engineeringByRun.get(selectedRun || envelope?.state?.run_id);
+    text("devin-launch-status", current ? engineeringStatus(current) : "Find failures. Build better runs.");
+    const output = value?.structured_output || {};
+    const findingsSignature = JSON.stringify([engineeringRun, output]);
+    if (findingsSignature !== engineeringFindingsSignature) {
+    engineeringFindingsSignature = findingsSignature;
+    text("devin-findings-summary", typeof output.summary === "string" ? output.summary : "Devin’s findings will appear when the session reports them.");
+    for (const [key, id] of [["likely_causes", "devin-causes"], ["proposed_tests", "devin-tests"], ["proposed_fixes", "devin-fixes"], ["missing_evidence", "devin-missing"]]) {
+      const entries = Array.isArray(output[key]) ? output[key].filter((item) => typeof item === "string").slice(0, 12) : [];
+      const nodes = entries.map((item) => {const li = document.createElement("li"); li.textContent = item; return li;});
+      if (!nodes.length) { const li = document.createElement("li"); li.className = "finding-empty"; li.textContent = "Not reported yet"; nodes.push(li); }
+      $(id).replaceChildren(...nodes);
+    }
+    const patches = Array.isArray(output.test_patches) ? output.test_patches.slice(0, 8) : [];
+    const patchNodes = patches.filter((patch) => patch && typeof patch.relative_path === "string" && typeof patch.code === "string").map((patch) => {
+      const details = document.createElement("details"); details.className = "devin-patch";
+      const summary = document.createElement("summary"); summary.textContent = patch.relative_path;
+      const note = document.createElement("p"); note.textContent = `${patch.purpose || "Proposed test"} · ${patch.validation_status || "Not validated by this dashboard"}`;
+      const code = document.createElement("pre"); code.textContent = patch.code;
+      details.append(summary, note, code); return details;
+    });
+    $("devin-patches").replaceChildren(...patchNodes);
+    $("devin-patches-section").hidden = !patchNodes.length;
+    }
+    if ($("devin-dialog").open && engineeringRun && !engineeringBusy && Date.now() - engineeringLastFetched > 10000) fetchEngineering();
   }
   function renderRuns() {
     const runs = envelope?.runs || [];
@@ -561,6 +791,7 @@
       const result = await get(`/api/runs/${encodeURIComponent(runId)}`);
       if (selectedRun !== runId || journalRequestVersion !== version) return;
       journal.summary = result.summary || journal.summary;
+      if (result.engineering) { engineeringByRun.set(runId, result.engineering); renderEngineering(); }
       journal.events = mergeEvents(journal.events, Array.isArray(result.events) ? result.events : []);
       journalLoaded = true; journalLastFetched = Date.now(); $("journal-alert").hidden = true;
       renderJournal();
@@ -654,6 +885,18 @@
     finally { setTimeout(pollVideo, document.hidden ? 2000 : 1000); }
   }
 
+  $("devin-open").addEventListener("click", openEngineering);
+  $("devin-open-journal").addEventListener("click", openEngineering);
+  $("devin-close").addEventListener("click", closeEngineering);
+  $("devin-run").addEventListener("change", () => selectEngineeringRun($("devin-run").value));
+  $("devin-confirm").addEventListener("change", renderEngineering);
+  $("devin-prepare").addEventListener("click", () => {
+    engineeringPreview = null; $("devin-confirm").checked = false;
+    submitCommand("prepare_investigation", {run_id: engineeringRun});
+  });
+  $("devin-submit").addEventListener("click", () => {
+    if (engineeringPreview) submitCommand("investigate", {run_id: engineeringRun, digest_hash: engineeringPreview.digest_hash});
+  });
   $("fullscreen-button").addEventListener("click", async () => {
     try {if (document.fullscreenElement) await document.exitFullscreen(); else if ($("feed-stage").requestFullscreen) await $("feed-stage").requestFullscreen(); else notify("Fullscreen is not available in this browser.");}
     catch {notify("Fullscreen could not be opened. You can still watch the feed here.");}

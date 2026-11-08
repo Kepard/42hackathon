@@ -367,6 +367,37 @@ async def test_secret_redaction_in_journal_and_result(settings, state, candidate
     assert settings.holo_api_key not in serialized
 
 
+async def test_jev_fresh_state_validation_is_an_actual_singleton_choice_with_replan(
+    settings, state, candidates
+):
+    def handle(request):
+        body = json.loads(request.content)
+        question = body["questions"]["skill"]
+        assert set(question["criteria"]) == {"mine_birch", "__replan__"}
+        assert "freshly sampled" in question["instructions"]
+        assert "proposal, not evidence" in question["instructions"]
+        assert "already achieved its postcondition" in question["instructions"]
+        assert body["state"]["context"]["previous_holo_plan"]["candidate_id"] == "mine_birch"
+        assert "assets" not in body
+        return httpx.Response(
+            200, json={"answers": {"skill": {"type": "choice", "choice": "mine_birch"}}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result = await StrategyProvider(settings, client).choose(
+            None,
+            state,
+            candidates[:1],
+            {
+                "decision_role": "fresh_state_validation",
+                "previous_holo_plan": {"candidate_id": "mine_birch", "rationale": "Gather wood"},
+            },
+            provider="jev",
+        )
+    assert "Jev accepted" in result.rationale
+    assert result.candidate_id == "mine_birch"
+
+
 async def test_cancellation_is_journaled_without_retry(settings, state, candidates):
     calls = 0
     records = []

@@ -17,7 +17,6 @@ from .config import Settings
 
 API_BASE = "https://api.devin.ai/v3"
 REPOSITORY = "https://github.com/Kepard/42hackathon"
-BRANCH = "feat/holospeed-agent"
 MAX_ACU_LIMIT = 2
 MAX_DIGEST_CHARS = 18_000
 MAX_EVENTS = 40
@@ -115,6 +114,14 @@ _LOG_FIELDS = frozenset(
         "retries",
         "attempts",
         "candidate_id",
+        "candidate",
+        "rationale",
+        "task",
+        "request_id",
+        "inference_request_id",
+        "decision_role",
+        "validation_provider",
+        "validation_request_id",
         "skill_id",
         "skill",
         "phase",
@@ -188,6 +195,8 @@ _IMPORTANT_EVENTS = frozenset(
         "skill_failed",
         "skill_decision",
         "strategy_fallback",
+        "strategy_rejected",
+        "inference",
         "inference_metrics",
         "run_started",
         "run_finished",
@@ -354,8 +363,8 @@ def build_analysis_prompt(
         "Generate runnable regression-test source in test_patches with intended repository-relative "
         "paths and an honest validation_status (proposed/unrun unless actually tested). "
         "Prioritize tests that fail on the observed bug and validate behavior rather than mirror code.\n"
-        f"Repository: {REPOSITORY}\nTarget branch: {BRANCH}\n"
-        "Inspect that branch if available; if unavailable, report the limitation. "
+        f"Repository: {REPOSITORY}\nTarget: current default branch; account for the supplied source/run revision.\n"
+        "Inspect the available source; if unavailable, report the limitation. "
         "Do not assume local uncommitted files exist in the remote repository. "
         "Do not merge, deploy, publish, push code, or create a pull request. "
         "Do not run live model/game sessions, request credentials, or access other repositories. "
@@ -451,14 +460,27 @@ async def submit_analysis(
     engineering_context: dict | None = None,
 ) -> dict:
     """Explicitly create one analysis session, capped at two ACUs; never retries."""
-    _headers(settings)
-    path = _org_path(settings) + "/sessions"
-    payload = {
-        "prompt": build_analysis_prompt(
+    return await submit_prompt(
+        settings,
+        build_analysis_prompt(
             _without_configured_secrets(summary, settings),
             _without_configured_secrets(events, settings),
             _without_configured_secrets(engineering_context, settings),
         ),
+        client,
+    )
+
+
+async def submit_prompt(
+    settings: Settings, prompt: str, client: httpx.AsyncClient | None = None
+) -> dict:
+    """Submit an exact locally prepared/reviewed brief with the same fixed limits."""
+    _headers(settings)
+    path = _org_path(settings) + "/sessions"
+    if not isinstance(prompt, str) or not 1 <= len(prompt.encode()) <= 24 * 1024:
+        raise ValueError("Reviewed Devin prompt exceeds its bounded size")
+    payload = {
+        "prompt": prompt,
         "title": "HoloSpeed run failure analysis",
         "repos": [REPOSITORY],
         "max_acu_limit": MAX_ACU_LIMIT,

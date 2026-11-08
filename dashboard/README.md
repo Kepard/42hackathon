@@ -2,10 +2,21 @@
 
 Public dashboard: [open the site](https://holospeed-live-kepard.kepard.chatgpt.site).
 The initial source was copied from the Sites project at
-`ee1a1c94db30f3825b72e7390188452d9e13e000`. The interface shows the Minecraft
+`81345ddd0107d99fe1c2c57dff37e38428577f1c`. The interface shows the Minecraft
 window, controller intent, input telemetry, model latency, metrics, milestones,
 and searchable run events. Public viewers can watch; a separate private
 operator capability enables run controls.
+The **On a mission** pipeline shows actual Holo4 and Jev request lifecycles,
+their recorded input sources and decisions, and the local skill executing next.
+Animation requires a fresh, active request or skill; completed decisions remain
+visible without implying continuous inference. Technical request details expand
+on demand.
+
+**Devin engineering** lets an operator prepare and review an exact redacted run
+brief, then explicitly create an investigation capped at 2 ACU. Public viewers
+can inspect published findings and proposed tests. Briefs stay private, duplicate
+submissions are prevented, and proposed code is never applied automatically.
+See [the engineering workflow](../docs/devin.md).
 The resource panel shows the active skill and matching progress alongside the
 latest recorded inventory, health, hunger, and position. These player samples
 are taken at skill boundaries and display their recorded time and tick; older

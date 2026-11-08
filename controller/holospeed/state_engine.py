@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
+from dataclasses import dataclass
 
 from .bridge import BridgeError
 from .engine import RunBudgetReached
 from .game_state import GameState, item_counts
-from .providers import ProviderError
+from .providers import ProviderError, ReplanRequired
 from .skills import confirmed_milestones, goal_reached, next_skills
 
 
@@ -77,10 +79,19 @@ async def capture(engine):
     return observation
 
 
-async def choose(engine, state, candidates, observation, provider):
+@dataclass(frozen=True)
+class SkillChoice:
+    candidate: dict
+    rationale: str
+    provider: str
+    request_id: str | None = None
+    model: str | None = None
+
+
+async def choose(engine, state, candidates, observation, provider, *, extra_context=None):
     """A bounded model suggestion may only select an existing local candidate."""
     if provider is None:
-        return candidates[0], "Recipe prerequisites determine the next step."
+        return SkillChoice(candidates[0], "Recipe prerequisites determine the next step.", "local")
     context = {
         "run_goal": "Enter the Nether through a repaired and lit portal using normal survival mechanics"
         if engine.settings.run_goal == "nether"
@@ -88,28 +99,122 @@ async def choose(engine, state, candidates, observation, provider):
         "completed_milestones": engine.state["milestones"],
         "recent_skills": list(engine.recent),
         "failures": list(engine.failures),
+        **(extra_context or {}),
     }
     remaining = engine.settings.max_run_seconds - engine.recorder.elapsed_ms / 1000
     if remaining <= 0:
         raise RunBudgetReached("Run time budget reached")
+    generation = engine.generation
+    request_id = str(uuid.uuid4())
+    context["inference_request_id"] = request_id
+    model = engine.settings.holo_model if provider == "holo" else engine.settings.jev_model
+    validating = context.get("decision_role") == "fresh_state_validation"
+    task = (
+        f"Check fresh-state eligibility: {candidates[0]['reason']}"
+        if validating
+        else f"Select next skill: {candidates[0]['reason']}"
+    )[:240]
+    activity = {
+        "provider": provider,
+        "request_id": request_id,
+        "task": task,
+        "model": model,
+        "input_source": "screenshot_and_state"
+        if provider == "holo" and observation is not None
+        else "state",
+        "decision_role": "fresh_state_validation" if validating else "skill_selection",
+        "state_id": state.id,
+    }
+    started = time.monotonic()
+    timeout = min(8, remaining)
+    response_recorded = False
+
+    def terminal(phase, **data):
+        engine.log("inference", {**activity, "phase": phase, **data})
+        engine.broadcast()
+
+    def failed_call(error):
+        latency = getattr(error, "latency_ms", 0) or (time.monotonic() - started) * 1000
+        response = getattr(error, "response", {})
+        if not response_recorded:
+            engine.timing(provider, latency, response.get("usage", {}))
+            engine.log(
+                "model_call",
+                {
+                    "provider": provider,
+                    "model": model,
+                    "inference_request_id": request_id,
+                    "latency_ms": latency,
+                    "error": str(error) or "Strategy deadline reached",
+                    "request": getattr(error, "request", {}),
+                    "response": response,
+                },
+            )
+        terminal(
+            "failed",
+            reason=(str(error) or "Strategy deadline reached")[:300],
+            latency_ms=latency,
+            rejected=isinstance(error, ReplanRequired),
+        )
+
+    engine.log("inference", {**activity, "phase": "thinking"})
+    engine.broadcast()
     try:
+        await engine.hud()
+        if generation != engine.generation or engine.state["status"] != "running":
+            raise asyncio.CancelledError
+        remaining = engine.settings.max_run_seconds - engine.recorder.elapsed_ms / 1000
+        if remaining <= 0:
+            raise RunBudgetReached("Run time budget reached before model dispatch")
+        timeout = min(8, remaining)
+        started = time.monotonic()
         result = await asyncio.wait_for(
             engine.strategist.choose(
                 observation, state.model_dump(), candidates, context, provider=provider
             ),
-            timeout=min(8, remaining),
+            timeout=timeout,
         )
+        engine.timing(result.provider, result.latency_ms, result.usage)
+        engine.log("model_call", {**result.model_dump(), "inference_request_id": request_id})
+        response_recorded = True
+        if generation != engine.generation or engine.state["status"] != "running":
+            raise asyncio.CancelledError
         if engine.recorder.elapsed_ms >= engine.settings.max_run_seconds * 1000:
             raise RunBudgetReached("Strategy arrived after run deadline")
-        engine.timing(result.provider, result.latency_ms, result.usage)
-        engine.log("model_call", result.model_dump())
+        if time.monotonic() - started >= timeout:
+            raise TimeoutError("Strategy exceeded its decision deadline")
         candidate = next(item for item in candidates if item["id"] == result.candidate_id)
-        return candidate, result.rationale
+        terminal(
+            "complete",
+            rationale=result.rationale,
+            latency_ms=result.latency_ms,
+            candidate_id=result.candidate_id,
+            model=result.model,
+        )
+        return SkillChoice(candidate, result.rationale, provider, request_id, result.model)
+    except asyncio.CancelledError:
+        terminal(
+            "failed",
+            reason="Inference cancelled; controls remain released",
+            cancelled=True,
+            latency_ms=(time.monotonic() - started) * 1000,
+        )
+        raise
+    except RunBudgetReached as error:
+        terminal(
+            "failed",
+            reason=str(error),
+            cancelled=True,
+            latency_ms=(time.monotonic() - started) * 1000,
+        )
+        raise
+    except ReplanRequired as error:
+        failed_call(error)
+        raise
     except (TimeoutError, ProviderError, StopIteration) as error:
+        failed_call(error)
         if engine.recorder.elapsed_ms >= engine.settings.max_run_seconds * 1000:
             raise RunBudgetReached("Run time budget reached during planning") from error
-        if isinstance(error, ProviderError) and error.latency_ms > 0:
-            engine.timing(provider, error.latency_ms, error.response.get("usage", {}))
         engine.state["metrics"]["errors"] += 1
         engine.log(
             "strategy_fallback",
@@ -121,10 +226,40 @@ async def choose(engine, state, candidates, observation, provider):
                 "response": getattr(error, "response", {}),
             },
         )
-        return candidates[0], "Local prerequisite plan selected after a bounded strategy failure."
+        return SkillChoice(
+            candidates[0],
+            "Local prerequisite plan selected after a bounded strategy failure.",
+            "local",
+            request_id,
+        )
+    except Exception as error:
+        terminal(
+            "failed",
+            reason=f"Unexpected {type(error).__name__} during model selection",
+            latency_ms=(time.monotonic() - started) * 1000,
+        )
+        raise
+
+
+def eligible_candidate(engine, state, identifier):
+    return next(
+        (
+            item
+            for item in next_skills(
+                state,
+                engine.state["milestones"],
+                goal=engine.settings.run_goal,
+                declared_seed=engine.settings.declared_seed,
+            )
+            if item["id"] == identifier
+        ),
+        None,
+    )
 
 
 async def execute_skill(engine, candidate, generation):
+    if generation != engine.generation or engine.state["status"] != "running":
+        raise asyncio.CancelledError
     engine.log("skill_started", candidate)
     ack = await engine.bounded(engine.bridge.start_skill, candidate)
     engine.log("skill_ack", ack)
@@ -193,6 +328,7 @@ async def execute_skill(engine, candidate, generation):
 async def run_state_agent(engine) -> None:
     generation = engine.generation
     failures = 0
+    rejections = 0
     blocked: set[tuple] = set()
     planned_phase = None
     try:
@@ -238,6 +374,8 @@ async def run_state_agent(engine) -> None:
                     "No eligible skill: inspect nearby resources, GUI, or blocked prerequisites"
                 )
             observation = await capture(engine)
+            if generation != engine.generation or engine.state["status"] != "running":
+                break
             phase = tuple(item["id"] for item in engine.state["milestones"])
             provider = (
                 "holo" if planned_phase != phase or failures else ("jev" if engine.jev else None)
@@ -248,22 +386,88 @@ async def run_state_agent(engine) -> None:
                 expected_effect="Controls released during strategic planning",
             )
             engine.broadcast()
-            candidate, rationale = await choose(engine, state, candidates, observation, provider)
-            if generation != engine.generation or engine.state["status"] != "running":
-                break
-            # State may change during inference. Revalidate counts and prerequisites.
-            state = await read_state(engine)
-            eligible = next_skills(
-                state,
-                engine.state["milestones"],
-                goal=engine.settings.run_goal,
-                declared_seed=engine.settings.declared_seed,
-            )
-            if not any(item["id"] == candidate["id"] for item in eligible):
-                engine.log(
-                    "event", {"name": "stale_skill_discarded", "candidate_id": candidate["id"]}
-                )
+            validation = None
+            candidate = candidates[0]
+            source_state_id = state.id
+            try:
+                selection = await choose(engine, state, candidates, observation, provider)
+                candidate, rationale = selection.candidate, selection.rationale
+                if generation != engine.generation or engine.state["status"] != "running":
+                    break
+                # Recompute the candidate against state sampled AFTER Holo/Jev inference.
+                state = await read_state(engine)
+                if generation != engine.generation or engine.state["status"] != "running":
+                    break
+                fresh = eligible_candidate(engine, state, candidate["id"])
+                if fresh is None:
+                    engine.log(
+                        "event", {"name": "stale_skill_discarded", "candidate_id": candidate["id"]}
+                    )
+                    continue
+                candidate = fresh
+                if (
+                    selection.provider == "holo"
+                    and engine.jev
+                    and engine.settings.validate_holo_plans
+                ):
+                    validation = await choose(
+                        engine,
+                        state,
+                        [candidate],
+                        None,
+                        "jev",
+                        extra_context={
+                            "decision_role": "fresh_state_validation",
+                            "previous_holo_plan": {
+                                "candidate_id": selection.candidate["id"],
+                                "rationale": selection.rationale,
+                                "request_id": selection.request_id,
+                                "source_state_id": source_state_id,
+                                "source_frame_id": observation.frame_id,
+                            },
+                        },
+                    )
+                    if generation != engine.generation or engine.state["status"] != "running":
+                        break
+                    state = await read_state(engine)
+                    if generation != engine.generation or engine.state["status"] != "running":
+                        break
+                    fresh = eligible_candidate(engine, state, validation.candidate["id"])
+                    if fresh is None:
+                        engine.log(
+                            "event",
+                            {"name": "stale_skill_discarded", "candidate_id": candidate["id"]},
+                        )
+                        continue
+                    candidate = fresh
+                    rationale += (
+                        " Jev checked fresh-state eligibility."
+                        if validation.provider == "jev"
+                        else " Jev unavailable; local preconditions rechecked."
+                    )
+            except ReplanRequired as error:
+                rejections += 1
+                planned_phase = None
+                rejection = {
+                    "provider": "jev",
+                    "candidate_id": candidate["id"],
+                    "reason": str(error),
+                    "state_id": state.id,
+                    "kind": "unexecuted_skill_rejection",
+                    "consecutive_rejections": rejections,
+                }
+                engine.failures.append(rejection)
+                engine.state["metrics"]["recoveries"] += 1
+                engine.log("strategy_rejected", rejection)
+                await engine.bridge.stop("Replan after explicit Jev skill rejection")
+                engine.broadcast()
+                if rejections >= 8:
+                    raise RuntimeError(
+                        "Eight consecutive Jev skill rejections; inspect recorded evidence"
+                    ) from error
+                await engine.bounded(asyncio.sleep, 0.2)
                 continue
+            rejections = 0
             planned_phase = phase
             engine.state.update(
                 objective=candidate["reason"],
@@ -277,7 +481,10 @@ async def run_state_agent(engine) -> None:
             engine.log(
                 "skill_decision",
                 {
-                    "provider": provider or "local",
+                    "provider": selection.provider,
+                    "inference_request_id": selection.request_id,
+                    "validation_provider": validation.provider if validation else None,
+                    "validation_request_id": validation.request_id if validation else None,
                     "candidate": candidate,
                     "rationale": rationale,
                     "state_id": state.id,

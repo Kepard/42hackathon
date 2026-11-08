@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import contextlib
 import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -399,7 +400,23 @@ class CloudUploader:
         return False
 
 
-COMMAND_ACTIONS = frozenset({"start_new", "resume", "pause", "stop"})
+ENGINEERING_ACTIONS = frozenset({"prepare_investigation", "investigate"})
+ENGINEERING_PUBLIC_FIELDS = frozenset(
+    {
+        "run_id",
+        "digest_hash",
+        "status",
+        "max_acu_limit",
+        "created_at",
+        "updated_at",
+        "session_id",
+        "url",
+        "status_detail",
+        "error",
+        "structured_output",
+    }
+)
+COMMAND_ACTIONS = frozenset({"start_new", "resume", "pause", "stop"}) | ENGINEERING_ACTIONS
 COMMAND_STEPS = {
     "start_new": ("finish", "start"),
     "resume": ("start",),
@@ -558,7 +575,18 @@ class CommandConsumer:
         now = time.time()
         if not created <= now < expires or not 0 < expires - created <= 30.001:
             raise ValueError("Command is expired, future-dated, or exceeds its maximum lifetime")
-        return {key: value[key] for key in ("id", "action", "created_at", "expires_at")}
+        result = {key: value[key] for key in ("id", "action", "created_at", "expires_at")}
+        if value["action"] in ENGINEERING_ACTIONS:
+            run_id = value.get("run_id")
+            if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+                raise ValueError("Invalid investigation run ID")
+            result["run_id"] = run_id
+            if value["action"] == "investigate":
+                digest = value.get("digest_hash")
+                if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+                    raise ValueError("Invalid investigation digest")
+                result["digest_hash"] = digest
+        return result
 
     async def _fetch(self) -> Any:
         try:
@@ -577,7 +605,9 @@ class CommandConsumer:
             return None
 
     async def _report(self, record: dict) -> bool:
-        result = {key: record[key] for key in ("status", "detail", "run_id") if key in record}
+        result = {
+            key: record[key] for key in ("status", "detail", "run_id", "data") if key in record
+        }
         try:
             response = await self.client.post(
                 self.uploader.site_url + f"/api/commands/{record['id']}/result",
@@ -586,7 +616,7 @@ class CommandConsumer:
                 timeout=5,
                 follow_redirects=False,
             )
-            if 200 <= response.status_code < 300 and len(response.content) <= 16_384:
+            if 200 <= response.status_code < 300 and len(response.content) <= 40 * 1024:
                 value = response.json()
                 return isinstance(value, dict) and value.get("ok") is True
         except (httpx.HTTPError, ValueError):
@@ -612,7 +642,15 @@ class CommandConsumer:
     async def _execute(self, record: dict, commands: dict[str, dict]) -> None:
         completed_steps = []
         detail = ""
-        for step in COMMAND_STEPS[record["action"]]:
+        engineering = record["action"] in ENGINEERING_ACTIONS
+        steps = (
+            (
+                f"devin/{record['run_id']}/{'brief' if record['action'] == 'prepare_investigation' else 'investigate'}",
+            )
+            if engineering
+            else COMMAND_STEPS[record["action"]]
+        )
+        for step in steps:
             remaining = self._timestamp(record["expires_at"]) - time.time()
             if remaining <= 0:
                 detail = (
@@ -630,6 +668,11 @@ class CommandConsumer:
             try:
                 response = await self.client.post(
                     self.controller_url + "/api/" + step,
+                    **(
+                        {"json": {"digest_hash": record["digest_hash"]}}
+                        if record["action"] == "investigate"
+                        else {}
+                    ),
                     timeout=min(5, remaining),
                     follow_redirects=False,
                 )
@@ -644,11 +687,28 @@ class CommandConsumer:
                         f"Controller rejected {step} (HTTP {response.status_code}){explanation}"
                     )
                     break
-                if len(response.content) > 16_384 or response.json().get("ok") is not True:
+                if (
+                    len(response.content) > (32 * 1024 if engineering else 16_384)
+                    or response.json().get("ok") is not True
+                ):
                     detail = (
                         "Controller response did not confirm execution; inspect the current run."
                     )
                     break
+                if engineering:
+                    data = response.json().get("data")
+                    if not isinstance(data, dict) or data.get("run_id") != record["run_id"]:
+                        raise ValueError("Invalid investigation response")
+                    safe = sanitize(data, self.secrets)
+                    if record["action"] == "prepare_investigation":
+                        prompt = safe.get("prompt")
+                        if not isinstance(prompt, str) or hashlib.sha256(
+                            prompt.encode()
+                        ).hexdigest() != safe.get("digest_hash"):
+                            raise ValueError("Investigation preview changed during redaction")
+                    elif safe.get("digest_hash") != record["digest_hash"]:
+                        raise ValueError("Investigation digest mismatch")
+                    record["data"] = safe
             except (httpx.HTTPError, ValueError, AttributeError):
                 detail = "Controller response unavailable; the command may have applied. Inspect the run before retrying."
                 break
@@ -665,9 +725,12 @@ class CommandConsumer:
                     "resume": "Resumed the current recorded run.",
                     "pause": "Paused gameplay and released agent controls.",
                     "stop": "Stopped and archived the current recorded run.",
+                    "prepare_investigation": "Prepared the exact redacted investigation brief. Review it before creating a 2-ACU session.",
+                    "investigate": "Investigation submission recorded. Session status and findings appear in this run's engineering panel.",
                 }[record["action"]],
             )
-        record["run_id"] = await self._run_id()
+        if not engineering:
+            record["run_id"] = await self._run_id()
         record["reported"] = False
         self.ledger.write(commands)
 
@@ -685,7 +748,9 @@ class CommandConsumer:
                         record.update(
                             status="failed",
                             reported=False,
-                            run_id=None,
+                            run_id=record.get("run_id")
+                            if record["action"] in ENGINEERING_ACTIONS
+                            else None,
                             detail="Previous execution may have applied before interruption. Inspect the run and send a new command; it was not replayed.",
                         )
                         self.ledger.write(commands)
@@ -741,7 +806,7 @@ class RunPublisher:
         self.secrets = secrets
         self.pending_backfill: list[str] | None = None
         self.tails: dict[str, JournalTail] = {}
-        self.uploaded: dict[str, tuple[int, bytes]] = {}
+        self.uploaded: dict[str, tuple] = {}
         self.previous_current: str | None = None
         self.seen_runs: set[str] = set()
 
@@ -757,7 +822,19 @@ class RunPublisher:
             if isinstance(run_id, str) and run_id not in self.seen_runs:
                 self.pending_backfill.append(run_id)
                 self.seen_runs.add(run_id)
-        targets = list(dict.fromkeys([current_id, self.previous_current, *self.pending_backfill]))
+        # Completed gameplay journals can still receive asynchronous Devin findings.
+        engineering_runs = [
+            item
+            for item in by_id
+            if isinstance(item, str)
+            and RUN_ID.fullmatch(item)
+            and (self.directory / item / "engineering" / "latest.json").is_file()
+        ][:20]
+        targets = list(
+            dict.fromkeys(
+                [current_id, self.previous_current, *self.pending_backfill, *engineering_runs]
+            )
+        )
         self.previous_current = current_id
         for run_id in targets:
             if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id) or run_id not in by_id:
@@ -776,12 +853,37 @@ class RunPublisher:
                         self.pending_backfill.remove(run_id)
                 continue
             summary = sanitize(by_id[run_id], self.secrets)
-            signature = (tail.offset, encoded(summary))
+            engineering = None
+            investigation_path = run_path / "engineering" / "latest.json"
+            if investigation_path.is_file() and not investigation_path.is_symlink():
+                try:
+                    with investigation_path.open("rb") as stream:
+                        raw_engineering = stream.read(96 * 1024 + 1)
+                    if len(raw_engineering) <= 96 * 1024:
+                        candidate = json.loads(raw_engineering)
+                        if isinstance(candidate, dict) and candidate.get("run_id") == run_id:
+                            engineering = sanitize(
+                                {
+                                    key: value
+                                    for key, value in candidate.items()
+                                    if key in ENGINEERING_PUBLIC_FIELDS
+                                },
+                                self.secrets,
+                            )
+                except (ValueError, OSError):
+                    pass
+            signature = (tail.offset, encoded(summary), encoded(engineering))
             if self.uploaded.get(run_id) == signature:
                 if run_id in self.pending_backfill:
                     self.pending_backfill.remove(run_id)
                 continue
-            payload = encoded({"summary": summary, "events": tail.events})
+            payload = encoded(
+                {
+                    "summary": summary,
+                    "events": tail.events,
+                    **({"engineering": engineering} if engineering else {}),
+                }
+            )
             if len(payload) > MAX_RUN:
                 LOG.warning("run_payload_exceeds_upload_limit run=%s", run_id)
                 continue

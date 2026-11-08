@@ -6,7 +6,12 @@ const STATE_KEY = "observer/state.json";
 const COMMAND_QUEUE_KEY = "observer/commands/current.json";
 const COMMAND_TTL = 30_000;
 const COMMAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const COMMAND_ACTIONS = new Set(["start_new", "resume", "pause", "stop"]);
+const COMMAND_ACTIONS = new Set(["start_new", "resume", "pause", "stop", "prepare_investigation", "investigate"]);
+const ENGINEERING_ACTIONS = new Set(["prepare_investigation", "investigate"]);
+const ENGINEERING_STATUSES = new Set(["submitting", "unknown", "failed", "new", "claimed", "running", "exit", "error", "suspended", "resuming", "created"]);
+const DIGEST_HASH = /^[a-f0-9]{64}$/;
+const MAX_COMMAND_DATA = 32 * 1024;
+const MAX_ENGINEERING = 96 * 1024;
 const MAX_INGEST = 2 * 1024 * 1024;
 const MAX_METADATA = 256 * 1024;
 const MAX_RUN = 8 * 1024 * 1024;
@@ -88,6 +93,84 @@ function sanitize(value, token, depth = 0, budget = { nodes: 0 }) {
 function metrics(value) {
   object(value, "metrics");
   for (const item of Object.values(value)) finiteNumber(item, "metric");
+}
+
+function boundedJson(value, maximum, label) {
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > maximum) throw new ApiError(413, `${label} exceeds size limit`);
+}
+function boundedText(value, maximum, label) {
+  if (typeof value !== "string" || value.length > maximum) throw new ApiError(400, `Invalid ${label}`);
+}
+function redactBoth(value, env) {
+  return sanitize(sanitize(value, env.INGEST_TOKEN), env.CONTROL_TOKEN);
+}
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+function engineering(value, env, runId, findings = true) {
+  const fields = new Set(["run_id", "status", "digest_hash", "max_acu_limit", "created_at", "updated_at", "session_id", "url", "status_detail", "error", ...(findings ? ["structured_output"] : [])]);
+  knownFields(value, fields, "engineering status");
+  boundedJson(value, findings ? MAX_ENGINEERING : MAX_COMMAND_DATA, "Engineering status");
+  if (value.run_id !== runId || !ENGINEERING_STATUSES.has(value.status) || typeof value.digest_hash !== "string" || !DIGEST_HASH.test(value.digest_hash) || value.max_acu_limit !== 2) throw new ApiError(400, "Invalid engineering identity or budget");
+  timestamp(value.created_at, "engineering creation timestamp");
+  timestamp(value.updated_at, "engineering update timestamp");
+  if (value.session_id !== undefined && (typeof value.session_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value.session_id))) throw new ApiError(400, "Invalid Devin session ID");
+  if (value.url !== undefined) {
+    const match = typeof value.url === "string" && value.url.match(/^https:\/\/app\.devin\.ai\/sessions\/([A-Za-z0-9_-]{1,128})$/);
+    if (!match || (value.session_id !== undefined && match[1] !== value.session_id)) throw new ApiError(400, "Invalid Devin session URL");
+  }
+  if (value.status_detail !== undefined) boundedText(value.status_detail, 100, "engineering status detail");
+  if (value.error !== undefined) boundedText(value.error, 500, "engineering error");
+  if (value.structured_output !== undefined) {
+    const output = value.structured_output;
+    knownFields(output, new Set(["summary", "likely_causes", "proposed_tests", "proposed_fixes", "missing_evidence", "test_patches"]), "engineering findings");
+    if (output.summary !== undefined) boundedText(output.summary, 8000, "engineering summary");
+    for (const key of ["likely_causes", "proposed_tests", "proposed_fixes", "missing_evidence"]) {
+      if (output[key] === undefined) continue;
+      if (!Array.isArray(output[key]) || output[key].length > 40) throw new ApiError(400, "Invalid engineering findings list");
+      for (const item of output[key]) boundedText(item, 2000, "engineering finding");
+    }
+    if (output.test_patches !== undefined) {
+      if (!Array.isArray(output.test_patches) || output.test_patches.length > 2) throw new ApiError(400, "Invalid proposed test patches");
+      for (const patch of output.test_patches) {
+        knownFields(patch, new Set(["relative_path", "purpose", "code", "validation_status"]), "proposed test patch");
+        if (typeof patch.relative_path !== "string" || patch.relative_path.length > 240 || !/^[A-Za-z0-9_./-]+$/.test(patch.relative_path) || patch.relative_path.startsWith("/") || patch.relative_path.split("/").some((part) => !part || part === "." || part === "..")) throw new ApiError(400, "Invalid proposed test path");
+        boundedText(patch.purpose, 2000, "proposed test purpose");
+        boundedText(patch.code, 16000, "proposed test code");
+        boundedText(patch.validation_status, 2000, "proposed test validation status");
+      }
+    }
+  }
+  return redactBoth(value, env);
+}
+function commandParameters(body) {
+  if (!ENGINEERING_ACTIONS.has(body.action)) {
+    knownFields(body, new Set(["id", "action"]), "command");
+    return {};
+  }
+  knownFields(body, new Set(["id", "action", "run_id", ...(body.action === "investigate" ? ["digest_hash"] : [])]), "command");
+  if (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)) throw new ApiError(400, "Invalid investigation run ID");
+  if (body.action === "investigate" && (typeof body.digest_hash !== "string" || !DIGEST_HASH.test(body.digest_hash))) throw new ApiError(400, "Invalid approved digest hash");
+  return {run_id: body.run_id, ...(body.action === "investigate" ? {digest_hash: body.digest_hash} : {})};
+}
+async function commandData(value, command, env) {
+  if (!ENGINEERING_ACTIONS.has(command.action)) throw new ApiError(400, "This command cannot return investigation data");
+  boundedJson(value, MAX_COMMAND_DATA, "Command data");
+  if (command.action === "investigate") {
+    const result = engineering(value, env, command.run_id, false);
+    if (result.digest_hash !== command.digest_hash) throw new ApiError(400, "Investigation result does not match the approved digest");
+    return result;
+  }
+  knownFields(value, new Set(["run_id", "prompt", "digest_hash", "max_acu_limit", "can_submit", "existing"]), "investigation preview");
+  if (value.run_id !== command.run_id || typeof value.prompt !== "string" || !value.prompt.trim() || new TextEncoder().encode(value.prompt).byteLength > 24 * 1024 || typeof value.digest_hash !== "string" || !DIGEST_HASH.test(value.digest_hash) || value.max_acu_limit !== 2 || typeof value.can_submit !== "boolean" || value.existing === undefined) throw new ApiError(400, "Invalid investigation preview");
+  // The approved text must be byte-for-byte the controller's persisted brief.
+  // Reject an unsafe preview instead of silently changing the text behind its hash.
+  if (redactBoth(value.prompt, env) !== value.prompt) throw new ApiError(400, "Investigation preview must be redacted before approval");
+  const actual = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value.prompt)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (actual !== value.digest_hash) throw new ApiError(400, "Investigation preview does not match its digest");
+  return {...value, existing: value.existing === null ? null : engineering(value.existing, env, command.run_id, false)};
 }
 
 function events(value, token, max = 30_000) {
@@ -187,9 +270,9 @@ async function commandRecord(env, id) {
   const command = queue ? await queue.json() : null;
   return {item: null, command: command?.id === id ? command : null};
 }
-async function commandBody(request) {
+async function commandBody(request, maximum = 4096) {
   if (!request.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) throw new ApiError(415, "Expected JSON");
-  const raw = await bytes(request, 4096);
+  const raw = await bytes(request, maximum);
   return parseJson(new TextDecoder().decode(raw));
 }
 async function saveCommand(env, command, item) {
@@ -201,12 +284,13 @@ async function saveCommand(env, command, item) {
 async function createCommand(request, env) {
   await authorized(request, env, true);
   const body = await commandBody(request);
-  knownFields(body, new Set(["id", "action"]), "command");
+  object(body, "command");
   const id = commandId(body.id);
   if (!COMMAND_ACTIONS.has(body.action)) throw new ApiError(400, "Invalid command action");
+  const parameters = commandParameters(body);
   const existing = await commandRecord(env, id);
   if (existing.command) {
-    if (existing.command.action !== body.action) throw new ApiError(409, "Command ID already belongs to another action");
+    if (existing.command.action !== body.action || Object.entries(parameters).some(([key, value]) => existing.command[key] !== value)) throw new ApiError(409, "Command ID already belongs to another action or parameters");
     return json({command: commandStatus(existing.command)});
   }
   const queue = await env.BUCKET.get(COMMAND_QUEUE_KEY);
@@ -219,7 +303,7 @@ async function createCommand(request, env) {
     await saveCommand(env, current, null);
   }
   const now = Date.now();
-  const command = {id, action: body.action, status: "pending", created_at: new Date(now).toISOString(), expires_at: new Date(now + COMMAND_TTL).toISOString()};
+  const command = {id, action: body.action, ...parameters, status: "pending", created_at: new Date(now).toISOString(), expires_at: new Date(now + COMMAND_TTL).toISOString()};
   const committed = await env.BUCKET.put(COMMAND_QUEUE_KEY, JSON.stringify(command), {
     httpMetadata: {contentType: "application/json", cacheControl: "no-store"},
     onlyIf: queue ? {etagMatches: queue.etag} : {etagDoesNotMatch: "*"},
@@ -245,20 +329,23 @@ async function readCommand(request, env, id) {
 async function commandResult(request, env, id) {
   await authorized(request, env);
   id = commandId(id);
-  const body = await commandBody(request);
-  knownFields(body, new Set(["status", "detail", "run_id"]), "command result");
+  const body = await commandBody(request, MAX_COMMAND_DATA + 4096);
+  knownFields(body, new Set(["status", "detail", "run_id", "data"]), "command result");
   if (!["completed", "failed"].includes(body.status) || typeof body.detail !== "string" || body.detail.length > 500 || (body.run_id != null && (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)))) throw new ApiError(400, "Invalid command result");
   const {item, command} = await commandRecord(env, id);
   if (!command) throw new ApiError(404, "Command is unavailable");
+  if (ENGINEERING_ACTIONS.has(command.action) && body.run_id != null && body.run_id !== command.run_id) throw new ApiError(400, "Investigation result belongs to another run");
+  if (ENGINEERING_ACTIONS.has(command.action) && body.status === "completed" && body.data == null) throw new ApiError(400, "Completed investigation command requires result data");
+  const data = body.data === undefined ? undefined : await commandData(body.data, command, env);
   const detail = safeText(body.detail, env.INGEST_TOKEN).split(env.CONTROL_TOKEN || "\u0000").join("[REDACTED]");
-  const run_id = body.run_id ?? null;
+  const run_id = ENGINEERING_ACTIONS.has(command.action) ? command.run_id : body.run_id ?? null;
   if (["completed", "failed"].includes(command.status)) {
-    if (command.status !== body.status || command.detail !== detail || command.run_id !== run_id) throw new ApiError(409, "A command result is immutable");
+    if (command.status !== body.status || command.detail !== detail || command.run_id !== run_id || canonical(command.data) !== canonical(data)) throw new ApiError(409, "A command result is immutable");
     return json({ok: true, command});
   }
   // Expiry prevents new execution, but a delayed acknowledgement may still
   // report the actual outcome of an operation that began before its deadline.
-  const completed = {...command, status: body.status, detail, run_id, completed_at: new Date().toISOString()};
+  const completed = {...command, status: body.status, detail, run_id, ...(data === undefined ? {} : {data}), completed_at: new Date().toISOString()};
   if (!await saveCommand(env, completed, item)) throw new ApiError(409, "Command result changed concurrently");
   return json({ok: true, command: completed});
 }
@@ -383,8 +470,9 @@ async function run(request, env, id) {
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(raw); } catch { throw new ApiError(400, "Invalid UTF-8 JSON"); }
   const payload = parseJson(text);
-  knownFields(payload, new Set(["summary", "events"]), "run");
+  knownFields(payload, new Set(["summary", "events", "engineering"]), "run");
   const clean = { summary: summary(payload.summary, env.INGEST_TOKEN, id), events: events(payload.events, env.INGEST_TOKEN) };
+  if (payload.engineering !== undefined) clean.engineering = engineering(payload.engineering, env, id);
   await env.BUCKET.put(key, JSON.stringify(clean), { httpMetadata: { contentType: "application/json", cacheControl: "no-store" } });
   return json({ ok: true, id, events: clean.events.length });
 }

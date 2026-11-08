@@ -7,8 +7,8 @@ suggests minimal improvements. Gameplay never waits for its response.
 ## Use the dashboard
 
 Open **Devin engineering**, select a recorded run, and choose **Prepare
-investigation**. A private `#control=<CONTROL_TOKEN>` operator link is required;
-public New run access does not enable engineering actions. The controller
+investigation**. Every viewer can use this workflow without an account or
+private link. The controller
 prepares and persists the exact redacted prompt; the dashboard displays that
 prompt, its SHA-256 digest, and the fixed **2-ACU cap**. Review the brief and
 confirm **Create investigation** to submit it. The browser sends only the run ID
@@ -21,12 +21,11 @@ clicks return that existing receipt. A timeout, interrupted submission, or resta
 with an unfinished receipt becomes **unknown** and is never submitted again
 automatically; inspect Devin history before taking further action.
 
-Session status and findings update outside the game loop. Public viewers can
-read the last published status, session link, findings, and proposed test source.
-They cannot prepare briefs or create paid sessions. The full prompt is restricted
-to the authenticated operator command result and local brief file; it is never
-included in public run events or the public engineering record. Proposed source
-is displayed as text and is not executed or applied.
+Session status and findings update outside the game loop. Everyone can prepare
+briefs, create reviewed sessions, and read status, findings, and proposed test
+source. The exact redacted prompt is available in the preparation command result
+and local brief file; run events and the archived engineering summary omit it.
+Proposed source is displayed as text and is not executed or applied.
 
 Run artifacts are stored under `runs/<run-id>/engineering/`: immutable
 `brief-<sha256>.json`, the creation/session responses, and a bounded public

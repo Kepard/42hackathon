@@ -1,7 +1,7 @@
 import {handleVideo} from "./video.mjs";
 
-// Public viewing and New run requests; other actions require an operator
-// capability. Only the local publisher can execute/acknowledge commands.
+// All dashboard features are public. Only the local publisher can deliver,
+// execute, or acknowledge queued commands and update recorded evidence.
 const STATE_KEY = "observer/state.json";
 const COMMAND_QUEUE_KEY = "observer/commands/current.json";
 const COMMAND_TTL = 30_000;
@@ -278,16 +278,21 @@ function envelope(value, token) {
   };
 }
 
-async function authorized(request, env, operator = false) {
-  const secret = operator ? env.CONTROL_TOKEN : env.INGEST_TOKEN;
-  if (typeof secret !== "string" || secret.length < (operator ? 32 : 16) || (operator && secret === env.INGEST_TOKEN)) throw new ApiError(503, `${operator ? "Operator" : "Publisher"} authentication is not configured`);
+async function authorized(request, env) {
+  const secret = env.INGEST_TOKEN;
+  if (typeof secret !== "string" || secret.length < 16) throw new ApiError(503, "Publisher authentication is not configured");
   const header = request.headers.get("Authorization") || "";
   const supplied = header.startsWith("Bearer ") ? header.slice(7) : "";
   const encode = new TextEncoder();
   const [actual, expected] = await Promise.all([supplied, secret].map(async (token) => new Uint8Array(await crypto.subtle.digest("SHA-256", encode.encode(token)))));
   let difference = 0;
   for (let index = 0; index < 32; index++) difference |= actual[index] ^ expected[index];
-  if (difference !== 0) throw new ApiError(401, `Invalid ${operator ? "operator" : "publisher"} credentials`);
+  if (difference !== 0) throw new ApiError(401, "Invalid publisher credentials");
+}
+
+function sameOrigin(request) {
+  const site = request.headers.get("Sec-Fetch-Site");
+  if (request.headers.get("Origin") !== new URL(request.url).origin || (site && site !== "same-origin")) throw new ApiError(403, "Dashboard actions require a same-origin request");
 }
 
 function commandId(value) {
@@ -311,9 +316,7 @@ async function commandBody(request, maximum = 4096) {
 }
 
 async function voiceSession(request, env) {
-  await authorized(request, env, true);
-  const site = request.headers.get("Sec-Fetch-Site");
-  if (request.headers.get("Origin") !== new URL(request.url).origin || (site && site !== "same-origin")) throw new ApiError(403, "Voice access requires a same-origin request");
+  sameOrigin(request);
   if (typeof env.GLADIA_API_KEY !== "string" || env.GLADIA_API_KEY.length < 16) throw new ApiError(503, "Voice transcription is not configured");
   const body = await commandBody(request, 1024);
   knownFields(body, new Set(["id"]), "voice session request");
@@ -356,7 +359,7 @@ async function voiceSession(request, env) {
     const url = typeof data.url === "string" && data.url.length <= 4096 ? new URL(data.url) : null;
     if (!url || url.protocol !== "wss:" || (url.hostname !== "gladia.io" && !url.hostname.endsWith(".gladia.io")) || url.username || url.password || url.port || url.hash) throw new Error("Invalid transcription session response");
     stage = "provider_url_credentials";
-    if (data.url.includes(env.GLADIA_API_KEY) || data.url.includes(env.CONTROL_TOKEN)) throw new Error("Transcription URL contains a permanent credential");
+    if ([env.GLADIA_API_KEY, env.INGEST_TOKEN, env.CONTROL_TOKEN].some((secret) => typeof secret === "string" && secret.length && data.url.includes(secret))) throw new Error("Transcription URL contains a permanent credential");
     result = {id: data.id.toLowerCase(), url: url.href, sample_rate: 16000};
   } catch {
     const code = controller.signal.aborted ? "provider_timeout" : stage === "provider_http" ? `provider_http_${providerStatus}` : stage;
@@ -380,12 +383,9 @@ async function saveCommand(env, command, item) {
   });
 }
 async function createCommand(request, env) {
+  sameOrigin(request);
   const body = await commandBody(request);
   object(body, "command");
-  if (body.action === "start_new") {
-    const site = request.headers.get("Sec-Fetch-Site");
-    if (request.headers.get("Origin") !== new URL(request.url).origin || (site && site !== "same-origin")) throw new ApiError(403, "New run requires a same-origin request");
-  } else await authorized(request, env, true);
   const id = commandId(body.id);
   if (!COMMAND_ACTIONS.has(body.action)) throw new ApiError(400, "Invalid command action");
   const parameters = commandParameters(body, env);
@@ -424,7 +424,6 @@ async function nextCommand(request, env) {
 async function readCommand(request, env, id) {
   const {command} = await commandRecord(env, commandId(id));
   if (!command) throw new ApiError(404, "Command is unavailable");
-  if (command.action !== "start_new") await authorized(request, env, true);
   return json({command: commandStatus(command)});
 }
 async function commandResult(request, env, id) {

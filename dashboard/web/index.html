@@ -36,15 +36,15 @@
           </div>
           <div class="feed-footer"><span id="capture-source">Minecraft window</span><span id="video-performance">Waiting for video</span><span id="capture-age">No capture received</span></div>
         </section>
-        <section class="operator-panel" aria-label="Run controls">
-          <div class="operator-actions">
+        <section class="controls-panel" aria-label="Run controls">
+          <div class="controls-actions">
             <button id="control-start_new" class="button control-primary" aria-label="Load a clean Minecraft world copy and start a new autonomous run" title="Fresh world · Automatic start" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>New run</button>
             <button id="control-resume" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6Z"/></svg>Resume</button>
             <button id="control-pause" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4v12M13 4v12"/></svg>Pause</button>
             <button id="control-stop" class="button control-stop" aria-label="Stop and archive the current run" title="Stop and archive" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5h10v10H5Z"/></svg>End run</button>
           </div>
-          <div class="operator-heading"><span id="operator-status" class="operator-status">Shared demo</span><button id="lock-controls" class="text-button" hidden>Leave operator mode</button></div>
-          <p id="control-feedback" role="status" aria-live="polite">Anyone can start a fresh run.</p><span id="operator-world-note" class="operator-world-note">Launcher not connected</span>
+          <div class="controls-heading"><span id="shared-status" class="shared-status">Shared controls</span></div>
+          <p id="control-feedback" role="status" aria-live="polite">Everyone can take the controls.</p><span id="world-note" class="world-note">Launcher not connected</span>
         </section>
         <section id="run-launch" class="run-launch" aria-labelledby="launch-heading" hidden>
           <div class="launch-heading"><span class="launch-world-icon" aria-hidden="true"></span><div><span class="launch-eyebrow">FRESH WORLD LAUNCH</span><h2 id="launch-heading">Preparing a fresh run</h2></div><span id="launch-state" class="launch-state">PREPARING</span></div>
@@ -54,9 +54,9 @@
         <section id="voice-panel" class="voice-panel" aria-labelledby="voice-title">
           <div class="voice-toolbar"><button id="voice-toggle" class="voice-toggle" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></svg><span id="voice-toggle-label">Speak</span></button><div class="voice-heading"><h2 id="voice-title">Talk to HoloSpeed</h2><span id="voice-status">Microphone off</span></div><span id="voice-timer" class="voice-timer" hidden></span><span class="voice-brand">VOICE BY <b>Gladia</b></span></div>
           <p id="voice-caption" class="voice-caption" hidden>Live words appear here while you speak.</p>
-          <div id="voice-conversation" class="voice-conversation" hidden><p><span>Operator</span><strong id="voice-transcript"></strong></p><p id="voice-reply-row" hidden><span>HoloSpeed</span><strong id="voice-reply"></strong></p></div>
+          <div id="voice-conversation" class="voice-conversation" hidden><p><span>Viewer</span><strong id="voice-transcript"></strong></p><p id="voice-reply-row" hidden><span>HoloSpeed</span><strong id="voice-reply"></strong></p></div>
           <form id="voice-form" class="voice-form"><label for="voice-text" class="visually-hidden">Message the Minecraft agent</label><input id="voice-text" type="text" maxlength="1000" autocomplete="off" placeholder="Pause, give an objective, or ask a question…" disabled><button id="voice-send" class="button secondary" type="submit" disabled>Send <span aria-hidden="true">↗</span></button></form>
-          <p id="voice-feedback" class="voice-feedback" role="status" aria-live="polite">A private operator link is required to speak or send a message.</p><p class="voice-note">Click to record · 2-minute maximum · Instructions and replies are saved in the run journal.</p>
+          <p id="voice-feedback" class="voice-feedback" role="status" aria-live="polite">Click Speak to use your microphone, or type an instruction below.</p><p class="voice-note">Click to record · 2-minute maximum · Instructions and replies are saved in the run journal.</p>
         </section>
         <section class="metrics-strip" aria-label="Run metrics">
           <div class="timer-metric"><span class="metric-label"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="11" r="6"/><path d="M8 2h4m-2 3v6l3 2"/></svg>Run time</span><strong id="elapsed">—</strong><small>Including pauses</small></div>
@@ -122,7 +122,7 @@
     </details>
     <section class="shared-demo" aria-labelledby="shared-demo-title">
       <span class="shared-demo-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg></span>
-      <div><span class="eyebrow">SHARED DEMO</span><h2 id="shared-demo-title">Anyone can start a fresh run.</h2><p>Choose New run above to load a clean world and watch the agent play. Previous runs stay in the journal.</p></div>
+      <div><span class="eyebrow">SHARED DEMO</span><h2 id="shared-demo-title">Everyone can take the controls.</h2><p>Start or pause a run, talk to the agent, or ask Devin to investigate. Previous runs stay in the journal.</p></div>
       <a class="button secondary" href="#control-start_new">Back to the game ↑</a>
     </section>
     <footer class="site-footer"><span>HoloSpeed <span class="footer-divider">/</span> Intelligence in the wild.</span><span>Observe. Act. Verify.</span></footer>

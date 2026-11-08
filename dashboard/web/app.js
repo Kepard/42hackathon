@@ -153,7 +153,7 @@
   }
   function eventDescription(event) {
     const data = event.data || {};
-    if (event.type === "voice_received") return `${data.source === "gladia" ? "Gladia transcript" : "Operator message"} · ${data.text || "Instruction recorded"}`;
+    if (event.type === "voice_received") return `${data.source === "gladia" ? "Gladia transcript" : "Viewer message"} · ${data.text || "Instruction recorded"}`;
     if (event.type === "voice_reply") return `${data.provider === "holo" ? "Holo4" : "Agent"} · ${data.reply || "Reply recorded"}`;
     if (event.type === "voice_guidance") return `Objective guidance · ${data.text || "Guidance recorded"}`;
     if (event.type === "inference") return `${providerName(data.provider)} · ${data.phase || "request"}${data.task ? ` · ${data.task}` : ""}${data.rationale ? ` · ${data.rationale}` : data.reason ? ` · ${data.reason}` : ""}`;
@@ -186,29 +186,14 @@
     next.forEach((event, index) => map.set(eventId(event, index), event));
     return [...map.values()].sort((a, b) => n(a.elapsed_ms) - n(b.elapsed_ms) || n(a.seq) - n(b.seq));
   }
-  function operatorCredential(location, history, storage) {
-    const key = "holospeed.operator";
-    const valid = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{32,256}$/.test(value);
-    let token = "";
-    try { token = storage?.getItem(key) || ""; } catch { /* Storage may be blocked. */ }
-    const fragment = new URLSearchParams((location?.hash || "").replace(/^#/, ""));
-    if (fragment.has("control")) {
-      token = fragment.get("control") || "";
-      fragment.delete("control");
-      // Remove the capability before any links, camera, or API requests run.
-      history?.replaceState(null, "", `${location.pathname || "/"}${location.search || ""}${fragment.size ? `#${fragment}` : ""}`);
-      try { if (valid(token)) storage?.setItem(key, token); else storage?.removeItem(key); } catch { /* Keep only this page's memory. */ }
-    }
-    return valid(token) ? token : "";
-  }
-  function controlAvailability(state, fresh, unlocked, pending, awaitingLaunch = false) {
+  function controlAvailability(state, fresh, pending, awaitingLaunch = false) {
     const preparing = awaitingLaunch || state?.launch?.status === "preparing";
     const ready = Boolean(fresh && !pending && (preparing || state?.status !== "unavailable"));
     return {
       start_new: ready && !preparing && Object.hasOwn(state || {}, "launch") && state?.connected === true,
-      resume: ready && unlocked && !preparing && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
-      pause: ready && unlocked && (preparing || state?.status === "running"),
-      stop: ready && unlocked && (preparing || Boolean(state?.run_id)),
+      resume: ready && !preparing && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
+      pause: ready && (preparing || state?.status === "running"),
+      stop: ready && (preparing || Boolean(state?.run_id)),
     };
   }
   function launchProgress(value) {
@@ -227,7 +212,7 @@
   function engineeringStatus(value, now = Date.now()) {
     if (!value) return "No investigation yet";
     if (value.status_detail === "finished" && ["running", "exit"].includes(value.status)) return "Investigation finished";
-    if (value.status_detail === "waiting_for_user") return "Waiting for operator input";
+    if (value.status_detail === "waiting_for_user") return "Waiting for your input";
     const recordedAt = timestamp(value.updated_at);
     const ongoing = {submitting: "submitting", new: "queued", created: "session created", claimed: "assigned", running: "running", resuming: "resuming"};
     if (recordedAt != null && now - recordedAt > 60000 && ongoing[value.status]) return `Last recorded: ${ongoing[value.status]}`;
@@ -238,7 +223,7 @@
   }
   // Pure helpers can be tested in Node without a browser or network.
   if (typeof module === "object" && module.exports) {
-    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl, routeProgress, launchProgress};
+    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl, routeProgress, launchProgress};
     return;
   }
 
@@ -289,8 +274,17 @@
   const expandedEvents = new Set();
   let storage = null;
   try { storage = typeof sessionStorage !== "undefined" ? sessionStorage : null; } catch { /* Private browsing may deny storage. */ }
-  let operatorToken = operatorCredential(typeof location !== "undefined" ? location : null, typeof history !== "undefined" ? history : null, storage);
-  let operatorCommand = null;
+  // Discard obsolete credentials from older versions before any requests.
+  try {storage?.removeItem("holospeed.operator");} catch { /* No credentials are used. */ }
+  if (typeof location !== "undefined") {
+    const fragment = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+    if (fragment.has("control")) {
+      fragment.delete("control");
+      history?.replaceState(null, "", `${location.pathname || "/"}${location.search || ""}${fragment.size ? `#${fragment}` : ""}`);
+    }
+  }
+  let pageActive = true;
+  let activeCommand = null;
   // The command acknowledgment can arrive before its public state snapshot.
   // Keep this identity separate: a later Pause/Stop command must not expose
   // the previous launch's failure or recording during that publication gap.
@@ -316,16 +310,16 @@
     const saved = storage?.getItem("holospeed.command");
     if (saved) {
       const value = JSON.parse(saved);
-      if (/^[0-9a-f-]{36}$/i.test(value.id) && (value.action === "start_new" || operatorToken) && Number.isFinite(value.submitted_at)) {
-        operatorCommand = {id: value.id, action: value.action, status: "pending", submitted_at: value.submitted_at};
+      if (/^[0-9a-f-]{36}$/i.test(value.id) && ["start_new", "resume", "pause", "stop", "voice", "prepare_investigation", "investigate"].includes(value.action) && Number.isFinite(value.submitted_at)) {
+        activeCommand = {id: value.id, action: value.action, status: "pending", submitted_at: value.submitted_at};
         if (value.action === "start_new" && value.await_launch !== false) requestedLaunch = {id: value.id, accepted: value.launch_accepted === true, commandAt: timestamp(value.launch_command_at)};
       }
     }
   } catch { /* An invalid local history must not trigger commands. */ }
   function rememberCommand() {
     try {
-      if (!operatorCommand || (operatorCommand.action === "start_new" && operatorCommand.status !== "pending" && requestedLaunch?.id !== operatorCommand.id)) storage?.removeItem("holospeed.command");
-      else storage?.setItem("holospeed.command", JSON.stringify({id: operatorCommand.id, action: operatorCommand.action, submitted_at: operatorCommand.submitted_at, await_launch: requestedLaunch?.id === operatorCommand.id, launch_accepted: requestedLaunch?.accepted === true, launch_command_at: requestedLaunch?.commandAt ?? null}));
+      if (!activeCommand || (activeCommand.status !== "pending" && requestedLaunch?.id !== activeCommand.id)) storage?.removeItem("holospeed.command");
+      else storage?.setItem("holospeed.command", JSON.stringify({id: activeCommand.id, action: activeCommand.action, submitted_at: activeCommand.submitted_at, await_launch: requestedLaunch?.id === activeCommand.id, launch_accepted: requestedLaunch?.accepted === true, launch_command_at: requestedLaunch?.commandAt ?? null}));
     } catch { /* Keep tracking in this page when storage is unavailable. */ }
   }
 
@@ -557,25 +551,23 @@
     });
   }
   function renderControls(state = envelope?.state || {}, telemetry = telemetryState(envelope, Date.now(), reachable)) {
-    const pending = commandBusy || operatorCommand?.status === "pending";
+    const pending = commandBusy || activeCommand?.status === "pending";
     const launchSupported = Object.hasOwn(state, "launch");
     const launch = launchForDisplay(state);
-    const availability = controlAvailability(state, telemetry.fresh, Boolean(operatorToken), pending, launch?.awaiting);
+    const availability = controlAvailability(state, telemetry.fresh, pending, launch?.awaiting);
     for (const action of ["start_new", "resume", "pause", "stop"]) $(`control-${action}`).disabled = !availability[action];
-    text("operator-status", operatorToken ? "Operator access" : "Shared demo");
-    $("operator-status").classList.toggle("unlocked", Boolean(operatorToken));
-    $("lock-controls").hidden = !operatorToken;
+    text("shared-status", "Shared controls");
     renderVoice();
     renderLaunch(state, telemetry, launch);
-    text("operator-world-note", !launchSupported ? "Launcher not connected" : launch?.awaiting ? "Waiting for launch status" : state.connected !== true && !launch?.active ? "Waiting for Minecraft" : "Fresh world · Automatic start");
+    text("world-note", !launchSupported ? "Launcher not connected" : launch?.awaiting ? "Waiting for launch status" : state.connected !== true && !launch?.active ? "Waiting for Minecraft" : "Fresh world · Automatic start");
     $("control-start_new").title = launchSupported ? "Fresh world · Automatic start" : "Launcher not connected";
     let feedback = commandMessage;
-    if (operatorCommand?.status === "pending" && operatorCommand.expires_at) {
-      const remaining = Math.max(0, Math.ceil((Date.parse(operatorCommand.expires_at) - Date.now()) / 1000));
+    if (activeCommand?.status === "pending" && activeCommand.expires_at) {
+      const remaining = Math.max(0, Math.ceil((Date.parse(activeCommand.expires_at) - Date.now()) / 1000));
       feedback = remaining ? `Command accepted · waiting for the local agent (${remaining}s remaining).` : "Waiting for the final command result…";
     }
-    text("control-feedback", feedback || (!telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : launch?.awaiting ? launch.detail : launch?.active ? operatorToken ? "Preparing a clean world. Pause or End run cancels this launch." : "Preparing a clean world. Gameplay starts automatically after verification." : "Anyone can start a fresh run. Previous runs stay in the journal."));
-    if ((operatorToken || operatorCommand?.action === "start_new") && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
+    text("control-feedback", feedback || (!telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : launch?.awaiting ? launch.detail : launch?.active ? "Preparing a clean world. Pause or End run cancels this launch." : "Anyone can control a run. Previous runs stay in the journal."));
+    if (activeCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
   }
   function launchForDisplay(state) {
     const startedAt = timestamp(state.launch?.started_at);
@@ -619,37 +611,25 @@
     $("launch-run").hidden = !launch.runId;
     text("launch-run", launch.runId ? `Recording ${launch.runId}` : "");
     $("launch-stages").hidden = !launch.active || Boolean(launch.awaiting);
-    $("launch-cancel-note").hidden = !operatorToken || !launch.active || Boolean(launch.awaiting && !launch.accepted);
+    $("launch-cancel-note").hidden = !launch.active || Boolean(launch.awaiting && !launch.accepted);
     document.querySelectorAll("[data-launch-stage]").forEach((element) => {
       const current = element.dataset.launchStage === launch.stage;
       element.classList.toggle("current", current);
       if (current) element.setAttribute("aria-current", "step"); else element.removeAttribute?.("aria-current");
     });
   }
-  function lockControls(message = "Operator access ended. Anyone can start a fresh run.") {
-    operatorToken = "";
-    const changesLaunch = Boolean(requestedLaunch);
-    const publicCommand = operatorCommand?.action === "start_new";
-    if (!publicCommand) requestedLaunch = null;
-    voiceSession?.cancel();
+  function endPageInteractions() {
+    pageActive = false;
     voiceQueue.length = 0;
+    voiceSession?.cancel();
     voicePartial = "";
-    voiceMessage = "Microphone off. A private operator link is required to speak or send a message.";
-    try { storage?.removeItem("holospeed.operator"); } catch { /* Memory is cleared regardless. */ }
-    commandMessage = message;
-    if (!publicCommand) operatorCommand = null;
-    rememberCommand();
-    engineeringPreview = null;
-    $("devin-confirm").checked = false;
-    if (changesLaunch) renderState(); else renderControls();
-    renderEngineering();
   }
-  async function commandRequest(path, body, publicCommand = false) {
+  async function commandRequest(path, body) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const response = await fetch(path, {method: body ? "POST" : "GET", credentials: "same-origin", cache: "no-store", signal: controller.signal,
-        headers: {...(!publicCommand ? {Authorization: `Bearer ${operatorToken}`} : {}), ...(body ? {"Content-Type": "application/json"} : {})}, ...(body ? {body: JSON.stringify(body)} : {})});
+        headers: {...(body ? {"Content-Type": "application/json"} : {})}, ...(body ? {body: JSON.stringify(body)} : {})});
       const result = await response.json();
       if (!response.ok) {
         const error = new Error(result.error || `Command request failed (${response.status}).`);
@@ -660,80 +640,74 @@
     } finally { clearTimeout(timer); }
   }
   async function submitCommand(action, payload = {}) {
-    const publicCommand = action === "start_new";
     const engineering = ["prepare_investigation", "investigate"].includes(action);
     if (engineering) {
       renderEngineering();
       if ($(action === "prepare_investigation" ? "devin-prepare" : "devin-submit").disabled || payload.run_id !== engineeringRun) return;
       if (action === "investigate" && (!engineeringPreview || payload.digest_hash !== engineeringPreview.digest_hash)) return;
     } else if ($(`control-${action}`).disabled) return;
-    if ((!publicCommand && !operatorToken) || commandBusy) return;
+    if (!pageActive || commandBusy) return;
     const id = crypto.randomUUID();
-    operatorCommand = {id, action, status: "pending", submitted_at: Date.now()};
+    activeCommand = {id, action, status: "pending", submitted_at: Date.now()};
     if (action === "start_new") requestedLaunch = {id, accepted: false};
     rememberCommand();
     commandBusy = true; commandMessage = "Sending command…";
     if (engineering) { engineeringMessage = action === "prepare_investigation" ? "Preparing the exact redacted brief…" : "Requesting one capped Devin investigation…"; renderEngineering(); }
     if (action === "start_new") renderState(); else renderControls();
-    const submittedAt = operatorCommand.submitted_at;
-    const submittedToken = operatorToken;
+    const submittedAt = activeCommand.submitted_at;
     try {
-      const result = await commandRequest("/api/commands", {id, action, ...(engineering ? payload : {})}, publicCommand);
-      if ((!publicCommand && operatorToken !== submittedToken) || operatorCommand?.id !== id) return;
-      operatorCommand = {...result, action: result.action || action, submitted_at: submittedAt};
-      handleLaunchCommand(operatorCommand);
-      commandMessage = operatorCommand.status === "pending" ? "Command accepted; waiting for the local agent." : operatorCommand.detail || `Command ${operatorCommand.status}.`;
-      handleEngineeringCommand(operatorCommand);
-      handleVoiceCommand(operatorCommand);
+      const result = await commandRequest("/api/commands", {id, action, ...(engineering ? payload : {})});
+      if (!pageActive || activeCommand?.id !== id) return;
+      activeCommand = {...result, action: result.action || action, submitted_at: submittedAt};
+      handleLaunchCommand(activeCommand);
+      commandMessage = activeCommand.status === "pending" ? "Command accepted; waiting for the local agent." : activeCommand.detail || `Command ${activeCommand.status}.`;
+      handleEngineeringCommand(activeCommand);
+      handleVoiceCommand(activeCommand);
     } catch (error) {
-      if ((!publicCommand && operatorToken !== submittedToken) || operatorCommand?.id !== id) return;
+      if (!pageActive || activeCommand?.id !== id) return;
       if (requestedLaunch?.id === id && error.status && error.status < 500) requestedLaunch = null;
-      if (!publicCommand && (error.status === 401 || error.status === 503)) lockControls("Operator access is unavailable. Open a current private operator link.");
-      else if (error.status && error.status < 500) { operatorCommand = null; commandMessage = error.message; }
+      if (error.status && error.status < 500) { activeCommand = null; commandMessage = error.message; }
       else commandMessage = "Acceptance is unconfirmed. Checking this command ID; it will not be resubmitted.";
       if (engineering) engineeringMessage = commandMessage;
     } finally { commandBusy = false; rememberCommand(); if (action === "start_new") renderState(); else renderControls(); renderEngineering(); }
   }
   async function refreshCommand() {
-    if (!operatorCommand || (!operatorToken && operatorCommand.action !== "start_new") || commandChecking) return;
-    const id = operatorCommand.id;
-    const publicCommand = operatorCommand.action === "start_new";
+    if (!pageActive || !activeCommand || commandChecking) return;
+    const id = activeCommand.id;
     const changesLaunch = requestedLaunch?.id === id;
     commandChecking = true; commandLastChecked = Date.now();
     try {
-      const result = await commandRequest(`/api/commands/${encodeURIComponent(id)}`, undefined, publicCommand);
-      if (operatorCommand?.id !== id) return;
-      operatorCommand = {...result, action: result.action || operatorCommand.action, submitted_at: operatorCommand.submitted_at};
-      handleLaunchCommand(operatorCommand);
+      const result = await commandRequest(`/api/commands/${encodeURIComponent(id)}`);
+      if (activeCommand?.id !== id) return;
+      activeCommand = {...result, action: result.action || activeCommand.action, submitted_at: activeCommand.submitted_at};
+      handleLaunchCommand(activeCommand);
       commandMessage = result.status === "completed" ? result.detail || "Command completed." : result.status === "failed" ? `Command failed · ${result.detail || "Inspect the agent status."}` : result.status === "expired" ? "Command expired without a confirmed result. Check the current agent state." : "Command accepted; waiting for the local agent.";
-      handleEngineeringCommand(operatorCommand);
-      handleVoiceCommand(operatorCommand);
+      handleEngineeringCommand(activeCommand);
+      handleVoiceCommand(activeCommand);
     } catch (error) {
-      if (!publicCommand && (error.status === 401 || error.status === 503)) lockControls("Operator access is unavailable. Open a current private operator link.");
-      else if (error.status === 404 && operatorCommand?.id === id && Date.now() - n(operatorCommand.submitted_at) > 45000) {
+      if (error.status === 404 && activeCommand?.id === id && Date.now() - n(activeCommand.submitted_at) > 45000) {
         if (requestedLaunch?.id === id) requestedLaunch = null;
-        operatorCommand = null; commandMessage = "No command acceptance was confirmed. Check the current agent state before retrying.";
+        activeCommand = null; commandMessage = "No command acceptance was confirmed. Check the current agent state before retrying.";
       } else commandMessage = "Command result is unavailable; checking again automatically.";
     } finally { commandChecking = false; rememberCommand(); if (changesLaunch) renderState(); else renderControls(); renderEngineering(); }
   }
   function voiceAvailable() {
-    return Boolean(operatorToken && telemetryState(envelope, Date.now(), reachable).fresh);
+    return Boolean(pageActive && telemetryState(envelope, Date.now(), reachable).fresh);
   }
   async function createVoiceSession(signal) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal.addEventListener("abort", abort, {once: true});
     const timer = setTimeout(abort, 12000);
-    const token = operatorToken;
     try {
-      const response = await fetch("/api/voice/session", {method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: JSON.stringify({id: crypto.randomUUID()})});
+      const response = await fetch("/api/voice/session", {method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal, headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: crypto.randomUUID()})});
       if (!response.ok) {
         const error = new Error("Voice session unavailable");
-        error.voiceMessage = ({401: "A private operator link is required to use the microphone.", 409: "That speech session was already requested. Click the microphone to start a new one.", 429: "Please wait a few seconds before starting another recording.", 503: "Voice is not configured yet. You can still use the text field.", 504: "The speech provider timed out. No automatic retry was made."})[response.status] || "The speech service could not start. Use text or try the microphone again.";
+        error.voiceMessage = ({409: "That speech session was already requested. Click the microphone to start a new one.", 429: "Please wait a few seconds before starting another recording.", 503: "Voice is not configured yet. You can still use the text field.", 504: "The speech provider timed out. No automatic retry was made."})[response.status] || "The speech service could not start. Use text or try the microphone again.";
         throw error;
       }
       const result = await response.json();
-      if (signal.aborted || operatorToken !== token) throw new Error("Cancelled");
+      if (signal.aborted || !pageActive) throw new Error("Cancelled");
       return result;
     } finally {clearTimeout(timer); signal.removeEventListener("abort", abort);}
   }
@@ -748,7 +722,7 @@
         voicePhase = phase;
         if (phase === "listening") {voiceStartedAt = Date.now(); voiceMessage = "Speak naturally. Final transcripts are sent to the agent.";}
         if (["idle", "error", "finishing"].includes(phase)) voiceStartedAt = null;
-        if (phase === "idle" && previous === "finishing" && !voiceQueue.length && operatorCommand?.status !== "pending") voiceMessage = "Microphone off. Start another recording or type below.";
+        if (phase === "idle" && previous === "finishing" && !voiceQueue.length && activeCommand?.status !== "pending") voiceMessage = "Microphone off. Start another recording or type below.";
         if (phase === "finishing") voiceMessage = "Microphone off. Waiting briefly for the final transcript…";
         renderVoice();
       },
@@ -762,7 +736,7 @@
   }
   function queueVoice(value) {
     const textValue = typeof value.text === "string" ? value.text.trim() : "";
-    if (!voiceAvailable() || value.run_id !== (envelope?.state?.run_id || null)) {voiceMessage = "The run or operator connection changed. This instruction was not sent."; renderVoice(); return;}
+    if (!voiceAvailable() || value.run_id !== (envelope?.state?.run_id || null)) {voiceMessage = "The run or agent connection changed. This instruction was not sent."; renderVoice(); return;}
     if (!textValue || textValue.length > 1000) {voiceMessage = "Use an instruction under 1,000 characters."; renderVoice(); return;}
     if (voiceQueue.length >= 5) {voiceMessage = "Five instructions are already waiting. Let the agent catch up before sending another."; renderVoice(); return;}
     const item = {...value, text: textValue, id: crypto.randomUUID(), queued_at: Date.now()};
@@ -782,33 +756,31 @@
     queueVoice({text: value, run_id: envelope?.state?.run_id || null, session_id: "typed", utterance_id: crypto.randomUUID()});
   }
   async function sendNextVoice() {
-    if (!voiceAvailable() || !voiceQueue.length || commandBusy || commandChecking || operatorCommand?.status === "pending" || Date.now() < voiceRetryAt) return;
+    if (!voiceAvailable() || !voiceQueue.length || commandBusy || commandChecking || activeCommand?.status === "pending" || Date.now() < voiceRetryAt) return;
     const item = voiceQueue.shift();
     if (item.run_id !== (envelope?.state?.run_id || null) || Date.now() - item.queued_at > 30000) {voiceMessage = "An unsent instruction expired or belonged to a previous run. Please say it again if needed."; renderVoice(); return;}
-    const token = operatorToken;
     const {id, text: transcript, run_id, session_id, utterance_id} = item;
-    operatorCommand = {id, action: "voice", run_id, status: "pending", submitted_at: Date.now()};
-    try {storage?.setItem("holospeed.command", JSON.stringify({id, submitted_at: operatorCommand.submitted_at}));} catch { /* In-memory command tracking still prevents replay. */ }
-    const submittedAt = operatorCommand.submitted_at;
+    activeCommand = {id, action: "voice", run_id, status: "pending", submitted_at: Date.now()};
+    rememberCommand();
+    const submittedAt = activeCommand.submitted_at;
     commandBusy = true;
     voiceMessage = "Sending instruction…"; renderControls();
     try {
       const result = await commandRequest("/api/commands", {id, action: "voice", text: transcript, run_id, session_id, utterance_id});
-      if (operatorToken !== token || operatorCommand?.id !== id) return;
-      operatorCommand = {...result, action: "voice", submitted_at: submittedAt};
+      if (!pageActive || activeCommand?.id !== id) return;
+      activeCommand = {...result, action: "voice", submitted_at: submittedAt};
       commandMessage = result.detail || "Voice instruction received.";
-      handleVoiceCommand(operatorCommand);
+      handleVoiceCommand(activeCommand);
       if (result.status === "pending") voiceMessage = "Instruction accepted. Waiting for the agent…";
     } catch (error) {
-      if (operatorToken !== token || operatorCommand?.id !== id) return;
+      if (!pageActive || activeCommand?.id !== id) return;
       if (error.status === 409) {
-        operatorCommand = null;
+        activeCommand = null;
         voiceQueue.unshift(item); voiceRetryAt = Date.now() + 1000;
         voiceMessage = "Another command is finishing. This instruction is waiting.";
-      } else if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link when the agent is ready.");
-      else if (error.status && error.status < 500) {operatorCommand = null; voiceMessage = "The instruction was not accepted. Please check the current run and try again.";}
+      } else if (error.status && error.status < 500) {activeCommand = null; voiceMessage = "The instruction was not accepted. Please check the current run and try again.";}
       else {voiceMessage = "Delivery is unconfirmed. Checking this instruction ID without sending it again."; commandMessage = voiceMessage;}
-    } finally {commandBusy = false; renderControls(); renderEngineering();}
+    } finally {commandBusy = false; rememberCommand(); renderControls(); renderEngineering();}
   }
   function handleVoiceCommand(command) {
     if (command?.action !== "voice" || command.id !== voiceCurrentCommandId || command.status === "pending") return;
@@ -821,7 +793,7 @@
       voiceDisplayRunId = currentRun; voiceSeenReceivedSeq = -1;
       voiceTranscript = ""; voiceReply = ""; voiceCurrentCommandId = null;
     }
-    if (voiceSession?.active && (!operatorToken || voiceRunId !== (envelope?.state?.run_id || null))) {
+    if (voiceSession?.active && (!pageActive || voiceRunId !== (envelope?.state?.run_id || null))) {
       voiceQueue.length = 0; voiceSession.cancel(); voiceMessage = "The run changed. Microphone off; start a new recording when ready.";
     }
     const active = voiceSession?.active === true;
@@ -838,12 +810,12 @@
     $("voice-caption").hidden = !voicePartial;
     $("voice-text").disabled = !available;
     $("voice-send").disabled = !available || voiceQueue.length >= 5;
-    text("voice-feedback", voiceMessage || (!operatorToken ? "A private operator link is required to speak or send a message." : !available ? "Waiting for the agent connection. Text and voice will be available when it returns." : "Try “pause”, “collect more wood”, or “what are you doing?”"));
+    text("voice-feedback", voiceMessage || (!available ? "Waiting for the agent connection. Text and voice will be available when it returns." : "Try “pause”, “collect more wood”, or “what are you doing?”"));
     const events = envelope?.state?.events || [];
     const received = latestEvent(events, "voice_received");
     if (received && n(received.seq) > voiceSeenReceivedSeq) {
       voiceSeenReceivedSeq = n(received.seq);
-      const pendingLocal = voiceQueue.some((item) => item.id === voiceCurrentCommandId) || operatorCommand?.id === voiceCurrentCommandId && operatorCommand?.status === "pending";
+      const pendingLocal = voiceQueue.some((item) => item.id === voiceCurrentCommandId) || activeCommand?.id === voiceCurrentCommandId && activeCommand?.status === "pending";
       if (!pendingLocal || received.data?.command_id === voiceCurrentCommandId) {
         voiceCurrentCommandId = received.data?.command_id;
         voiceTranscript = typeof received.data?.text === "string" ? received.data.text : "";
@@ -856,7 +828,7 @@
     text("voice-transcript", voiceTranscript);
     $("voice-reply-row").hidden = !voiceReply;
     text("voice-reply", voiceReply);
-    if (available && voiceQueue.length && !commandBusy && !commandChecking && operatorCommand?.status !== "pending" && Date.now() >= voiceRetryAt) sendNextVoice();
+    if (available && voiceQueue.length && !commandBusy && !commandChecking && activeCommand?.status !== "pending" && Date.now() >= voiceRetryAt) sendNextVoice();
   }
   function renderResources(state, telemetry) {
     // Keep only the latest evidence of each kind, scoped to the current run.
@@ -933,10 +905,9 @@
   function engineeringCanPrepare() {
     const age = timestamp(envelope?.updated_at);
     const publisherFresh = reachable && age != null && Date.now() - age >= -2000 && Date.now() - age < FRESH_FRAME_MS;
-    return Boolean(operatorToken && publisherFresh && engineeringRun && !commandBusy && operatorCommand?.status !== "pending");
+    return Boolean(pageActive && publisherFresh && engineeringRun && !commandBusy && activeCommand?.status !== "pending");
   }
   function handleEngineeringCommand(command) {
-    if (!operatorToken) return;
     if (!["prepare_investigation", "investigate"].includes(command?.action) || command.status === "pending") return;
     const identity = `${command.id}:${command.status}`;
     if (handledEngineeringCommand === identity) return;
@@ -971,7 +942,7 @@
   }
   function openEngineering() {
     const next = selectedRun || envelope?.state?.run_id || envelope?.runs?.[0]?.id || null;
-    if (operatorCommand?.status !== "pending" || !["prepare_investigation", "investigate"].includes(operatorCommand.action)) selectEngineeringRun(next);
+    if (activeCommand?.status !== "pending" || !["prepare_investigation", "investigate"].includes(activeCommand.action)) selectEngineeringRun(next);
     const dialog = $("devin-dialog");
     if (!dialog.open) {
       if (dialog.showModal) dialog.showModal();
@@ -1013,10 +984,10 @@
       select.replaceChildren(...options);
     }
     if (engineeringRun) select.value = engineeringRun;
-    const pending = commandBusy || operatorCommand?.status === "pending";
+    const pending = commandBusy || activeCommand?.status === "pending";
     select.disabled = pending;
     const value = engineeringByRun.get(engineeringRun) || null;
-    const preview = operatorToken && engineeringPreview?.run_id === engineeringRun ? engineeringPreview : null;
+    const preview = engineeringPreview?.run_id === engineeringRun ? engineeringPreview : null;
     const canPrepare = engineeringCanPrepare();
     $("devin-prepare").disabled = !canPrepare;
     $("devin-submit").disabled = !canPrepare || !preview?.can_submit || Boolean(value) || !$("devin-confirm").checked;
@@ -1024,7 +995,7 @@
     $("devin-confirmation").hidden = !preview?.can_submit;
     text("devin-prompt", preview?.prompt || "");
     text("devin-digest", preview ? `SHA-256 ${preview.digest_hash}` : "");
-    text("devin-feedback", engineeringMessage || (!operatorToken ? "A private operator link is required to prepare an investigation. Existing findings remain viewable." : engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
+    text("devin-feedback", engineeringMessage || (engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
     text("devin-session-status", engineeringStatus(value));
     text("devin-session-detail", value?.status_detail ? `Reported state: ${value.status_detail}${value.updated_at ? ` · updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : ""}` : value?.updated_at ? `Updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : "No session has been recorded for this run.");
     const sessionUrl = devinSessionUrl(value?.url);
@@ -1187,7 +1158,7 @@
     try {
       const metadata = await get("/api/live/status", 3500);
       // Same-origin fixed path only; a returned URL cannot redirect media to a
-      // third party or expose the operator capability.
+      // third party.
       if (metadata?.playlist_url && metadata.playlist_url !== "/api/live/index.m3u8") throw new Error("Invalid video source");
       videoMetadata = metadata; videoReachable = true;
       if (metadata?.status === "live") startVideo(metadata);
@@ -1198,7 +1169,8 @@
 
   $("voice-toggle").addEventListener("click", toggleVoice);
   $("voice-form").addEventListener("submit", sendTypedVoice);
-  globalThis.addEventListener?.("pagehide", () => {voiceQueue.length = 0; voiceSession?.cancel();});
+  globalThis.addEventListener?.("pagehide", endPageInteractions);
+  globalThis.addEventListener?.("pageshow", () => {pageActive = true;});
   $("devin-open").addEventListener("click", openEngineering);
   $("devin-open-journal").addEventListener("click", openEngineering);
   $("devin-close").addEventListener("click", closeEngineering);
@@ -1221,7 +1193,6 @@
     else notify("The next live run will be selected automatically.");
   });
   ["start_new", "resume", "pause", "stop"].forEach((action) => $(`control-${action}`).addEventListener("click", () => submitCommand(action)));
-  $("lock-controls").addEventListener("click", () => lockControls("Controls locked. An already accepted command may still finish."));
   $("play-video").addEventListener("click", playVideo);
   $("game-video").addEventListener("timeupdate", () => {
     // Older native-HLS browsers can report playback progress without claiming

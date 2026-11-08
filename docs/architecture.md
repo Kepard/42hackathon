@@ -143,13 +143,13 @@ does not rerun the Minecraft world.
 
 The live camera uses Minecraft-window-only H.264/fMP4 HLS. Its target follows
 display refresh or `--video-fps 60`, separately from measured browser FPS and game
-render cadence. A one-FPS JPEG fallback, telemetry, archives, and operator commands
+render cadence. A one-FPS JPEG fallback, telemetry, archives, and viewer commands
 run independently. HLS is a rolling live buffer rather than a full video archive.
 The mission panel animates actual fresh Holo4/Jev requests and local execution,
 then retains completed decisions without implying continuous inference.
 
-Anyone can start a fresh run through public New run. Pause, Resume, End run,
-voice, and Devin actions require the private operator capability. Commands have a
+All dashboard features are public: New run, Pause, Resume, End run, voice,
+typed steering, and reviewed Devin investigations. Commands have a
 30-second dispatch window and durable claims against accidental replay.
 New run saves and unloads the previous world, copies the verified pristine
 template into a unique save, and loads it through Minecraft's normal client API.
@@ -158,7 +158,7 @@ Pause, Stop, F8, or a disconnected bridge cancel pending automatic startup.
 Old worlds and logs remain available. Resume requires guarded mod rearming. [Dashboard setup](../dashboard/README.md)
 documents access and publishing.
 
-[Devin engineering](devin.md) prepares an exact redacted run brief for operator
+[Devin engineering](devin.md) prepares an exact redacted run brief for viewer
 review, submits the approved hash with a 2-ACU cap, and publishes bounded findings
 and proposed tests. Durable claims prevent duplicate paid submissions. Proposed
 code is not applied automatically and gameplay never waits for the investigation.
@@ -167,7 +167,7 @@ limits.
 
 [Gladia voice interaction](gladia.md) starts from an explicit microphone gesture.
 The browser streams audio through an ephemeral Gladia session; only final
-transcripts enter the private operator command path. Partial captions do not
+transcripts enter the shared command path. Partial captions do not
 execute controls. Pause/stop/resume use bounded local commands; guidance informs
 Holo4 within the available skills, and questions use recorded state. Server
 credentials remain private, and raw microphone audio is not stored by HoloSpeed.

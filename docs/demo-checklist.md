@@ -56,7 +56,7 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
 - [ ] Keep Minecraft focused and press **F9** to start/resume through the
   controller. Paused or unfocused gameplay rejects/cancels controls. Refocus
   Minecraft after using the browser; F9 avoids starting from an unfocused window.
-  Explicit authenticated dashboard Start/Resume also requests guarded rearming.
+  Explicit dashboard Start/Resume also requests guarded rearming.
 
 ## Prepare the hosted presentation
 
@@ -66,9 +66,9 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
 - [ ] Confirm live HLS playback, current capture age, and measured browser playback
   FPS. The encoder target does not establish 60 distinct game frames per second.
   Check the one-FPS JPEG fallback if video is unavailable.
-- [ ] Share the public URL separately from the private operator link. Verify that
-  **New run** works without a password and loads a fresh prepared-world copy.
-  Resume, Pause, End run, voice, and Devin actions still require operator access.
+- [ ] Share the public URL. Verify that **New run** loads a fresh prepared-world
+  copy and that Resume, Pause, End run, voice, typed steering, and Devin preparation
+  are available without an account or private link. Everyone uses the same game.
 - [ ] Check command results and the 30-second delivery deadline. Refocus Minecraft
   when guarded rearming reports an unavailable or unfocused game.
 - [ ] Keep complete local journals, frames, and compressed state assets. Hosted
@@ -85,7 +85,7 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
   A skill accepted by the client is not yet complete. Record provider use/latency.
 - [ ] Press **F8** during movement or mining. Confirm local inputs release and
   the controller pauses. F8 latches the mod off; **F9** locally reenables control
-  and requests start. Authenticated Start/Resume instead uses guarded rearming.
+  and requests start. Dashboard Start/Resume instead uses guarded rearming.
   Check that HTTP/dashboard rearming rejects occupied crafting slots/cursor.
 - [ ] Pause from the console during inference; confirm no late movement begins.
 - [ ] Disconnect the controller during a held action. Confirm the mod releases
@@ -146,11 +146,11 @@ must be checked independently.
 - [ ] Check that **On a mission** shows actual Holo4 and Jev request lifecycles,
   input sources, recorded decisions, and latency. A completed call must not remain
   animated as live inference. Local skill progress is a separate stage.
-- [ ] Open the private operator link before using the microphone or typed commands.
+- [ ] Check microphone and typed commands from the public dashboard.
   Start the microphone with an explicit click; check partial captions and final
   transcripts separately. Partial captions must never execute an action.
 - [ ] Test a spoken pause/stop, then a bounded resume only in a ready world.
-  Inspect the private command acknowledgment and controller journal. Questions
+  Inspect the command acknowledgment and controller journal. Questions
   should use recorded game state; guidance must stay within available skills.
 - [ ] Keep the Gladia key on the server and distinguish real microphone/browser
   verification from API or synthetic-PCM tests. Follow [voice setup](gladia.md).
@@ -159,8 +159,8 @@ must be checked independently.
 
 The dashboard's **Devin engineering** menu can prepare the exact redacted brief
 for a selected run. Review it and explicitly confirm the fixed 2-ACU cap before
-creating an investigation. Public viewers can inspect published findings and
-proposed tests but cannot submit sessions. The CLI alternative is:
+creating an investigation. Every viewer can use this reviewed submission flow
+and inspect published findings and proposed tests. The CLI alternative is:
 
 1. Preserve the entire run directory. Downloading the JSONL journal alone does
    not include the separate screenshot files used by the visual replay.

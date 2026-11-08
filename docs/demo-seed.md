@@ -72,8 +72,8 @@ API. It verifies the loaded seed, Survival mode, empty inventory, full health an
 hunger, and released controls before arming and starting the agent.
 
 The dashboard reports saving, copying, loading, verifying, and starting stages.
-Loading time is separate from the new run timer. Operator **Pause** or **End run**
-through a private control link, or local **F8**, cancels an active launch.
+Loading time is separate from the new run timer. Anyone can cancel an active
+launch with **Pause** or **End run**; local **F8** also cancels it.
 Previous worlds and logs remain intact; any new copy
 already created is preserved on failure or cancellation, and another **New run**
 uses a distinct destination. The local `POST /api/new-run` endpoint accepts

@@ -21,12 +21,12 @@ class Bucket {
   }
 }
 const environment = (extra = {}) => ({BUCKET: new Bucket(), CONTROL_TOKEN: CONTROL, INGEST_TOKEN: INGEST, GLADIA_API_KEY: GLADIA, ...extra});
-function request(path, body, token = CONTROL, headers = {}) {
+function request(path, body, token = null, headers = {}) {
   return new Request(ORIGIN + path, {method: body === undefined ? "GET" : "POST", headers: {Origin: ORIGIN, "Sec-Fetch-Site": "same-origin", ...(token ? {Authorization: `Bearer ${token}`} : {}), ...(body === undefined ? {} : {"Content-Type": "application/json"}), ...headers}, ...(body === undefined ? {} : {body: typeof body === "string" ? body : JSON.stringify(body)})});
 }
-const session = (env, id = ID, token = CONTROL, headers = {}) => handleApi(request("/api/voice/session", {id}, token, headers), env);
+const session = (env, id = ID, token = null, headers = {}) => handleApi(request("/api/voice/session", {id}, token, headers), env);
 const voice = (extra = {}) => ({id: ID, action: "voice", text: "Pause the agent", session_id: SESSION, utterance_id: "utterance-1", run_id: "run-1", ...extra});
-const create = (env, body = voice(), token = CONTROL) => handleApi(request("/api/commands", body, token), env);
+const create = (env, body = voice(), token = null) => handleApi(request("/api/commands", body, token), env);
 const acknowledge = (env, body = {status: "completed", detail: "Agent paused", run_id: "run-1", data: {intent: "pause", reply: "The agent is paused."}}) => handleApi(request(`/api/commands/${ID}/result`, body, INGEST), env);
 function upstream(context, callback = () => Response.json({id: SESSION, url: URL})) {
   const calls = [];
@@ -34,17 +34,28 @@ function upstream(context, callback = () => Response.json({id: SESSION, url: URL
   return calls;
 }
 
-test("voice session creation is operator-only, same-origin, bounded, and configured server-side", async (context) => {
+test("public voice session creation is same-origin, bounded, and configured server-side", async (context) => {
   const calls = upstream(context);
   const env = environment();
-  for (const token of [null, INGEST, "wrong"]) assert.equal((await session(env, ID, token)).status, 401);
-  for (const headers of [{Origin: "https://evil.example"}, {Origin: ""}, {"Sec-Fetch-Site": "cross-site"}]) assert.equal((await session(env, ID, CONTROL, headers)).status, 403);
+  for (const headers of [{Origin: "https://evil.example"}, {Origin: ""}, {Origin: "null"}, {"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"}]) assert.equal((await session(env, ID, null, headers)).status, 403);
+  const missingOrigin = request("/api/voice/session", {id: ID}); missingOrigin.headers.delete("Origin");
+  assert.equal((await handleApi(missingOrigin, env)).status, 403);
   assert.equal((await session(environment({GLADIA_API_KEY: undefined}))).status, 503);
   assert.equal((await handleApi(request("/api/voice/session"), env)).status, 405);
   for (const body of [{}, {id: "bad"}, {id: ID, sample_rate: 48000}, {id: ID, url: "https://evil.example"}]) assert.equal((await handleApi(request("/api/voice/session", body), env)).status, 400);
   assert.equal((await handleApi(request("/api/voice/session", "x".repeat(1025)), env)).status, 413);
   assert.equal(calls.length, 0);
   assert.equal(env.BUCKET.records.size, 0);
+});
+
+test("public microphone sessions do not depend on a legacy control token", async (context) => {
+  const calls = upstream(context);
+  for (const value of [undefined, "", "unused-legacy-value"]) {
+    const response = await session(environment({CONTROL_TOKEN: value}), ID, null);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {id: SESSION, url: URL, sample_rate: 16000});
+  }
+  assert.equal(calls.length, 3);
 });
 
 test("session exchange uses fixed PCM configuration and never stores the key or ephemeral URL", async (context) => {
@@ -149,7 +160,7 @@ test("session failure diagnostics identify provider stage without exposing its r
 test("provider URLs must use a Gladia secure WebSocket without returned API credentials", async (context) => {
   let payload;
   upstream(context, () => Response.json(payload));
-  for (const url of ["wss://evil.example/live", "wss://gladia.io.evil.example/live", "https://api.gladia.io/live", "wss://secret@api.gladia.io/live", "wss://api.gladia.io:444/live", `wss://api.gladia.io/live?token=${GLADIA}`, `wss://api.gladia.io/live?token=${CONTROL}`]) {
+  for (const url of ["wss://evil.example/live", "wss://gladia.io.evil.example/live", "https://api.gladia.io/live", "wss://secret@api.gladia.io/live", "wss://api.gladia.io:444/live", `wss://api.gladia.io/live?token=${GLADIA}`, `wss://api.gladia.io/live?token=${INGEST}`, `wss://api.gladia.io/live?token=${CONTROL}`]) {
     payload = {id: SESSION, url};
     assert.equal((await session(environment())).status, 502);
   }
@@ -159,7 +170,7 @@ test("provider URLs must use a Gladia secure WebSocket without returned API cred
 
 test("voice commands bind text, transcript identity, and expected run to the immutable command ID", async () => {
   const env = environment();
-  assert.equal((await create(env, voice(), null)).status, 401);
+  delete env.CONTROL_TOKEN;
   assert.equal((await create(env)).status, 202);
   assert.equal((await create(env)).status, 200);
   for (const change of [{text: "Resume"}, {session_id: "typed"}, {utterance_id: "utterance-2"}, {run_id: "other-run"}, {run_id: null}]) assert.equal((await create(env, voice(change))).status, 409);
@@ -169,7 +180,7 @@ test("voice commands bind text, transcript identity, and expected run to the imm
   assert.equal((await create(environment(), voice({session_id: "typed", run_id: null}))).status, 202);
 });
 
-test("voice result data is private, bounded, redacted, and cannot change the original expected run", async () => {
+test("public voice results are bounded, redacted, and cannot change the original expected run", async () => {
   const env = environment(); await create(env);
   for (const body of [
     {status: "completed", detail: "Missing data"},
@@ -187,7 +198,7 @@ test("voice result data is private, bounded, redacted, and cannot change the ori
   const command = (await result.json()).command;
   assert.equal(command.run_id, "run-1");
   assert.ok(!command.data.reply.includes(CONTROL) && !command.data.reply.includes(INGEST));
-  assert.equal((await handleApi(request(`/api/commands/${ID}`, undefined, null), env)).status, 401);
+  assert.deepEqual((await (await handleApi(request(`/api/commands/${ID}`, undefined, null), env)).json()).command, command);
   assert.equal((await acknowledge(env, {...body, data: {...body.data, reply: "Changed"}})).status, 409);
 });
 

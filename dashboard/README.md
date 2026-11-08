@@ -4,17 +4,17 @@ Public dashboard: [open the site](https://holospeed-live-kepard.kepard.chatgpt.s
 The initial source was copied from the Sites project at
 `f3fb8d925a048a79ec5956e492f7996cd467fb71`. The interface shows the Minecraft
 window, controller intent, input telemetry, model latency, metrics, milestones,
-and searchable run events. Anyone can watch and choose **New run**. A separate
-private operator capability enables Pause, Resume, End run, voice, and Devin.
+and searchable run events. Anyone can watch, start, pause, resume, or end a run,
+use voice or typed steering, and create reviewed Devin investigations.
 The **On a mission** pipeline shows actual Holo4 and Jev request lifecycles,
 their recorded input sources and decisions, and the local skill executing next.
 Animation requires a fresh, active request or skill; completed decisions remain
 visible without implying continuous inference. Technical request details expand
 on demand.
 
-**Devin engineering** lets an operator prepare and review an exact redacted run
-brief, then explicitly create an investigation capped at 2 ACU. Public viewers
-can inspect published findings and proposed tests. Briefs stay private, duplicate
+**Devin engineering** lets any viewer prepare and review an exact redacted run
+brief, then explicitly create an investigation capped at 2 ACU. Everyone can
+inspect the prepared brief, published findings, and proposed tests. Duplicate
 submissions are prevented, and proposed code is never applied automatically.
 See [the engineering workflow](../docs/devin.md).
 The resource panel shows the active skill and matching progress alongside the
@@ -44,27 +44,20 @@ viewers in Sites settings. Configure these runtime secrets:
 
 - `INGEST_TOKEN`: publisher authentication, matching local
   `HOLOSPEED_INGEST_TOKEN` (at least 16 characters).
-- `CONTROL_TOKEN`: private operator capability (32–256 URL-safe characters),
-  distinct from `INGEST_TOKEN`.
-- `GLADIA_API_KEY`: enables operator-only voice session creation. The browser
+- `GLADIA_API_KEY`: enables voice session creation. The browser
   receives a short-lived transcription session URL, never this API key.
 
 Keep secrets out of source and browser assets. A public viewer needs no
 secret. Other hosting platforms must provide the `BUCKET` binding and any
 desired viewer access layer.
 
-## Public launch and operator access
+## Shared public controls
 
-**New run** is public and requires no password or token. The **Shared demo**
-footer states “Anyone can start a fresh run.” Pause, Resume, End run, voice
-steering, and Devin investigations still require a private operator link.
-
-Privately share `https://<site>/#control=<CONTROL_TOKEN>` with the operator.
-The browser removes the fragment immediately and retains the capability only
-in that tab's session storage. **Lock controls** removes the saved capability.
-Anyone with that private link can control the agent; rotate `CONTROL_TOKEN` in
-hosting settings to revoke it. Never publish the operator link with the public
-viewing URL.
+All dashboard features are public: **New run**, **Pause**, **Resume**, **End run**,
+voice and typed steering, and Devin investigations. No account, password, role,
+or private link is required. Everyone controls the same live game; New run
+restarts it for all viewers. Devin still requires reviewing the exact redacted
+prompt and confirming the 2-ACU cap before creating an investigation.
 
 **New run** saves and archives the previous run, copies the prepared starting
 world into a distinct `holospeed-demo-<UUID>` save, loads it through Minecraft's
@@ -84,8 +77,8 @@ gameplay, **Resume** continues the current run, **Pause** releases controls, and
 **End run** stops and archives it. Selecting an archived run only changes the
 journal being viewed.
 
-The UI posts an immutable UUID command. New run submission and result polling
-are public; other commands require operator authentication. The Worker
+The UI posts an immutable UUID command. All dashboard command submission and
+result polling are public. The Worker
 accepts at most one pending command, with a 30-second delivery window. The local
 publisher polls using `INGEST_TOKEN`, executes controller operations, and records
 a completed/failed result. Browser feedback distinguishes acceptance from

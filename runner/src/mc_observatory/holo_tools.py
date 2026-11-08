@@ -6,7 +6,7 @@ import math
 import time
 
 from .session import KEYS, keycode
-from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls
+from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls, lava_sound_nearby
 
 
 class InvalidToolArgs(ValueError):
@@ -40,7 +40,7 @@ RAW = {
 }
 SKILLS = {
     **RAW,
-    "key_down": ("Bounded key hold for ms (default500,max1000), within THIS turn only. Auto-released before thinking. Prefer move/reposition for walking and atomic key_press modifiers for GUI chords.", {"key":KEY,"ms":{**number(0,1000),"default":500}}),
+    "key_down": ("Bounded key hold for ms (default500,max1000), within THIS turn only. Auto-released before thinking. Back/strafe refused while vanilla 'Lava pops' subtitle shows; turn toward safe ground, then walk forward. Prefer move/reposition for walking and atomic key_press modifiers for GUI chords.", {"key":KEY,"ms":{**number(0,1000),"default":500}}),
     "mouse_down": ("Bounded mouse hold for ms (default500,max1000), within THIS turn only. Batch cursor moves/up in the same turn for GUI drag splitting; use mining skills for blocks.", {"button":BUTTON,"ms":{**number(0,1000),"default":500}}),
     "key_press": (RAW["key_press"][0], {**RAW["key_press"][1],"ms":number(0,1000)}),
     "approach_until_outline": ("Pixel reflex: walk toward the crosshair, checking thin dark rectangular selection edges every 0.2s; stop on an outline cue, two unchanged views, or max_s. False negatives/positives are possible; inspect returned frame. No game state.", {"max_s": number(.2, 10), "sprint": {"type": "boolean", "default": False}}),
@@ -80,7 +80,7 @@ def tool_schemas(tier, reflex="none"):
         vocabulary = {**vocabulary, **JEV_SKILLS}
         for legacy in ("approach_until_outline", "move", "aim_at", "mine", "attack"):
             vocabulary.pop(legacy)
-        vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
+        vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. Refused while vanilla 'Lava pops' subtitle shows: lava sound nearby, turn toward visible safe ground instead. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
         vocabulary["collect"] = ("Pick up visible drops AFTER mining, never use for block approach (call seek). Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
         vocabulary["attack_until_broken"] = (SKILLS["attack_until_broken"][0] + " Close approach uses fast TypeSafe Jev on screenshots. ONLY once close, an absent outline permits a probe up to0.6s, bounded by max_s; continue ONLY on target-centre progress and release on break pixels. Probe use/success is logged. Otherwise seek first. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
@@ -550,6 +550,8 @@ class ToolExecutor:
             result["next_action"] = "call search_recipe(query='<English item name>') first; do not click unsearched/unavailable recipe icons"
         if outcome == "position_cursor_first":
             result["next_action"] = "position the GUI cursor with mouse_move_to or use click_at(x,y)"
+        if outcome == "lava_sound_nearby":
+            result["next_action"] = "lava sound nearby: no blind backward/sideways movement. Look down/turn and use visibly safe ground."
         if self.close_checks:
             result["close_checks"] = list(self.close_checks)
         if self.jev is not None and call["name"] == "attack_until_broken" and outcome in ("scene_changed", "no_change") and self.failed_mining_frame is not None:
@@ -584,6 +586,10 @@ class ToolExecutor:
                     return "search_recipe_first"
         if name == "reposition":
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)
+        blind = (name == "move" and args["direction"] != "forward") or (name in ("key_down","key_press") and args["key"] in ("a","s","d"))
+        select_all = args.get("key") == "a" and (args.get("ctrl") or any(keycode(k) in (341,345) for k in self.held_keys))
+        if tier == "skills" and blind and not select_all and self.current_frame and lava_sound_nearby(self.current_frame):
+            return "lava_sound_nearby"
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
         if tier == "skills" and name == "mine" and not await self.approach_close():

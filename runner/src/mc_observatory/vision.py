@@ -196,6 +196,39 @@ def large_face_box(png):
     return (left/im.width,(cy-half)/im.height,right/im.width,(cy+half)/im.height)
 
 
+_LAVA_SUBTITLE = (
+    "100000000000000000000000000000000000000000000000000",
+    "100000000000000000000000000000000000000000000000000",
+    "100000011100100010011100000010110001110010110001111",
+    "100000000010100010000010000011001010001011001010000",
+    "100000011110100010011110000010001010001010001001110",
+    "100000100010010100100010000011110010001011110000001",
+    "111110011110001000011110000010000001110010000011110",
+    "000000000000000000000000000010000000000010000000000",
+)
+
+
+def lava_sound_nearby(png):
+    im = image(png)
+    pixels = im.load()
+    ink = [(x,y) for y,row in enumerate(_LAVA_SUBTITLE) for x,bit in enumerate(row) if bit == "1"]
+    gaps = [(x,y) for y,row in enumerate(_LAVA_SUBTITLE) for x,bit in enumerate(row) if bit == "0"]
+    def matches(x,y,level):
+        color = pixels[x,y]
+        return max(color)-min(color) <= 4 and abs(min(color)-level) <= 8
+    for scale in (2,1,3,4,6):
+        for y in range(max(0,im.height-max(180,100*scale)),im.height-18*scale):
+            for x in range(max(0,im.width-max(280,64*scale)),im.width-51*scale+1):
+                color = pixels[x,y]
+                level = min(color)
+                if level < 65 or max(color)-level > 4: continue
+                if not matches(x,y+6*scale,level) or not matches(x+4*scale,y+6*scale,level): continue
+                if matches(x+2*scale,y,level) or matches(x+5*scale,y+6*scale,level): continue
+                if all(matches(x+dx*scale,y+dy*scale,level) for dx,dy in ink) and not any(matches(x+dx*scale,y+dy*scale,level) for dx,dy in gaps):
+                    return True
+    return False
+
+
 def movement_danger(png):
     im = image(png)
     patch = im.crop((int(im.width * .35), int(im.height * .62), int(im.width * .65), int(im.height * .78))).resize((30, 16))

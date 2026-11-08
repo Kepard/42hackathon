@@ -233,6 +233,25 @@ positive right; pitch positive down. Hotbar 1–9. GUI click_x/click_y are integ
 top-left origin, valid only when screen_open. If uncertain, stop briefly with empty keys.
 """
 
+_HOLO_COMPACT_SYSTEM = """Control Minecraft survival using only the screenshot and player inputs.
+Follow run_goal; use recent results/failures to avoid ineffective repetition. First gather
+logs, then craft planks/sticks/table, wooden pickaxe, and stone tools through visible GUI.
+Return ONE native action call with controls only. Omit unused fields. Optional intent is
+one short target phrase; intent is REQUIRED for mine_block and GUI interactions. No narrative
+needed. Optional milestone+evidence may report a newly visible item only; omit both if unseen.
+Never infer a milestone from issuing inputs or expected progress.
+Distinguish leaves from solid log trunks. Leaves under the crosshair: attack for 10 ticks
+to clear them before moving. Approach and aim separately. If exploration is enabled,
+prefer probes <=10 ticks and small look changes when progress is uncertain.
+propose_decision: simultaneous keys, 20 ticks/second, at most20 ticks. Positive yaw turns
+right, positive pitch looks down. GUI click_x/y integers0–1000, only with screen_open.
+mine_block: stationary attack only, duration60–80 ticks(default80), only when a reachable
+log/block is already under the crosshair. Do not move while mining; early release resets
+breaking. Keep controls safe. Never use cheats, commands, or hidden game state.
+answer only when the entire run_goal is visibly complete; give visible evidence, not
+an action-based assumption. Explicit no-input tests use empty keys and duration_ticks1.
+"""
+
 _FLAT_ACTION_FIELDS = {
     "keys",
     "duration_ticks",
@@ -293,6 +312,66 @@ def _holo_mining_schema() -> dict[str, Any]:
         "required": ["objective", "strategy", "expected_effect"],
         "additionalProperties": False,
     }
+
+
+def _compact_holo_schema(*, mining: bool = False) -> dict[str, Any]:
+    schema = _holo_mining_schema() if mining else _holo_tool_schema()
+    schema["properties"] = {
+        key: value
+        for key, value in schema["properties"].items()
+        if key not in {"objective", "strategy", "expected_effect"}
+    }
+    schema["properties"]["intent"] = {"type": "string", "minLength": 1, "maxLength": 120}
+    schema["required"] = ["intent"] if mining else ["keys", "duration_ticks"]
+    return schema
+
+
+def _control_description(action: Action) -> str:
+    parts = [f"hold {'+'.join(action.keys) or 'no keys'} for {action.duration_ticks} ticks"]
+    if action.yaw_delta or action.pitch_delta:
+        parts.append(f"look yaw {action.yaw_delta:g}°, pitch {action.pitch_delta:g}°")
+    if action.cursor:
+        parts.append(
+            f"{action.cursor.button} click at ({action.cursor.x:.3f}, {action.cursor.y:.3f})"
+        )
+    if action.hotbar is not None:
+        parts.append(f"select hotbar {action.hotbar}")
+    if action.scroll:
+        parts.append(f"scroll {action.scroll}")
+    return "; ".join(parts)
+
+
+def _fill_compact_metadata(
+    arguments: dict[str, Any],
+    context: dict[str, Any],
+    intent: str | None,
+    *,
+    mining: bool = False,
+    screen_open: bool = False,
+) -> dict[str, Any]:
+    action = Action.model_validate(arguments["action"], strict=True)
+    needs_target = mining or (
+        screen_open
+        and bool(action.keys or action.cursor or action.hotbar is not None or action.scroll)
+    )
+    legacy_explicit_plan = all(
+        isinstance(arguments.get(field), str) and arguments[field].strip()
+        for field in ("objective", "strategy", "expected_effect")
+    )
+    if needs_target and not intent and not legacy_explicit_plan:
+        raise ValueError("Compact mining and GUI interactions require a short target intent")
+    controls = _control_description(action)
+    objective = context.get("objective") or context.get("run_goal")
+    if not isinstance(objective, str) or not objective.strip():
+        objective = "Take the next bounded step"
+    # These labels describe requested inputs, never a visual observation or achieved result.
+    arguments.setdefault("objective", objective[:300])
+    strategy = f"Control-only plan: {controls}. Verify the outcome in the next frame."
+    if intent:
+        strategy = f"Model intent: {intent}. {strategy}"
+    arguments.setdefault("strategy", strategy)
+    arguments.setdefault("expected_effect", f"Attempt inputs: {controls}. Outcome is unverified.")
+    return arguments
 
 
 def _mining_decision(arguments: Any) -> dict[str, Any]:
@@ -368,6 +447,8 @@ def _decision_error_reason(error: Exception) -> str:
         "Invalid answer",
         "Completion requires visible evidence",
         "Unknown tool",
+        "Compact intent must be a nonempty string of at most 120 characters",
+        "Compact mining and GUI interactions require a short target intent",
     }:
         return str(error)
     return "tool call has missing fields or incorrect JSON types"
@@ -377,13 +458,14 @@ class HoloProvider(_Provider):
     name = "holo"
 
     async def decide(self, observation: Observation, context: dict[str, Any]) -> ModelResult:
+        compact = getattr(self.settings, "holo_compact", False)
         body = {
             "model": self.settings.holo_model,
             "reasoning_effort": self.settings.holo_reasoning_effort,
             "temperature": 0.8,
-            "max_tokens": 700,
+            "max_tokens": 256 if compact and self.settings.holo_reasoning_effort == "none" else 700,
             "messages": [
-                {"role": "system", "content": _HOLO_SYSTEM},
+                {"role": "system", "content": _HOLO_COMPACT_SYSTEM if compact else _HOLO_SYSTEM},
                 {
                     "role": "user",
                     "content": json.dumps(
@@ -419,8 +501,8 @@ class HoloProvider(_Provider):
                     "type": "function",
                     "function": {
                         "name": "propose_decision",
-                        "description": "Propose one bounded player action and its visual rationale.",
-                        "parameters": _holo_tool_schema(),
+                        "description": "Execute one bounded player input; movement or short attack at most20 ticks.",
+                        "parameters": _compact_holo_schema() if compact else _holo_tool_schema(),
                     },
                 },
                 {
@@ -429,7 +511,9 @@ class HoloProvider(_Provider):
                         "name": "mine_block",
                         "description": "Hold attack on an already-aimed reachable block for 60–80 "
                         "ticks, stationary. Approach and aim separately. Duration defaults to 80.",
-                        "parameters": _holo_mining_schema(),
+                        "parameters": _compact_holo_schema(mining=True)
+                        if compact
+                        else _holo_mining_schema(),
                     },
                 },
                 {
@@ -479,6 +563,13 @@ class HoloProvider(_Provider):
                     evidence=arguments["content"][:1000],
                 )
             elif call["name"] in {"propose_decision", "mine_block"}:
+                intent = None
+                if compact and isinstance(arguments, dict) and "intent" in arguments:
+                    intent = arguments.pop("intent")
+                    if not isinstance(intent, str) or not intent.strip() or len(intent) > 120:
+                        raise ValueError(
+                            "Compact intent must be a nonempty string of at most 120 characters"
+                        )
                 if call["name"] == "mine_block":
                     if observation.screen_open:
                         raise ValueError("mine_block requires the gameplay view, not an open GUI")
@@ -494,6 +585,14 @@ class HoloProvider(_Provider):
                         if type(coordinate) is not int or not 0 <= coordinate <= 1000:
                             raise ValueError("Invalid normalized cursor")
                         cursor[axis] = coordinate / 1000
+                if compact:
+                    arguments = _fill_compact_metadata(
+                        arguments,
+                        context,
+                        intent,
+                        mining=call["name"] == "mine_block",
+                        screen_open=observation.screen_open,
+                    )
                 decision = Decision.model_validate(arguments, strict=True)
                 if decision.milestone and not decision.evidence.strip():
                     raise ValueError("Milestone without evidence")
@@ -582,33 +681,16 @@ class JevProvider(_Provider):
                 provider=self.name,
                 model=self.settings.jev_model,
             )
-        careful = action.model_copy(
-            update={
-                "duration_ticks": max(1, action.duration_ticks // 2),
-                "yaw_delta": action.yaw_delta / 2,
-                "pitch_delta": action.pitch_delta / 2,
-                "keys": [key for key in action.keys if key != "sprint"],
-            }
-        )
+        # Validate one exact action. Offering overlapping safe alternatives split
+        # probability mass and caused false vetoes on recorded gameplay frames.
+        # Keep the same acceptance, danger, and continuation thresholds.
         candidates = {"continue": action}
-        no_input = not action.keys and not action.yaw_delta and not action.pitch_delta
-        # Releasing attack early resets Minecraft's block-breaking progress. A long
-        # mining hold must either complete unchanged or return to the planner.
-        if (
-            not validate_proposal
-            and action.duration_ticks <= 20
-            and not no_input
-            and careful != action
-        ):
-            candidates["careful"] = careful
         criteria = {"continue": "Repeat the previous bounded action, target still valid."}
         if action.duration_ticks > 20:
             criteria["continue"] = (
                 "Repeat the complete stationary mining hold on the valid target. "
                 "Do not shorten it: releasing attack early resets block breaking."
             )
-        if "careful" in candidates:
-            criteria["careful"] = "Use the shorter bounded action with smaller look and no sprint."
         criteria["replan"] = "Stop and obtain a fresh plan: unsafe, stuck, complete, or uncertain."
         action_question = (
             "Which candidate safely continues the existing strategy on this screenshot? "
@@ -617,7 +699,7 @@ class JevProvider(_Provider):
             "Choose replan if its target or assumptions no longer hold."
         )
         continuation_question = (
-            "Is continuing one of the supplied actions appropriate for the current visible "
+            "Is executing this exact supplied action appropriate for the current visible "
             "situation, without repeating an ineffective action? Safe intermediate progress "
             "is sufficient; the entire objective need not finish in one action."
         )
@@ -656,14 +738,16 @@ class JevProvider(_Provider):
                 "10 ticks, not a promise of progress. A cautious approach or short attack to "
                 "clear leaves can be valid even if the outcome is uncertain. Continue permits "
                 "the exact proposed action once; replan for concrete danger, an invalid target, "
-                "or repetition of the same recorded failed action. Do not demand certainty "
+                "or repetition of an executed action with visible failure evidence. A rejected "
+                "unexecuted proposal is not evidence of physical failure. Do not demand certainty "
                 "that this experiment will complete a subgoal."
             )
             continuation_question = (
                 "Is this short world action an appropriate safe bounded experiment to test "
                 "an approach, clear obstructing leaves, or inspect the scene? Uncertainty "
                 "about progress alone is not a reason to reject. Reject concrete danger, "
-                "an invalid action target, or repetition of the same recorded failed action."
+                "an invalid action target, or repetition of an executed action with visible failure "
+                "evidence. A prior veto alone does not establish that an action failed in the world."
             )
         reference = str(uuid.uuid4())
         body = {

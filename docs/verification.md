@@ -5,8 +5,8 @@ and actual model-driven gameplay.
 
 ## Automated and interface checks
 
-* 106 Python tests passed at the initial implementation commit; subsequent
-  exploration, recovery, and deadline changes expand the suite to 133 tests covering provider formats, fresh-frame validation,
+* 193 Python tests passed after compact planning, exact Jev continuation,
+  recovery-context, no-op, and offline-analysis changes, covering provider formats, fresh-frame validation,
   cancellation, credentials, action bounds, recordings, replay, and API controls.
 * The Fabric mod built and remapped successfully; 14 Java tests passed.
 * Both GitHub CI jobs passed for implementation commit `01c2f56`.
@@ -58,9 +58,9 @@ including failed model outputs, input requests, acknowledgments, timestamps,
 usage, and screenshots. Full request bodies and credentials are not published
 in this report. The console can replay and compare these local runs.
 
-The next gameplay work is calibrating bounded exploration and testing short
-action sequences against the next screenshot. Hosted Holo latency, Jev's
-experimental vision, and repeated rejected plans are current limitations.
+Subsequent work tests compact planning, exact-action validation, and action
+sequences against the next screenshot. Hosted inference variability, Jev's
+experimental vision, and repeated rejected plans remain relevant limitations.
 
 ## Bounded exploration follow-up
 

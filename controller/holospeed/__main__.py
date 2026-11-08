@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
+from .analysis import analyze_run, compare_runs
 from .app import create_app
 from .config import Settings
 from .devin import build_analysis_prompt, get_identity, get_session, submit_analysis
@@ -28,6 +29,10 @@ def main() -> None:
     analyze.add_argument(
         "--submit", action="store_true", help="Create a Devin v3 session, capped at 2 ACU"
     )
+    report = sub.add_parser("report", help="Analyze a local run journal without model API calls")
+    report.add_argument("run_dir", type=Path)
+    compare = sub.add_parser("compare", help="Compare two or more local run journals")
+    compare.add_argument("run_dirs", type=Path, nargs="+")
     sub.add_parser("devin-identity", help="Read Devin account memberships to find DEVIN_ORG_ID")
     session = sub.add_parser("devin-session", help="Read a previously submitted Devin session")
     session.add_argument("session_id")
@@ -66,6 +71,12 @@ def main() -> None:
             print(json.dumps(asyncio.run(submit_analysis(settings, summary, events)), indent=2))
         else:
             print(build_analysis_prompt(summary, events))
+    elif args.command == "report":
+        print(json.dumps(analyze_run(args.run_dir), indent=2))
+    elif args.command == "compare":
+        if len(args.run_dirs) < 2:
+            parser.error("compare requires at least two run directories")
+        print(json.dumps(compare_runs(args.run_dirs), indent=2))
     elif args.command == "devin-identity":
         print(json.dumps(asyncio.run(get_identity(settings)), indent=2))
     elif args.command == "devin-session":

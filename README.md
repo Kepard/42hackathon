@@ -46,6 +46,9 @@ loopback and authenticates with a local token.
 2. Copy `.env.example` to `.env` in this repository. Set `HCOMPANY_API_KEY` and,
    to enable Jev, `JEV_API_KEY`. The defaults are `holo4-35b-a3b` with reasoning
    effort `none`, `jev-1.14.0`, and a 30-second model request timeout.
+   `HOLO_COMPACT=true` uses concise native control calls to reduce response latency;
+   `HOLO_COMPACT=false` retains verbose strategy responses. Optional model intent
+   and control descriptions are displayed without inventing achieved outcomes.
    Without a Jev key the controller uses Holo4 for every decision. Keep provider
    credentials in the controller's environment, not the mod configuration.
 3. Generate matching controller/mod credentials from the repository root:
@@ -122,6 +125,16 @@ Replay supports scrubbing and 1×, 2×, and 4× playback.
 the run directory. The comparison uses saved summaries; the journals provide
 the detailed evidence behind those figures.
 
+For local journal analysis without API calls:
+
+```sh
+uv run holospeed report "runs/<run-id>"
+uv run holospeed compare "runs/<first-id>" "runs/<second-id>"
+```
+
+Reports reconcile control acknowledgments and model usage, summarize latency,
+and preserve the distinction between recorded execution and claimed progress.
+
 Replay reconstructs recorded observations and actions. It does not replay inputs
 into Minecraft or reproduce the world deterministically. The timer measures
 elapsed session wall time, including pauses, rather than official speedrun
@@ -177,11 +190,11 @@ flowchart LR
     L -->|Explicit redacted digest| D[Devin analysis]
 ```
 
-Holo4 proposes a strategy and action from a screenshot. With Jev configured and
+Holo4 proposes an action from a screenshot. With Jev configured and
 `VALIDATE_HOLO_PLANS=true` (the default), the controller releases controls,
 captures a new screenshot, and asks Jev to validate that unexecuted plan. Only
-the validated action executes, against the fresh frame. Jev may also select
-bounded continuations; uncertainty or danger returns to Holo4. Both stages'
+the validated action executes, against the fresh frame. Jev also validates exact
+bounded continuations with a binary continue/replan choice; uncertainty or danger returns to Holo4. Both stages'
 latency and usage are recorded. Eight repeated model abstentions stop the run
 for review. This adds a validation call after each Holo plan to check scene
 changes during planning.
@@ -200,6 +213,10 @@ model-weight training. Provider contracts and trade-offs are documented in
 Jev sees no concrete hazard. After identical rejected proposals, the controller
 can propose a camera-only scan for Jev validation, then ask Holo to inspect the
 new view. Four scans are allowed per run; the stricter mode disables them.
+Recovery context distinguishes rejected proposals from executed inputs and asks
+Holo to reassess stale subgoals after repeated vetoes. See the
+[recorded gameplay findings](docs/gameplay-findings.md) and
+[Jev evaluation](docs/jev-evaluation.md) for the evidence behind these changes.
 
 ## Development and current limits
 

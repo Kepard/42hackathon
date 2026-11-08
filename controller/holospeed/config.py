@@ -19,6 +19,7 @@ class Settings:
     holo_model: str = "holo4-35b-a3b"
     holo_base_url: str = "https://api.hcompany.ai/v1"
     holo_reasoning_effort: str = "none"
+    holo_compact: bool = True
     jev_api_key: str = ""
     jev_base_url: str = "https://api.typesafe.ai"
     jev_model: str = "jev-1.14.0"
@@ -46,6 +47,7 @@ class Settings:
             holo_model=os.getenv("HOLO_MODEL", "holo4-35b-a3b"),
             holo_base_url=os.getenv("HOLO_BASE_URL", "https://api.hcompany.ai/v1"),
             holo_reasoning_effort=os.getenv("HOLO_REASONING_EFFORT", "none"),
+            holo_compact=os.getenv("HOLO_COMPACT", "true").lower() == "true",
             jev_api_key=os.getenv("JEV_API_KEY", ""),
             jev_base_url=os.getenv("JEV_BASE_URL", "https://api.typesafe.ai"),
             jev_model=os.getenv("JEV_MODEL", "jev-1.14.0"),

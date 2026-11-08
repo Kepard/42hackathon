@@ -19,16 +19,27 @@ bounded to one second, except stationary attack-only mining can last four second
 so bare-hand log breaking can finish without resetting progress. Milestone claims
 require visible evidence and remain claims to be checked against run observations.
 
-The app defaults to `reasoning_effort: none` for latency. This is a deliberate
-trade-off against the provider's recommendation to think in agent loops; initial
-hosted smoke tests with thinking exceeded the controller's freshness budget.
-Holo4-27b accepts `low`, `medium`, `xhigh`, and `none`; `high` is invalid. The hosted
-API itself defaults to `xhigh` when the setting is omitted. Usage and raw responses
-are journaled. Thinking traces are never copied into the next prompt; explicit
-context carries durable facts.
+Reasoning is configurable with `HOLO_REASONING_EFFORT`. Holo4-27B supports `low`,
+`medium`, `xhigh`, and `none`; `high` is invalid and its hosted default is `xhigh`.
+Holo4-35B-A3B does **not** have calibrated effort levels: level strings are accepted
+and ignored, while `none` explicitly disables thinking. Thus `low` on 35B means
+thinking is on, not that a low reasoning budget was applied. H recommends thinking
+for agent loops. Usage and raw responses are journaled; thinking traces are never
+copied into the next prompt. Explicit context carries durable facts.
 
-Native tools use compact, flat fields for strategy and controls, with a 700-token
-output budget and omitted optional defaults. `propose_decision` is limited to
+`HOLO_COMPACT=true` exposes controls plus a short `intent` phrase. The phrase is
+required for mining and GUI interactions so fresh-frame validation has a target;
+ordinary movement and no-input observations may omit it. Historical decisions
+with explicit objective, strategy, and expected effect remain compatible. Compact
+tools also accept an optional milestone with explicit visible evidence; neither
+field is required, and unseen milestones must be omitted. Compact output does not
+require model-generated objective, strategy, or expected-effect prose.
+Missing metadata is transparently derived from the current objective and validated
+inputs: “Control-only plan” and “Outcome is unverified.” It never infers an item,
+milestone, or subgoal change from an action. Historical explicit decisions remain
+accepted. Set `HOLO_COMPACT=false` for the verbose strategy-and-controls schema.
+The output budget is 256 tokens for compact mode with thinking off and 700 tokens
+otherwise; unused optional fields are omitted. `propose_decision` is limited to
 20 ticks for movement, aiming, GUI interaction, or short attacks. `mine_block`
 permits only a stationary attack lasting 60–80 ticks (80 when omitted), with no
 movement, look, hotbar, or click fields. Approach and aim in separate actions;
@@ -68,6 +79,27 @@ request deadline), captures a new screenshot, and asks Jev to validate the
 unexecuted proposal. The fresh frame retains its own 15-second action deadline;
 the original frame's lifetime is never extended. Hosted latency remains variable.
 
+### Controlled action-only comparison
+
+Three offline requests used Holo4-35B-A3B, the same recorded 1280×720 screenshot
+with leaves obstructing the crosshair, and the same first-log objective. This
+asked for a real next action, not a predetermined no-op. All three responses
+passed local control validation, reported zero cached input tokens, and were
+**not executed in Minecraft**.
+
+| Output mode | Thinking | Latency | Output tokens | Proposed next action |
+| --- | --- | ---: | ---: | --- |
+| Verbose metadata + controls | Off (`none`) | 19.694 s | 129 | Forward for 10 ticks |
+| Action-only | Off (`none`) | 1.206 s | 78 | Left for 10 ticks, yaw −30° |
+| Action-only | On (`low`, level ignored on 35B) | 1.534 s | 136, including 73 reasoning | Attack for 10 ticks to clear leaves |
+
+The thinking-on action matched the visible leaf obstruction; revealing or
+collecting a log was not verified. This small comparison supports trying compact
+output with thinking on for the next bounded gameplay trial, consistent with H's
+agent-loop guidance. It does not establish latency percentiles or prove that
+schema/output length alone caused the difference: hosted load and sampling can
+vary. Source requests/responses remain available in the local benchmark journals.
+
 Sources: [API overview](https://hub.hcompany.ai/models-api/overview),
 [native function calling](https://hub.hcompany.ai/models-api/build-an-agent/function-calling),
 [agent conventions](https://hub.hcompany.ai/models-api/build-an-agent/core-concepts),
@@ -80,11 +112,12 @@ Pin `jev-1.14.0` for reproducibility. Jev vision is experimental and requires
 `TypeSafe-Danger-Zone-Images: true`. PNG/JPEG assets use UUID references and raw
 base64, without a data-URI prefix.
 
-The adapter batches a choice between repeating the previous Holo action, using
-a shorter variant, or replanning, plus independent danger and continuation
-questions. Long mining holds offer only continue or replan, so Jev cannot cut
-breaking short. Redundant no-input candidates are omitted. It never invents
-strategy or confirms milestones. GUI and one-shot
+The adapter batches a binary choice between executing the exact previous Holo
+action or replanning, plus independent danger and continuation questions.
+Overlapping safe alternatives previously split probability and caused false
+vetoes in recorded tests; see the [evaluation](jev-evaluation.md). Long mining
+holds remain unchanged, so Jev cannot cut breaking short. It never invents
+strategy or confirms milestones. No-input observations, GUI, and one-shot
 actions return directly to Holo. Low selected-option probability, hazards, malformed
 responses, and inappropriate continuation raise `ReplanRequired` with the
 request, response, and latency available to the run journal. Confidence and

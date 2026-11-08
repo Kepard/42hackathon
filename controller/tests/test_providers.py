@@ -10,9 +10,11 @@ from holospeed.providers import HoloProvider, JevProvider, ProviderError, Replan
 
 @pytest.fixture
 def settings():
-    return Settings(
+    configuration = Settings(
         holo_api_key="test-holo-secret", jev_api_key="test-jev-secret", jev_model="jev-1.14.0"
     )
+    configuration.holo_compact = False
+    return configuration
 
 
 @pytest.fixture
@@ -69,9 +71,9 @@ def jev_response():
         "answers": {
             "action": {
                 "type": "choice",
-                "choice": "careful",
+                "choice": "continue",
                 "confidence": 0.9,
-                "probabilities": {"continue": 0.04, "careful": 0.95, "replan": 0.01},
+                "probabilities": {"continue": 0.95, "replan": 0.05},
             },
             "danger": {"type": "noul", "noul": 0.05},
             "can_continue": {"type": "noul", "noul": 0.95},
@@ -157,7 +159,8 @@ async def test_jev_image_opt_in_and_bounded_continuation(settings, observation, 
             "data_base64": "aW1hZ2U=",
         }
         assert body["questions"]["action"]["type"] == "choice"
-        assert set(body["questions"]["action"]["criteria"]) == {"continue", "careful", "replan"}
+        assert set(body["questions"]["action"]["criteria"]) == {"continue", "replan"}
+        assert body["state"]["candidates"] == {"continue": decision.action.model_dump()}
         assert body["questions"]["danger"]["type"] == "noul"
         return httpx.Response(200, json=jev_response())
 
@@ -171,9 +174,7 @@ async def test_jev_image_opt_in_and_bounded_continuation(settings, observation, 
     assert result.decision.objective == decision.objective
     assert result.decision.strategy == decision.strategy
     assert result.decision.milestone is None
-    assert result.decision.action.keys == ["forward"]
-    assert result.decision.action.duration_ticks == 4
-    assert result.decision.action.yaw_delta == 5
+    assert result.decision.action == decision.action
     assert result.model == "jev-1.14.0"
 
 
@@ -187,9 +188,8 @@ async def test_jev_abstains_on_risk_or_invalid_answer(settings, observation, dec
     elif change == "uncertain":
         payload["answers"]["action"]["confidence"] = 0.4
         payload["answers"]["action"]["probabilities"] = {
-            "continue": 0.49,
-            "careful": 0.50,
-            "replan": 0.01,
+            "continue": 0.64,
+            "replan": 0.36,
         }
     elif change == "replan":
         payload["answers"]["action"]["choice"] = "replan"
@@ -779,6 +779,214 @@ async def test_real_binary_choice_confidence_does_not_duplicate_probability_gate
             assert "selected probability 0.78" in result.decision.evidence
 
 
+@pytest.mark.parametrize(
+    "tool,arguments,screen_open",
+    [
+        ("propose_decision", {"keys": ["forward"], "duration_ticks": 5}, False),
+        ("mine_block", {"intent": "Mine the oak log under the crosshair"}, False),
+        (
+            "propose_decision",
+            {
+                "keys": [],
+                "duration_ticks": 1,
+                "click_x": 600,
+                "click_y": 400,
+                "intent": "Pick up the visible log stack",
+            },
+            True,
+        ),
+    ],
+)
+async def test_compact_holo_accepts_controls_and_derives_only_input_metadata(
+    settings,
+    observation,
+    tool,
+    arguments,
+    screen_open,
+):
+    settings.holo_compact = True
+    observation.screen_open = screen_open
+    payload = holo_response(arguments)
+    payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = tool
+
+    def handle(request):
+        body = json.loads(request.content)
+        assert body["max_tokens"] == 256
+        tools_by_name = {item["function"]["name"]: item["function"] for item in body["tools"]}
+        schema = tools_by_name[tool]["parameters"]
+        assert not {"objective", "strategy", "expected_effect"} & schema["properties"].keys()
+        assert {"milestone", "evidence"} <= schema["properties"].keys()
+        assert not {"milestone", "evidence"} & set(schema["required"])
+        assert schema["properties"]["intent"]["maxLength"] == 120
+        assert "objective" not in schema["required"]
+        if tool == "mine_block":
+            assert "intent" in schema["required"]
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result = await HoloProvider(settings, client).decide(
+            observation, {"objective": "Gather wood"}
+        )
+    assert result.decision.objective == "Gather wood"
+    assert "Control-only plan:" in result.decision.strategy
+    assert "Attempt inputs:" in result.decision.expected_effect
+    assert "Outcome is unverified" in result.decision.expected_effect
+    assert result.decision.milestone is None
+    assert result.decision.evidence == ""
+    assert result.completed is False
+    if tool == "mine_block":
+        assert result.decision.action == Action(keys=["attack"], duration_ticks=80)
+
+
+async def test_compact_holo_optional_intent_is_labeled_not_progress(settings, observation):
+    settings.holo_compact = True
+    payload = holo_response({"keys": ["attack"], "duration_ticks": 10, "intent": "clear leaves"})
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as client:
+        result = await HoloProvider(settings, client).decide(
+            observation, {"objective": "Gather wood"}
+        )
+    assert result.decision.strategy.startswith("Model intent: clear leaves.")
+    assert (
+        result.decision.expected_effect
+        == "Attempt inputs: hold attack for 10 ticks. Outcome is unverified."
+    )
+    assert result.decision.milestone is None
+
+
+async def test_compact_holo_still_accepts_legacy_explicit_metadata(settings, observation, decision):
+    settings.holo_compact = True
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=holo_response(decision.model_dump()))
+        )
+    ) as client:
+        result = await HoloProvider(settings, client).decide(observation, {})
+    assert result.decision == decision
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"keys": ["forward"], "duration_ticks": 40},
+        {"keys": ["attack"], "duration_ticks": 10, "intent": "x" * 121},
+        {"keys": ["attack"], "duration_ticks": 10, "intent": {"instruction": "execute"}},
+        {"keys": ["attack"], "duration_ticks": 10, "unknown": "execute"},
+    ],
+)
+async def test_compact_holo_keeps_strict_controls_and_intent(settings, observation, arguments):
+    settings.holo_compact = True
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=holo_response(arguments))
+        )
+    ) as client:
+        with pytest.raises(ProviderError):
+            await HoloProvider(settings, client).decide(observation, {})
+
+
+@pytest.mark.parametrize(
+    "evidence,accepted",
+    [
+        ("An oak log stack is visible in hotbar slot 1.", True),
+        ("", False),
+        ("   ", False),
+    ],
+)
+async def test_compact_holo_milestone_requires_explicit_visual_evidence(
+    settings,
+    observation,
+    evidence,
+    accepted,
+):
+    settings.holo_compact = True
+    payload = holo_response(
+        {"keys": [], "duration_ticks": 1, "milestone": "wood", "evidence": evidence}
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as client:
+        adapter = HoloProvider(settings, client)
+        if accepted:
+            result = await adapter.decide(observation, {"objective": "Gather wood"})
+            assert result.decision.milestone == "wood"
+            assert result.decision.evidence == evidence
+        else:
+            with pytest.raises(ProviderError, match="Milestone without evidence"):
+                await adapter.decide(observation, {"objective": "Gather wood"})
+
+
+@pytest.mark.parametrize(
+    "tool,arguments,screen_open",
+    [
+        ("mine_block", {}, False),
+        (
+            "propose_decision",
+            {"keys": [], "duration_ticks": 1, "click_x": 600, "click_y": 400},
+            True,
+        ),
+        ("propose_decision", {"keys": [], "duration_ticks": 1, "hotbar": 1}, True),
+        ("propose_decision", {"keys": ["inventory"], "duration_ticks": 1}, True),
+    ],
+)
+async def test_compact_holo_target_sensitive_actions_require_intent(
+    settings,
+    observation,
+    tool,
+    arguments,
+    screen_open,
+):
+    settings.holo_compact = True
+    observation.screen_open = screen_open
+    payload = holo_response(arguments)
+    payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = tool
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as client:
+        with pytest.raises(ProviderError, match="require a short target intent"):
+            await HoloProvider(settings, client).decide(observation, {})
+
+
+async def test_compact_gui_idle_does_not_need_target_intent(settings, observation):
+    settings.holo_compact = True
+    observation.screen_open = True
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json=holo_response({"keys": [], "duration_ticks": 1})
+            )
+        )
+    ) as client:
+        result = await HoloProvider(settings, client).decide(observation, {})
+    assert result.decision.action == Action(keys=[], duration_ticks=1)
+
+
+@pytest.mark.parametrize("mining", [False, True])
+async def test_compact_legacy_target_descriptions_remain_compatible(
+    settings,
+    observation,
+    decision,
+    mining,
+):
+    settings.holo_compact = True
+    if mining:
+        arguments = {**decision.model_dump(exclude={"action"}), "duration_ticks": 80}
+        tool = "mine_block"
+    else:
+        observation.screen_open = True
+        arguments = decision.model_dump()
+        arguments["action"] = {"keys": [], "duration_ticks": 1, "cursor": {"x": 600, "y": 400}}
+        tool = "propose_decision"
+    payload = holo_response(arguments)
+    payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = tool
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as client:
+        result = await HoloProvider(settings, client).decide(observation, {})
+    assert result.decision.strategy == decision.strategy
+
+
 async def test_jev_revalidation_rejects_gui_action_after_screen_closed(
     settings, observation, decision
 ):
@@ -842,7 +1050,8 @@ async def test_exploration_profile_only_applies_to_bounded_world_actions(
         instructions = body["questions"]["action"]["instructions"]
         if expected:
             assert "safe bounded experiment" in instructions
-            assert "same recorded failed action" in instructions
+            assert "executed action with visible failure evidence" in instructions
+            assert "unexecuted proposal is not evidence of physical failure" in instructions
         else:
             assert "NOT been executed" in instructions
         payload = jev_response()

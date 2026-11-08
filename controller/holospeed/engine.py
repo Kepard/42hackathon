@@ -16,6 +16,7 @@ from .demo import DemoBridge, demo_decision
 from .models import Action, Decision
 from .providers import HoloProvider, JevProvider, ProviderError, ReplanRequired
 from .recording import RunRecorder, redact
+from .recovery import shape_recovery_context
 
 
 class RunBudgetReached(RuntimeError):
@@ -130,6 +131,7 @@ class AgentEngine:
                         "operator_declared_seed": self.settings.declared_seed,
                         "allow_exploration": self.settings.allow_exploration,
                         "holo_reasoning_effort": self.settings.holo_reasoning_effort,
+                        "holo_compact": self.settings.holo_compact,
                     },
                 )
                 self.state["run_id"] = self.recorder.id
@@ -212,11 +214,21 @@ class AgentEngine:
                     }
                 )
 
-    def recovery(self, reason: str, rejected: Decision | None = None) -> None:
+    def recovery(
+        self,
+        reason: str,
+        rejected: Decision | None = None,
+        *,
+        feedback_kind: str = "proposal_rejected",
+    ) -> None:
         self.state["metrics"]["recoveries"] += 1
-        prior = rejected or self.previous
+        prior = rejected
         memory = {
             "reason": reason,
+            "feedback_kind": feedback_kind,
+            "physical_outcome": "no_visible_change"
+            if feedback_kind == "visual_no_change"
+            else "unverified",
             "objective": self.state["objective"],
             "previous_action": prior.action.model_dump() if prior else None,
             "expected_effect": prior.expected_effect if prior else None,
@@ -327,12 +339,18 @@ class AgentEngine:
                         or prior.hotbar
                         or prior.scroll
                         or set(prior.keys) & {"inventory", "drop", "swap", "escape"}
+                        or (not prior.keys and not prior.yaw_delta and not prior.pitch_delta)
                     ):
                         provider = "holo"
                 if self.settings.mode == "demo":
                     provider = "holo" if self.bridge.step % 4 == 0 else "jev"
                 view_proposal = None
                 recovery_count = self.state["metrics"]["recoveries"]
+                planner_context = shape_recovery_context(
+                    context,
+                    screen_open=observation.screen_open,
+                    allow_exploration=self.settings.allow_exploration,
+                )
                 if (
                     self.settings.mode == "live"
                     and self.settings.allow_exploration
@@ -341,9 +359,7 @@ class AgentEngine:
                     and len(self.failures) >= 2
                     and view_recoveries < 4
                     and recovery_count != last_view_recovery_at
-                    and self.failures[-1].get("previous_action") is not None
-                    and self.failures[-1].get("previous_action")
-                    == self.failures[-2].get("previous_action")
+                    and planner_context["recovery_guidance"]["repeated_proposal"]
                     and not observation.screen_open
                 ):
                     yaw, pitch = [(25, 15), (-30, 0), (-25, -15), (30, 0)][view_recoveries]
@@ -392,7 +408,11 @@ class AgentEngine:
                         )
                     else:
                         adapter = self.holo if provider == "holo" else self.jev
-                        result = await self.bounded(adapter.decide, observation, context)
+                        result = await self.bounded(
+                            adapter.decide,
+                            observation,
+                            planner_context if provider == "holo" else context,
+                        )
                         decision, latency, usage = result.decision, result.latency_ms, result.usage
                         proposed = decision
                         completed = result.completed
@@ -500,7 +520,13 @@ class AgentEngine:
                             "frame_id": observation.frame_id,
                         },
                     )
-                    self.recovery(str(error), rejected=proposed)
+                    veto = isinstance(error, ReplanRequired)
+                    rejected = proposed or (self.previous if veto and provider == "jev" else None)
+                    self.recovery(
+                        str(error),
+                        rejected=rejected if veto else None,
+                        feedback_kind="proposal_rejected" if veto else "provider_error",
+                    )
                     if error.latency_ms > 0:
                         self.timing(provider, error.latency_ms, error.response.get("usage", {}))
                     if not isinstance(error, ReplanRequired):
@@ -531,7 +557,9 @@ class AgentEngine:
                     not completed
                     and (time.monotonic() - observed_at) * 1000 >= self.settings.frame_ttl_ms - 500
                 ):
-                    self.recovery("Model result arrived after the frame freshness budget")
+                    self.recovery(
+                        "Model result arrived after the frame freshness budget", rejected=decision
+                    )
                     errors += 1
                     if errors >= 3:
                         raise RuntimeError(
@@ -577,8 +605,20 @@ class AgentEngine:
                 last_pixels = pixels
                 stuck = repeated_ticks >= 240 if "attack" in decision.action.keys else repeat >= 5
                 if self.settings.mode == "live" and stuck:
+                    no_input = (
+                        not decision.action.keys
+                        and not decision.action.yaw_delta
+                        and not decision.action.pitch_delta
+                        and decision.action.cursor is None
+                        and decision.action.hotbar is None
+                        and not decision.action.scroll
+                    )
                     self.recovery(
-                        "Same visual scene and action repeatedly failed to produce an observable change; choose a different approach"
+                        "Repeated no-input observations; choose a meaningful next step"
+                        if no_input
+                        else "Same visual scene and action repeatedly failed to produce an observable change; choose a different approach",
+                        rejected=self.previous,
+                        feedback_kind="no_input_repeat" if no_input else "visual_no_change",
                     )
                     repeat = 0
                     await self.bridge.stop("Stuck recovery")
@@ -656,7 +696,11 @@ class AgentEngine:
                         # A scan is a one-shot recovery; Holo must interpret its new view.
                         self.previous = None
                 else:
-                    self.recovery(f"Action {ack['status']}: {ack.get('reason')}")
+                    self.recovery(
+                        f"Action {ack['status']}: {ack.get('reason')}",
+                        rejected=decision,
+                        feedback_kind="bridge_rejected",
+                    )
                     errors += 1
                     if errors >= 3:
                         raise RuntimeError("Three actions rejected or cancelled")

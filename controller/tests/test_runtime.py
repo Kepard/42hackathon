@@ -12,7 +12,7 @@ from holospeed.bridge import BridgeError, GameBridge
 from holospeed.config import Settings
 from holospeed.engine import AgentEngine
 from holospeed.models import Action, Decision, ModelResult, Observation
-from holospeed.providers import ReplanRequired
+from holospeed.providers import ProviderError, ReplanRequired
 from holospeed.recording import RunRecorder, read_events
 from PIL import Image
 
@@ -486,8 +486,10 @@ async def test_holo_plan_executes_only_after_jev_validates_a_fresh_frame(tmp_pat
         assert bridge.observed == ["frame-1", "frame-2"]
         assert len(holo_calls) == len(jev_calls) == 1
         assert holo_calls[0][0] == "frame-1"
+        assert holo_calls[0][1]["recovery_guidance"]["advisory_only"] is True
         assert jev_calls[0][0] == "frame-2"
         validation_context = jev_calls[0][1]
+        assert "recovery_guidance" not in validation_context
         assert validation_context["validate_unexecuted_plan"] is True
         assert validation_context["plan_source_frame_id"] == "frame-1"
         assert validation_context["validation_frame_id"] == "frame-2"
@@ -554,6 +556,11 @@ async def test_jev_rejection_prevents_all_actions_and_exhausts_recovery_budget(
 
     async def holo_decide(observation, context):
         holo_frames.append(observation.frame_id)
+        if len(holo_frames) >= 3:
+            assert context["objective"] == context["run_goal"]
+            assert context["previous_subgoal_not_world_fact"] == plan.objective
+            assert context["recovery_guidance"]["repeated_proposal"] is True
+            assert all(item["physical_outcome"] == "unverified" for item in context["failures"])
         return ModelResult(
             decision=plan,
             request={"frame_id": observation.frame_id},
@@ -703,6 +710,231 @@ async def test_repeated_rejections_require_jev_approval_before_one_shot_camera_s
             event["type"] == "event" and event["data"].get("name") == "run_budget_reached"
             for event in events
         )
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("validate_holo_plans", [False, True])
+async def test_completed_noop_replans_with_holo_instead_of_jev_continuation(
+    tmp_path, monkeypatch, validate_holo_plans
+):
+    bridge = FakeBridge()
+    observations = []
+
+    async def observe():
+        observation = frame(f"frame-{len(observations) + 1}")
+        observations.append(observation.frame_id)
+        return observation
+
+    monkeypatch.setattr(bridge, "observe", observe)
+    engine = AgentEngine(
+        Settings(
+            mode="live",
+            runs_dir=tmp_path,
+            holo_api_key="unused-holo",
+            jev_api_key="unused-jev",
+            max_actions=2,
+            validate_holo_plans=validate_holo_plans,
+        ),
+        bridge,
+    )
+    holo_frames, jev_frames = [], []
+    noop = Decision(
+        objective="Inspect the current view",
+        strategy="Observe before choosing a target",
+        expected_effect="No physical change is expected",
+        action=Action(keys=[], duration_ticks=1),
+    )
+    turn = noop.model_copy(update={"action": Action(keys=[], duration_ticks=1, yaw_delta=15)})
+
+    async def holo_decide(observation, context):
+        holo_frames.append(observation.frame_id)
+        return ModelResult(
+            decision=noop if len(holo_frames) == 1 else turn,
+            request={"frame_id": observation.frame_id},
+            response={"plan": True},
+            latency_ms=1,
+            model="fake-holo",
+        )
+
+    async def jev_decide(observation, context):
+        # Both calls must validate a new Holo proposal. A no-op continuation
+        # would call Jev without this flag and without a fresh Holo decision.
+        assert validate_holo_plans
+        assert context.get("validate_unexecuted_plan") is True
+        assert context["plan_source_frame_id"] != observation.frame_id
+        jev_frames.append(observation.frame_id)
+        return ModelResult(
+            decision=Decision.model_validate(context["previous_decision"]),
+            request={"frame_id": observation.frame_id},
+            response={"validated": True},
+            latency_ms=1,
+            model="fake-jev",
+        )
+
+    monkeypatch.setattr(engine.holo, "decide", holo_decide)
+    monkeypatch.setattr(engine.jev, "decide", jev_decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=2)
+        assert holo_frames == (
+            ["frame-1", "frame-3"] if validate_holo_plans else ["frame-1", "frame-2"]
+        )
+        assert jev_frames == (["frame-2", "frame-4"] if validate_holo_plans else [])
+        assert [item[0] for item in bridge.executed] == [noop.action, turn.action]
+        assert [item[1] for item in bridge.executed] == (
+            ["frame-2", "frame-4"] if validate_holo_plans else ["frame-1", "frame-2"]
+        )
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 2
+        assert engine.state["metrics"]["recoveries"] == 0
+        assert engine.state["metrics"]["errors"] == 0
+    finally:
+        await engine.close()
+
+
+async def test_repeated_noops_record_unverified_feedback_and_stop_at_recovery_budget(
+    tmp_path, monkeypatch
+):
+    bridge = FakeBridge()
+    engine = AgentEngine(
+        Settings(
+            mode="live",
+            runs_dir=tmp_path,
+            holo_api_key="unused-holo",
+            jev_api_key="unused-jev",
+            validate_holo_plans=True,
+            max_actions=100,
+            max_run_seconds=10,
+        ),
+        bridge,
+    )
+    calls = {"holo": 0, "jev": 0}
+    noop = Decision(
+        objective="Inspect the view",
+        strategy="Wait without using any controls",
+        expected_effect="No physical change is expected",
+        action=Action(keys=[], duration_ticks=1),
+    )
+
+    async def holo_decide(observation, context):
+        calls["holo"] += 1
+        assert not context["recovery_guidance"]["repeated_proposal"]
+        return ModelResult(
+            decision=noop,
+            request={},
+            response={},
+            latency_ms=1,
+            model="fake-holo",
+        )
+
+    async def jev_decide(observation, context):
+        calls["jev"] += 1
+        assert context.get("validate_unexecuted_plan") is True
+        assert Decision.model_validate(context["previous_decision"]).action == noop.action
+        return ModelResult(
+            decision=noop,
+            request={},
+            response={},
+            latency_ms=1,
+            model="fake-jev",
+        )
+
+    monkeypatch.setattr(engine.holo, "decide", holo_decide)
+    monkeypatch.setattr(engine.jev, "decide", jev_decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=4)
+        assert engine.state["status"] == "error"
+        assert engine.state["metrics"]["recoveries"] == 8
+        assert engine.state["metrics"]["errors"] == 1
+        assert 0 < len(bridge.executed) < engine.settings.max_actions
+        assert calls["holo"] == calls["jev"]
+        assert all(action == noop.action for action, _, _ in bridge.executed)
+        assert engine.state["keys"] == [] and engine.state["action"] is None
+        assert bridge.stops[-1] == "Agent loop stopped"
+        events = read_events(engine.recorder.path / "events.jsonl")
+        feedback = [event["data"] for event in events if event["type"] == "recovery"]
+        assert len(feedback) == 8
+        assert all(item["feedback_kind"] == "no_input_repeat" for item in feedback)
+        assert all(item["physical_outcome"] == "unverified" for item in feedback)
+        assert not any(event["type"] == "recovery_plan" for event in events)
+        assert any(
+            event["type"] == "error" and "Recovery budget exhausted" in event["data"]["message"]
+            for event in events
+        )
+        memory = [json.loads(line) for line in (tmp_path / "memory.jsonl").read_text().splitlines()]
+        assert all(item["feedback_kind"] == "no_input_repeat" for item in memory)
+        assert all(item["physical_outcome"] == "unverified" for item in memory)
+    finally:
+        await engine.close()
+
+
+async def test_provider_error_after_completed_action_does_not_blame_that_action(
+    tmp_path, monkeypatch
+):
+    bridge = FakeBridge()
+    engine = AgentEngine(
+        Settings(
+            mode="live",
+            runs_dir=tmp_path,
+            holo_api_key="unused-holo",
+            jev_api_key="unused-jev",
+            validate_holo_plans=False,
+        ),
+        bridge,
+    )
+    calls = {"holo": 0, "jev": 0}
+    plan = Decision(
+        objective="Approach the tree",
+        strategy="Take one short forward step",
+        expected_effect="Nearby geometry shifts",
+        action=Action(keys=["forward"], duration_ticks=2),
+    )
+
+    async def holo_decide(observation, context):
+        calls["holo"] += 1
+        return ModelResult(
+            decision=plan,
+            request={},
+            response={},
+            latency_ms=1,
+            model="fake-holo",
+            completed=calls["holo"] > 1,
+        )
+
+    async def jev_decide(observation, context):
+        calls["jev"] += 1
+        assert context["previous_decision"]["action"] == plan.action.model_dump()
+        raise ProviderError(
+            "Synthetic Jev HTTP 503 failure",
+            provider="jev",
+            latency_ms=1,
+            request={},
+            response={"status": 503},
+        )
+
+    monkeypatch.setattr(engine.holo, "decide", holo_decide)
+    monkeypatch.setattr(engine.jev, "decide", jev_decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=3)
+        assert calls == {"holo": 2, "jev": 1}
+        assert [item[0] for item in bridge.executed] == [plan.action]
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 1
+        assert engine.state["metrics"]["recoveries"] == 1
+        assert engine.state["metrics"]["errors"] == 1
+        events = read_events(engine.recorder.path / "events.jsonl")
+        feedback = [event["data"] for event in events if event["type"] == "recovery"]
+        assert len(feedback) == 1
+        assert feedback[0]["feedback_kind"] == "provider_error"
+        assert feedback[0]["physical_outcome"] == "unverified"
+        assert feedback[0]["previous_action"] is None
+        assert feedback[0]["expected_effect"] is None
+        assert engine.recent[0]["action"] == plan.action.model_dump()
+        assert engine.recent[0]["ack"]["status"] == "completed"
+        assert not any(event["type"] == "recovery_plan" for event in events)
     finally:
         await engine.close()
 

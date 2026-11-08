@@ -271,7 +271,7 @@ async def test_real_bark_probe_continues_only_on_target_progress(monkeypatch, mo
     result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": 4}}, "skills")
     assert result["mining_probes"][0]["used"]
     assert result["mining_probes"][0]["succeeded"] is (mode == "cracks")
-    assert .6 <= clock[0] <= 4 if mode == "cracks" else clock[0] == pytest.approx(.6)
+    assert .6 <= clock[0] <= 4 if mode == "cracks" else clock[0] == pytest.approx(.4 if mode == "capture_timeout" else .6)
     assert not fake.inputs and not ex.held_buttons
     if mode == "cracks":
         assert result["outcome"] == "scene_changed"
@@ -300,7 +300,7 @@ async def test_probe_respects_max_s_and_releases_on_immediate_break(monkeypatch,
     ex = Executor(Client(),640,480,JevVision(FakeJev()))
     result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": seconds}}, "skills")
     held_s = clock[0] - (.35 if broke else 0)
-    assert held_s == pytest.approx(min(.6, seconds - .1))
+    assert held_s == pytest.approx(min(.4 if broke else .6, seconds - .1))
     assert held_s <= seconds and not ex.held_buttons
     assert result["outcome"] == ("scene_changed" if broke else "not_in_reach")
     assert result["mining_probes"][0]["succeeded"] is broke

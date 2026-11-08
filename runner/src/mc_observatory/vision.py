@@ -190,22 +190,42 @@ def matching_hotbar_slots(output_png, output_center, after_png, layout):
             if sum(ImageStat.Stat(ImageChops.difference(reference,icon(after,point))).mean)/3<2]
 
 
+def _target_patch(im, target_box):
+    if target_box is None:
+        return center(im, 64, 64)
+    l,t,r,bottom = target_box
+    if not (0 <= l < r <= 1 and 0 <= t < bottom <= 1):
+        raise ValueError("Invalid normalized target box")
+    dx,dy = (r-l)*.2, (bottom-t)*.2
+    bounds = (round((l+dx)*im.width),round((t+dy)*im.height),round((r-dx)*im.width),round((bottom-dy)*im.height))
+    if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+        raise ValueError("Target box is smaller than a pixel")
+    return im.crop(bounds)
+
+
+def persistent_darkening(before, first, second, target_box=None):
+    frames = [image(png) for png in (before, first, second)]
+    if len({im.size for im in frames}) != 1:
+        raise ValueError("Screenshot dimensions changed during action")
+    reference, first, second = [_target_patch(im, target_box) for im in frames]
+    def darkened(im):
+        r, g, b = ImageChops.subtract(reference, im).split()
+        return ImageChops.lighter(ImageChops.lighter(r, g), b)
+    shared = ImageChops.darker(darkened(first), darkened(second))
+    bounds = shared.point(lambda value: 255 if value >= 8 else 0).getbbox()
+    if bounds is None or bounds[2] - bounds[0] < reference.width * .4 or bounds[3] - bounds[1] < reference.height * .4:
+        return 0.
+    histogram = shared.histogram()
+    return sum(histogram[8:]) / (reference.width * reference.height)
+
+
 def changes(before, after, target_box=None):
     a, b = image(before), image(after)
     if a.size != b.size:
         raise ValueError("Screenshot dimensions changed during action")
     full = ImageChops.difference(a.resize((128, 72)), b.resize((128, 72)))
-    if target_box is None:
-        patch = ImageChops.difference(center(a, 64, 64), center(b, 64, 64))
-    else:
-        l,t,r,bottom = target_box
-        if not (0 <= l < r <= 1 and 0 <= t < bottom <= 1):
-            raise ValueError("Invalid normalized target box")
-        dx,dy = (r-l)*.2, (bottom-t)*.2
-        bounds = (round((l+dx)*a.width),round((t+dy)*a.height),round((r-dx)*a.width),round((bottom-dy)*a.height))
-        if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
-            raise ValueError("Target box is smaller than a pixel")
-        patch = ImageChops.difference(a.crop(bounds),b.crop(bounds))
+    aa, bb = _target_patch(a, target_box), _target_patch(b, target_box)
+    patch = ImageChops.difference(aa, bb)
     r, g, bl = patch.split()
     histogram = ImageChops.lighter(ImageChops.lighter(r, g), bl).histogram()
     return {"frame_change": sum(ImageStat.Stat(full).mean) / (3 * 255),

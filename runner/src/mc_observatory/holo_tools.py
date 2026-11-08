@@ -7,7 +7,7 @@ import time
 from time import perf_counter
 
 from .session import KEYS, keycode
-from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls, lava_sound_nearby, crafting_controls, crafting_slot, filtered_recipe_icons, stack_count, matching_hotbar_slots
+from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls, lava_sound_nearby, crafting_controls, crafting_slot, filtered_recipe_icons, stack_count, matching_hotbar_slots, persistent_darkening
 
 
 class InvalidToolArgs(ValueError):
@@ -84,7 +84,7 @@ def tool_schemas(tier, reflex="none"):
             vocabulary.pop(legacy)
         vocabulary["reposition"] = ("Retreat or sidestep to escape hazards or expose occluded targets. Refused while vanilla 'Lava pops' subtitle shows: lava sound nearby, turn toward visible safe ground instead. NOT for approaching blocks: call seek(target) for that.", {**SKILLS["move"][1], "direction": choice("back", "left", "right"), "seconds": number(0, 1)})
         vocabulary["collect"] = ("Pick up visible drops AFTER mining, never use for block approach (call seek). Step forward using hotbar pixel diffs, then ask fast TypeSafe Jev vision on the same screenshot whether the requested item icon is in the hotbar. Jev score is advisory, NOT collection proof; no inventory/state lookup.", {**SKILLS["collect"][1], "item": {"type": "string", "maxLength": 160, "default": "log"}})
-        vocabulary["attack_until_broken"] = (SKILLS["attack_until_broken"][0] + " Close approach uses fast TypeSafe Jev on screenshots. ONLY once close, an absent outline permits a probe up to0.6s, bounded by max_s; continue ONLY on target-centre progress. Settle0.35s after walking and after releasing attack; ONLY persistent target-core change confirms a break, not swing/crack/bobbing transients. Probe use/success is logged. Otherwise seek first. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
+        vocabulary["attack_until_broken"] = (SKILLS["attack_until_broken"][0] + " Close approach uses fast TypeSafe Jev on screenshots. ONLY once close, an absent outline permits a 0.6–0.8s probe, bounded by max_s; continue ONLY on target-core darkening persistent across two frames, or a break cue. Settle0.35s after walking and after releasing attack; ONLY persistent target-core change confirms a break, not swing/crack/bobbing transients. Probe use/success is logged. Otherwise seek first. Collect and confirm inventory pixels.", SKILLS["attack_until_broken"][1])
     return [{"type": "function", "function": {"name": name, "description": description + (" Harness returns frame_change/center_change (0..1 pixel differences) and stuck. These are screenshot-only heuristics; internal reflex captures are saved for audit, representative frames shown next turn. Never mod/game-state feedback." if tier == "skills" else ""),
              "parameters": {"type": "object", "properties": {**fields, "intent": {"type": "string", "minLength": 1, "maxLength": 500, "description": "One sentence explaining why you are taking this action."}},
                             "required": [*[key for key, spec in fields.items() if "default" not in spec], "intent"], "additionalProperties": False}}}
@@ -231,25 +231,48 @@ class ToolExecutor:
         def target_broke(frame, delta):
             return (delta["center_changed_fraction"] >= .7 and delta["center_change"] >= .08) or (
                 delta["center_changed_fraction"] > .3 and delta["center_change"] > .04 and self.pixels(broken_caption, frame) > caption + 8)
-        deadline = time.monotonic() + seconds
+        probe_started = time.monotonic()
+        deadline = probe_started + seconds
+        probe_deadline = min(deadline, probe_started + .8)
         scene_changed = False
         center_progress = 0
         await self.button(0, True)
         try:
             if probe["used"]:
-                await self.primitive("wait", ms=min(.6, max(0, deadline - time.monotonic() - .1)) * 1000)
+                await self.primitive("wait", ms=min(.4, max(0, deadline - time.monotonic() - .1)) * 1000)
                 try:
                     frame = await asyncio.wait_for(self.observe(), max(.001, min(.2, deadline - time.monotonic())))
                     observed = self.pixels(changes, reference, frame)
                     center_progress = observed["center_change"]
-                    probe.update(succeeded=center_progress >= .002 and observed["center_changed_fraction"] >= .01,
+                    probe.update(succeeded=False,
                                  center_change=center_progress, center_changed_fraction=observed["center_changed_fraction"],
                                  frame_index=len(self.frames) - 1, broke_pixel_cue=target_broke(frame, observed))
+                    target = observed
                     if target_box is not None:
                         target = self.pixels(changes, reference, frame, target_box)
                         probe.update(target_center_change=target["center_change"], target_changed_fraction=target["center_changed_fraction"])
-                        probe["succeeded"] |= target["center_change"] >= .002 and target["center_changed_fraction"] >= .01
                         probe["broke_pixel_cue"] |= target_broke(frame,target)
+                    if not probe["broke_pixel_cue"]:
+                        await self.primitive("wait", ms=max(0, min(probe_started + .6, deadline - .1) - time.monotonic()) * 1000)
+                        confirmed = await asyncio.wait_for(self.observe(), max(.001, probe_deadline - time.monotonic()))
+                        confirmed_delta = self.pixels(changes, reference, confirmed, target_box)
+                        fraction = self.pixels(persistent_darkening, reference, frame, confirmed, target_box)
+                        probe["broke_pixel_cue"] |= target_broke(confirmed, self.pixels(changes, reference, confirmed))
+                        if target_box is not None:
+                            probe["broke_pixel_cue"] |= target_broke(confirmed, confirmed_delta)
+                        darkened = self.pixels(persistent_darkening, reference, confirmed, confirmed, target_box)
+                        if fraction < .01 and darkened >= .01 and not probe["broke_pixel_cue"]:
+                            next_frame = await asyncio.wait_for(self.observe(), max(.001, probe_deadline - time.monotonic()))
+                            fraction = self.pixels(persistent_darkening, reference, confirmed, next_frame, target_box)
+                            probe["broke_pixel_cue"] |= target_broke(next_frame, self.pixels(changes, reference, next_frame))
+                            if target_box is not None:
+                                probe["broke_pixel_cue"] |= target_broke(next_frame, self.pixels(changes, reference, next_frame, target_box))
+                        probe.update(succeeded=confirmed_delta["center_change"] >= .002 and fraction >= .01,
+                                     persistent_darkened_fraction=fraction, target_darkened_fraction=darkened,
+                                     confirmation_frame_index=len(self.frames) - 1)
+                        if target_box is not None:
+                            probe.update(target_center_change=confirmed_delta["center_change"], target_changed_fraction=confirmed_delta["center_changed_fraction"])
+                    probe["succeeded"] |= probe["broke_pixel_cue"]
                 except asyncio.TimeoutError:
                     probe.update(succeeded=False, error="capture_timeout")
             while probe["succeeded"] is not False and not probe.get("broke_pixel_cue") and (remaining := deadline - time.monotonic()) > 0:

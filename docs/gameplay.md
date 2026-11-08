@@ -1,6 +1,12 @@
-# Gameplay plan and research
+# Historical early-game plan and research
 
-HoloSpeed's first playable target is state-aware early-game progression: collect wood,
+The current demonstration builds a complete portal from gathered and mined
+materials on a [new seed](demo-seed.md). This document preserves the earlier
+early-game acceptance plan and broader speedrunning references; its proposed
+structure-loot routes are not permitted in the current from-scratch demonstration.
+See [architecture](architecture.md) for the active implementation.
+
+HoloSpeed's first playable target was state-aware early-game progression: collect wood,
 craft a table, make a wooden pickaxe, then obtain stone tools. This is an acceptance
 target, not a claim that the initial implementation already completes it. A working
 bridge or synthetic demo does not establish autonomous Minecraft performance.
@@ -123,4 +129,6 @@ An API response or a proposed fix is not a validated game result.
 
 The initial demo has no full-run completion guarantee. Nether routing, precise
 combat, repeatable early-tool success, and adaptation across unknown worlds must
-be measured in the actual Minecraft client. Gladia voice integration is deferred.
+be measured in the actual Minecraft client. The current [Gladia voice integration](gladia.md)
+adds operator-requested transcription and bounded commands; its verification
+status is documented separately.

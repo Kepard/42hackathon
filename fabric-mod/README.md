@@ -68,7 +68,7 @@ labels the active local skill; unavailable input readback is shown explicitly.
 
 See [the bridge protocol](../docs/protocol.md) for existing message schemas and
 [structured state](STATE_PROTOCOL.md) for the read-only `state` extension, and
-[bounded skills](SKILL_PROTOCOL.md) for normal-mechanics mining and crafting. `./gradlew test`
+[bounded skills](SKILL_PROTOCOL.md) for normal-mechanics mining, crafting, smelting, and building a new portal from natural lava and water. `./gradlew test`
 checks action bounds and the stationary mining exception. A build/test pass does
 not establish successful gameplay; validate the early-game milestone in a real
 world with the selected providers.

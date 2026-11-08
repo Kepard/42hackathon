@@ -2,8 +2,8 @@
 
 Local skills use ordinary survival mechanics while Holo4 selects goals. They
 share the authenticated loopback bridge and exclusively own inputs until they
-finish or are cancelled. They do not run chat commands, spawn items, edit world
-blocks, teleport, change game mode, or bypass normal mining/crafting rules.
+finish or are cancelled. They do not run chat commands, spawn items, write world
+state directly, teleport, change game mode, or bypass normal mining/crafting rules.
 
 ```json
 {
@@ -16,7 +16,7 @@ blocks, teleport, change game mode, or bypass normal mining/crafting rules.
 }
 ```
 
-`skill` is `mine` or `craft` for inventory tasks; the later portal section
+`skill` is `mine`, `craft`, or `smelt` for inventory tasks; the later portal section
 defines its separate dimension-verified task. `target_count` is the desired **total inventory
 count**, not an additional quantity; its range is 1–64 and default is 1.
 `max_ticks` ranges from 20–1800 and defaults to 1200. A wall-clock deadline of
@@ -35,7 +35,7 @@ Poll the existing `state` request to inspect `game_state.skill` until
 `active=false`. The skill status is `idle`, `running`, `completed`, `failed`, or
 `cancelled`. Snapshot fields include `baritone_available`, `active`, `skill_id`,
 `kind`, `item`, `target_count`, `inventory_count`, `status`, `reason`, `phase`,
-`elapsed_ticks`, `max_ticks`, optional `known_table`, and optional `keys`. `keys` comes from vanilla
+`elapsed_ticks`, `max_ticks`, optional `known_table`, `known_furnace`, and optional `keys`. `keys` comes from vanilla
 pressed bindings plus read-only Baritone forced-input queries. Null means
 readback is unavailable; an empty list means no verified held keys. The HUD
 labels active skill/phase and shows an explicit unavailable label when needed. `phase=cancellation_pending` retains exclusive
@@ -56,13 +56,20 @@ available. The published API jar's SHA-256 is
 `f9a9b17a41d7d7ad22c759058b14fd01e3319663282e66f99e18153237fa6767`.
 
 Mining targets are the eight overworld tree log types, stone, cobblestone,
-deepslate, and cobbled deepslate. Stone/deepslate targets count their normal
+deepslate, cobbled deepslate, raw iron, coal, flint, and dirt. Raw iron targets
+natural iron/deepslate iron ore and requires a suitable stone-or-better pickaxe.
+Coal targets natural ore; dirt targets dirt/grass blocks. Flint uses an unlimited
+Baritone gravel-mining process under the outer skill deadline, explicitly
+collects actual dropped flint, and can recycle owned gravel through normal
+placement and mining. Gravel inventory is never counted as flint.
+Stone/deepslate targets count their normal
 cobblestone/cobbled-deepslate drops and require a suitable pickaxe. Completion
 requires the inventory target; proximity or elapsed ticks alone do not count.
 A mining skill fails after 400 ticks without inventory or position progress.
 
 Crafting targets are overworld planks, sticks, a crafting table, a wooden
-pickaxe, a stone pickaxe, and a stone axe. Crafting uses unlocked vanilla recipes,
+pickaxe, a stone pickaxe, a stone axe, a furnace, a bucket, and flint and steel.
+Crafting uses unlocked vanilla recipes,
 normal recipe-fill requests and screen-handler slot clicks. It checks recipe
 output, ingredients, an empty cursor, and an empty crafting grid, then waits for
 normal inventory synchronization before reporting the result. It never writes
@@ -101,9 +108,9 @@ ingredients. The original setting is restored on success, failure, or stop.
 The original list is never modified in place. If the remaining materials cannot
 support a valid route, the bounded skill fails rather than fabricating tools.
 
-These interfaces have compile/unit-test coverage. Successful normal mining,
-crafting, automatic table placement, and cancellation still require runtime
-validation using the updated game instance; see [verification](VERIFICATION.md).
+Early mining/crafting and table return have actual gameplay evidence. The newer
+smelting, flint collection, and bucket-casting sequence require their own live
+validation; see [verification](VERIFICATION.md).
 
 ## Operator start and resume
 
@@ -122,57 +129,93 @@ F8, controller stop, disconnect, or another arm request cancels a pending arm.
 Only a successful ready acknowledgment clears the latch. F9 retains its existing
 local start behavior. This protocol does not expose time, commands, or world edits.
 
-## Verified ruined-portal route
+## Smelting owned ore
 
-The `portal:minecraft:nether_portal` capability enables a bounded composite task
-for the explicitly selected 1.21.1 seed `-1950884254474434485`:
+`smelt:minecraft:iron_ingot` accepts a total inventory target, normally four for
+one bucket and flint and steel. It remembers only a furnace it placed from an
+owned furnace item, using ordinary placement, container transfers and vanilla
+cooking. It will not collect output from an unrelated structure furnace.
+`known_furnace` is world-scoped memory, not a claim of current reachability.
+Completion reopens the owned furnace and requires a fresh server inventory
+packet plus the requested iron in inventory. Fuel and cooking continue normally
+after cancellation; the helper does not delete existing contents or stop time.
+
+## Constructing a portal from natural lava and water
+
+The active capability is `cast_portal:minecraft:nether_portal`. The former
+structure-looting `portal` command is rejected and is no longer advertised.
 
 ```json
 {
   "type": "skill",
-  "id": "enter-nether",
-  "skill": "portal",
+  "id": "cast-new-portal",
+  "skill": "cast_portal",
   "item": "minecraft:nether_portal",
   "target_count": 1,
   "max_ticks": 1800,
-  "target": {"x": 48, "y": 68, "z": 48}
+  "target": {"x": 4, "y": 63, "z": 2}
 }
 ```
 
-Only this verified landmark is accepted. The task checks loaded frame geometry,
-approaches the real chest at (49,68,52), transfers owned supplies through normal
-container clicks, repairs the missing obsidian at (50,72,50) by clicking the gold
-support's bottom face, ignites the base's top face, and physically enters the
-portal. It does not assume chest loot. The optional crying-obsidian corner is
-left in place. Missing resources, changed geometry, obstructed interactions,
-failed navigation, and timeouts stop the task clearly.
+`target` is a natural lava-site landmark with bounded integer coordinates. The
+executor observes loaded client cells again and never treats route coordinates
+as proof of blocks. It requires an empty or water-filled bucket, flint and steel,
+a stone pickaxe, and nine combined dirt/cobblestone blocks for temporary supports.
+A lava-filled bucket alone does not satisfy the water-collection prerequisite.
 
-Normal Baritone goals handle travel. Portal entry uses the exact interior cell,
-with at most twelve ticks of normal forward/jump input to finish a close step
-into the portal plane. Inputs release while the player dwells inside and during
-dimension loading. The expected world transition is tolerated only in entry
-phases on the same network connection, with a five-second loading grace. The
-only success condition is the actual `minecraft:the_nether` dimension; neither
-portal construction nor an inventory count proves entry.
+The source scan examines at most 40,817 loaded cells within ±24 horizontally
+and ±8 vertically, retaining at most 256 nearest water/lava candidates. Ten
+exposed lava sources must be observed within twelve horizontal blocks of the
+landmark. A dry, clear five-by-six work area with six blocks of headroom is
+selected nearby; its predicted waterfall landings remain at least nine
+horizontal Manhattan blocks from the observed lava sources. A bounded read-only
+flow search also checks downhill spreading for each partial frame, including
+temporary base holes. It rejects adjacent lava, unloaded terrain, more than
+4,096 reached cells, or flow extending beyond 32 horizontal blocks or a
+16-block drop. At most 64 otherwise suitable sites receive this check, with a
+131,072-cell terrain cache. Headroom may contain replaceable, empty-collision
+plants such as short grass; plants occupying a mold cell are broken normally
+and server-confirmed before placement. Other plants are left for normal water
+flow. Existing obsidian
+or portal blocks cannot supply any part of the new frame.
 
-`skill.capabilities` lists implemented `kind:namespace:target` pairs. The optional
-`skill.verified_steps` list records these persistent client-verified checkpoints:
+Normal bucket use collects water. A nine-block mold creates a high water fork
+and a dry standing pad; the helper places and removes its supports using normal
+interaction/mining calls. It opens the two water channels before pouring, so
+vanilla's first flow calculation sees every intended downward route. It casts two bottom blocks, two three-block side
+columns, and two top blocks, for **ten newly formed obsidian blocks** and a
+standard two-by-three interior. Each cast consumes an individually recorded
+natural lava source and requires actual adjacent water. It verifies the exact
+new obsidian cell after a server block update. The final top cast replaces the owned water source while touching its remaining
+flow, so the source is consumed rather than recovered. The temporary interior
+header is removed, remaining flow is observed until the interior drains, and
+ordinary flint and steel ignites the completed frame.
 
-| Step | Required evidence |
-| --- | --- |
-| `portal_located` | Loaded required frame and interior geometry match the verified route. |
-| `chest_looted` | Normal transfer followed by a reopened chest and a fresh, applied server inventory packet confirms increased owned supplies. |
-| `obsidian_acquired` | Obsidian is present in the player's inventory. |
-| `ignition_acquired` | A fire charge or flint and steel is present in inventory. |
-| `portal_repaired` | Every required frame block is obsidian; optional corners are ignored. |
-| `portal_lit` | All nine interior cells actually contain Nether portal blocks. |
+Every fluid and placement action stays within player reach and uses a visible
+raycast face, normal selected items, and normal client interaction APIs. There
+are no direct world writes, inventory injection, container loot, or teleport
+calls. The read-only server block marker holds at most 4,096 cell sequence
+numbers and raw state IDs received in actual server packets. The expected
+server state must match; a rejected placement cannot be confirmed from client
+prediction alone. Action progression waits for actual server
+updates rather than adding fixed cinematic delays.
 
-Checkpoint flags survive material consumption and terminal skill states for the
-same route connection. They are not inferred from phase names and do not carry
-into unrelated worlds. The controller separately confirms the Nether dimension.
-The nearby-state scan prioritizes portal blocks, chests, furnaces and relevant
-ore blocks within its existing 512-record bound.
+Bucket pickup separately requires a fresh server hotbar packet containing the
+filled bucket. Natural water may regenerate without invalidating that proof;
+each lava source must additionally have a fresh server-confirmed non-source
+state. The nine-slot tracker does not weaken the full-container synchronization
+used for furnace completion.
 
-A reusable `FurnaceController` is also present and unit-tested, but it is not
-exposed or advertised by the bridge yet. This route does not currently include a
-lava-casting fallback if the chest lacks the needed supplies.
+`skill.verified_steps` records `lava_located`, `water_collected`, `portal_built`,
+and `portal_lit` only from observed sources, owned water, ten individually
+verified casts, and all six actual portal interior blocks. Construction is not
+an inventory count. Normal pathfinding enters the portal; at most twelve normal
+forward ticks can finish a close step into its plane. Inputs release while
+waiting for vanilla portal dwell and during the five-second dimension-loading
+grace. Only the actual `minecraft:the_nether` dimension completes the skill.
+
+Cancellation releases controls and restores navigation settings; it does not
+undo real blocks already placed or resources already consumed. A failed partial
+construction remains in the world and is not silently claimed as a completed
+portal. The roughly two-minute demonstration target is a performance goal, not
+a fixed timer or a currently verified completion result.

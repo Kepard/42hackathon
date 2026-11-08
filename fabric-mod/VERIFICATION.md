@@ -81,10 +81,10 @@ both in inventory: two skills, zero failures, 25.540 seconds. The operator
 `/tmp/holospeed-stone-tools.png`. This was a continuation of the earlier six
 skills, not a fresh complete eight-skill run.
 
-## Ruined portal implementation
+## Historical ruined portal implementation (retired)
 
-The latest artifact compiles and remaps successfully with all 64 JUnit tests
-passing. It adds the seed-specific ruined portal route documented in
+The earlier artifact compiled and remapped successfully with all 64 JUnit tests
+passing. It added the seed-specific ruined portal route documented in
 [SKILL_PROTOCOL.md](SKILL_PROTOCOL.md), using normal navigation, chest clicks,
 owned-item placement, ignition, and portal dwell. Six intermediate milestones
 are derived from observed geometry, server-confirmed inventory gains, and
@@ -95,9 +95,32 @@ server inventory packet has been applied. The helper normally reopens the chest
 and waits for a new packet before confirming a loot gain. It does not assume
 loot-table contents or infer success from client prediction alone.
 
-This new portal workflow has not yet completed live validation. Its geometry,
+At this historical checkpoint, that portal workflow had not completed live validation. Its geometry,
 request validation, inventory synchronization identity tracking, and existing
 control lifecycle tests pass; the actual route, new mixin startup, placement,
 and dimension transition still need the next Minecraft trial. A separate
 normal-mechanics furnace helper also compiles and passes seven focused tests,
-but it is not exposed as an executable capability or used by this route.
+but was not exposed as an executable capability or used by that route.
+
+
+## From-scratch construction implementation
+
+The new user-selected goal retires the structure-looting route and introduces
+normal raw-iron/coal/dirt mining, verified flint collection, furnace/bucket/flint
+and steel recipes, owned-furnace smelting, and a ten-block bucket-cast portal.
+The complete Gradle build/remap passes **82 Java tests**, with zero failures or
+errors. Casting geometry, strict requests, actual server block-state evidence,
+fresh hotbar confirmation, and bounded downhill-water checks have focused
+regression coverage. Natural water regeneration is accepted only after a fresh
+server packet confirms the filled bucket. Live validation of the complete empty-inventory sequence
+and its elapsed time is still pending; no two-minute completion is claimed.
+
+Read-only terrain analysis of an independently generated Minecraft1.21.1 world
+with seed `-7131204740862824481` ran the compiled casting plan and water checker
+against actual saved blocks. The site at origin `(-1,64,-6)`, rotation2, passes
+all ten partial-frame checks; nearby alternatives pass too. This is a seed
+feasibility check, not gameplay evidence. The runtime receives only the lava
+landmark and must rediscover sources and a valid site from loaded client cells.
+Short grass initially excluded every otherwise suitable footprint; the helper
+now permits replaceable plants during selection and normally mines plants in
+actual mold cells before placing blocks.

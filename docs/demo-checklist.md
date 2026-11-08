@@ -29,10 +29,10 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
   `python3 scripts/install-baritone.py --minecraft-dir "/actual/game-directory"`.
   See [setup](setup.md) for the verified artifact and duplicate-version checks.
 - [ ] Copy `.env.example` to `.env` and configure the local H Company key and
-  optional Jev key. Defaults are `holo4-35b-a3b`, reasoning effort `none`,
+  Jev key for the two-model demonstration. Defaults are `holo4-35b-a3b`, reasoning effort `none`,
   `jev-1.14.0`, and `MODEL_TIMEOUT_SECONDS=30`. Use `GAMEPLAY_MODE=state` and
   `RUN_GOAL=nether`, or `RUN_GOAL=early_game` for the wood-to-stone-tools benchmark;
-  `VALIDATE_HOLO_PLANS` applies to the legacy visual-action loop. See
+  keep `VALIDATE_HOLO_PLANS=true` for fresh-state Jev checks. See
   [provider contracts](providers.md).
 - [ ] From the repository root run
   `uv run holospeed init-bridge --minecraft-dir "/actual/game-directory"`.
@@ -40,10 +40,16 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
 - [ ] Start `uv run holospeed serve --mode live` and restart the Minecraft
   instance. Confirm the console identifies **LIVE · MINECRAFT** and a connected
   bridge, rather than a demo fixture.
-- [ ] Enter the Java 1.21.1 survival world for seed `-1950884254474434485` and set
-  the same `MINECRAFT_SEED` declaration for the implemented portal route.
-  Record version, seed, starting conditions, and any human interventions separately;
-  the configured seed is a declaration, not proof of the world's actual seed.
+- [ ] Generate a new Java 1.21.1 Survival/Easy world for seed
+  `-7131204740862824481`, commands off and no bonus chest. Set matching
+  `MINECRAFT_SEED`, `NETHER_ROUTE=from_scratch`, and
+  `CAST_PORTAL_TARGET={"x":4,"y":63,"z":2}`. Verify empty inventory before start.
+  Record version, seed, initial state, and human interventions separately; a
+  configuration declaration is not proof of the actual world seed.
+- [ ] Require all supplies to come from gathering, mining, crafting, and smelting.
+  Do not reuse a looted chest, structure furnace, existing obsidian frame, or
+  previously advanced world. Roughly two minutes is the performance target;
+  do not add artificial waiting or claim an unmeasured time.
 - [ ] Confirm the HoloSpeed HUD fits the chosen resolution/GUI scale without
   obscuring the hotbar or crafting area. The model's archived frame should contain
   vanilla UI but not the HoloSpeed HUD.
@@ -71,7 +77,8 @@ operating modes. The environment-backed live goal now defaults to Nether entry.
 ## Verify control before a long attempt
 
 - [ ] Verify that structured state, Baritone availability, and the
-  `portal:minecraft:nether_portal` capability are reported for the Nether route.
+  `smelt:minecraft:iron_ingot` and `cast_portal:minecraft:nether_portal`
+  capabilities are reported for the Nether route.
   Press **F9** for a short live run; inspect state, candidate selection, skill
   request/acknowledgment, running status, and outcome evidence. Mining/crafting
   use actual inventory; Nether completion requires the destination dimension.
@@ -99,19 +106,26 @@ as gameplay-validated until you have observed its evidence.
   and both stone tools.
   Verify actual inventory/table state and preserve a supporting screenshot;
   dropped items and a model's claim do not establish acquisition.
-- [ ] For Nether entry, show the fixed-seed route and actual chest/frame checks.
-  The direct route does not require stone tools. Verify portal located, chest
-  looted, obsidian acquired, ignition acquired, portal repaired, and portal lit
-  against their recorded client proofs. Consumed supplies retain their verified
-  acquisition history; phase labels alone do not establish a milestone.
+- [ ] For the from-scratch route, show the 14 real checkpoints: wood, table,
+  wooden pickaxe, stone pickaxe, furnace, iron mined, iron smelted, bucket,
+  flint and steel, water collected, lava located, portal built, portal lit, Nether.
+  A resource's first acquisition does not establish the skill's entire target
+  quantity. Confirm four mined/smelted iron for bucket and ignition, actual flint,
+  and nine owned dirt/cobblestone mold blocks after recipe consumption.
+- [ ] Verify ten newly cast obsidian cells, actual portal interior blocks, and
+  normal bucket/placement/mining interactions. The current mod rejects the old
+  structure-looting portal command. No chest loot or existing frame may substitute
+  for the required gathering and construction.
 - [ ] Confirm Nether entry only from a fresh, ready, living player in
   `minecraft:the_nether`. Preserve the linked state snapshot and screenshot.
+  Confirm the completed single-player world pauses after this evidence is saved
+  so an unattended player is not left exposed to mobs.
 - [ ] Show one failure and recovery: obstruction, missed interaction, or stale
   decision. Check that the approach changes or the agent pauses after its budget.
 - [ ] Report success count across repeated attempts, elapsed wall time, completed
   actions, errors, recoveries, and measured provider latency. Session time includes
   pauses; it is not an official Minecraft speedrun timer.
-- [ ] Distinguish Holo4 strategy from Jev's routine candidate selection and local
+- [ ] Distinguish Holo4 strategy, Jev fresh-state validation/routine selection, and local
   Baritone/recipe execution. Missing providers or deterministic fallback must be
   identified accurately; do not report them as a two-model benchmark. Keep the
   gameplay mode in comparisons because historical visual-mode veto policies differ.
@@ -120,17 +134,33 @@ as gameplay-validated until you have observed its evidence.
   tokens, and milestone splits against the saved summaries. Keep DEMO/LIVE labels
   visible and do not interpret missing values as zero.
 
-Actual resource collection and a separate stone-tools continuation are recorded
-in [state-aware verification](state-aware-verification.md). Fixed-seed development
-trial `20261108T100936-acd35b07` started with empty inventory and reached the
-Nether goal at 25.304 seconds, with all seven portal checkpoints supported and
-zero recorded errors or recoveries. The [independent review](run-judge.md) checked
-the linked state hashes and visual evidence. A fresh repeat after the final merge
-remains pending. The [route notes](nether-route.md) distinguish seed research from
-current-world checks; one fixed-seed trial does not establish full-run or
-random-seed reliability.
+The [verification report](state-aware-verification.md) and
+[independent review](run-judge.md) retain actual early-game and historical
+ruined-portal results, including model-validation failures. Those timings do not
+validate this new mining-and-casting route. [New seed research](new-route-research.md)
+confirms natural resources in 1.21.1; complete live execution and measured timing
+must be checked independently.
+
+## Voice and live explanation
+
+- [ ] Check that **On a mission** shows actual Holo4 and Jev request lifecycles,
+  input sources, recorded decisions, and latency. A completed call must not remain
+  animated as live inference. Local skill progress is a separate stage.
+- [ ] Unlock operator access before using the microphone or typed commands.
+  Start the microphone with an explicit click; check partial captions and final
+  transcripts separately. Partial captions must never execute an action.
+- [ ] Test a spoken pause/stop, then a bounded resume only in a ready world.
+  Inspect the private command acknowledgment and controller journal. Questions
+  should use recorded game state; guidance must stay within available skills.
+- [ ] Keep the Gladia key on the server and distinguish real microphone/browser
+  verification from API or synthetic-PCM tests. Follow [voice setup](gladia.md).
 
 ## Analyze a failure after the run
+
+The dashboard's **Devin engineering** menu can prepare the exact redacted brief
+for a selected run. Review it and explicitly confirm the fixed 2-ACU cap before
+creating an investigation. Public viewers can inspect published findings and
+proposed tests but cannot submit sessions. The CLI alternative is:
 
 1. Preserve the entire run directory. Downloading the JSONL journal alone does
    not include the separate screenshot files used by the visual replay.
@@ -162,11 +192,9 @@ regression-test results. See the complete [Devin workflow](devin.md).
 | Bridge stays offline | Correct Minecraft/Fabric version, mod and Fabric API installed, matching local token/port, instance restarted after configuration. |
 | Observe/state times out | Enter a world; use matching current controller/mod versions and an active client. |
 | Mining reports Baritone unavailable | Install the API Fabric 1.11.3 JAR into this profile, avoid duplicate versions, and restart the client. |
-| Nether route is absent | Check `RUN_GOAL`, the exact seed declaration, Overworld state, Baritone, and the advertised portal capability. |
+| Nether route is absent | Check `RUN_GOAL=nether`, `NETHER_ROUTE=from_scratch`, the lava landmark, observed prerequisites, and exact `smelt`/`cast_portal` capabilities. |
 | Actions are rejected or cancelled | Game focus/pause state, local stop latch, source-frame expiry, or a world transition. Read the acknowledgment reason. |
 | Model repeatedly fails | Read provider errors and status codes in the local journal; verify model access, key configuration, and latency budget. |
 | Progress label looks wrong | Inspect inventory, dimension, recorded client `verified_steps`, and the linked state; historical visual-mode labels were model claims. |
 | Hosted camera target differs from playback FPS | Compare capture age, measured playback FPS, upload logs, and actual game rendering. |
 | Replay loses images after moving files | Restore the full run directory, including `frames/`, under the configured runs directory. |
-
-Gladia voice interaction is intentionally outside this demonstration.

@@ -194,6 +194,17 @@ public final class HoloSpeedClient implements ClientModInitializer {
                 }
                 case "skill" -> startSkill(message);
                 case "arm" -> arm(message);
+                case "pause_game" -> {
+                    cancel("completed run: pause world");
+                    JsonObject response = new JsonObject();
+                    response.addProperty("type", "pause_game_ack");
+                    response.addProperty("id", GameStateCache.requestId(message));
+                    boolean local = client.isInSingleplayer() && client.player != null && client.world != null;
+                    if (local) client.openGameMenu(false);
+                    gameState.invalidate();
+                    response.addProperty("status", local ? "paused" : "unavailable");
+                    bridge.send(response);
+                }
                 case "stop" -> { cancel("controller stop"); pendingObservation = null; frameId = null; }
                 case "status" -> status = message.deepCopy();
                 default -> event("protocol_error", "unknown message type");
@@ -405,6 +416,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         JsonObject skill = skills.snapshot();
         if (skills.active() && (skill.get("kind").getAsString().equals("mine")
             || skill.get("kind").getAsString().equals("portal")
+            || skill.get("kind").getAsString().equals("cast_portal")
             || skill.get("phase").getAsString().equals("returning_table"))) {
             Set<String> forced = skillInputs.read();
             if (forced == null) return null;

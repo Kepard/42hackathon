@@ -1,0 +1,415 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const vm = require("node:vm");
+
+const source = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
+const helperContext = {module: {exports: {}}, Date, Number, String, Set, Map, URLSearchParams};
+vm.runInNewContext(source, helperContext);
+const helpers = helperContext.module.exports;
+const NOW = 1_800_000_000_000;
+
+/** Minimal DOM simulation: no browser, external network, or controller calls. */
+function observerHarness(options = {}) {
+  let now = NOW;
+  const images = [];
+  const elements = new Map();
+  const timers = [];
+  const replacedUrls = [];
+  const stored = new Map();
+  const frameCallbacks = [];
+  if (options.token) stored.set("holospeed.operator", options.token);
+  class Element {
+    constructor() {
+      this.hidden = false;
+      this.dataset = {};
+      this.children = new Map();
+      this.textContent = "";
+      this.value = "all";
+      this.scrollTop = 0;
+      const classes = new Set();
+      this.classList = {
+        add(value) {classes.add(value);},
+        toggle(value, enabled) {if (enabled) classes.add(value); else classes.delete(value);},
+        contains(value) {return classes.has(value);},
+      };
+    }
+    querySelector(selector) {
+      if (!this.children.has(selector)) this.children.set(selector, new Element());
+      return this.children.get(selector);
+    }
+    addEventListener() {}
+    setAttribute() {}
+    append() {}
+    replaceChildren(...children) {
+      this.textContent = children.map((child) => typeof child === "string" ? child : child.textContent || "").join("");
+    }
+  }
+  function element(id) {
+    if (!elements.has(id)) elements.set(id, new Element());
+    return elements.get(id);
+  }
+  element("game-frame").hidden = true;
+  const video = element("game-video");
+  video.hidden = true;
+  video.paused = false;
+  video.readyState = 2;
+  video.currentTime = 1;
+  video.seekable = {length: 1, end: () => 2};
+  video.play = async () => {video.paused = false;};
+  video.requestVideoFrameCallback = (callback) => frameCallbacks.push(callback);
+  const forwardKey = new Element();
+  forwardKey.dataset.key = "forward";
+  const context = {
+    document: {
+      getElementById: element,
+      querySelectorAll: (selector) => selector === "[data-key]" ? [forwardKey] : [],
+      createElement: () => new Element(),
+      createTextNode: (textContent) => ({textContent}),
+      createDocumentFragment: () => new Element(),
+    },
+    Image: class {
+      constructor() {images.push(this);}
+      set src(value) {this.url = value;}
+      get src() {return this.url;}
+    },
+    Date: class extends Date {static now() {return now;}},
+    setInterval() {}, setTimeout(callback, delay) {timers.push({callback, delay});}, clearTimeout() {},
+    Number, String, Set, Map, encodeURIComponent, URLSearchParams, AbortController,
+    crypto: {randomUUID: () => "ad67598a-6d1f-4e66-8730-0e2e76c1cd28"},
+    Hls: options.Hls,
+    location: {hash: options.hash || "", pathname: "/", search: ""},
+    history: {replaceState(_state, _title, url) {replacedUrls.push(url);}},
+    sessionStorage: {getItem(key) {return stored.get(key) || null;}, setItem(key, value) {stored.set(key, value);}, removeItem(key) {stored.delete(key);}},
+    fetch: options.fetch || (() => {throw new Error("Regression harness must not issue network requests");}),
+  };
+  const entryPoint = /\n  poll\(\);\n\}\)\(\);\s*$/;
+  assert.match(source, entryPoint, "UI startup hook must be present");
+  const instrumented = source.replace(entryPoint, `
+    globalThis.observerTest = {
+      set(value, online = true) {envelope = value; reachable = online;},
+      updateCapture, renderState, renderControls, submitCommand, refreshCommand, lockControls, pollCapture, renderVideo, trackVideoFrame,
+      videoMetadata(value) {videoMetadata = value; videoReachable = true; startVideo(value);},
+      resources(state, fresh = true) {renderResources(state, {fresh});}
+    };
+  })();`);
+  vm.runInNewContext(instrumented, context);
+  return {...context.observerTest, element, images, forwardKey, timers, replacedUrls, stored, frameCallbacks, setNow(value) {now = value;}};
+}
+
+test("formats recorded values without inventing missing measurements", () => {
+  assert.equal(helpers.timestamp(NOW), NOW);
+  assert.equal(helpers.timestamp(NOW / 1000), NOW);
+  assert.equal(helpers.timestamp("invalid"), null);
+  assert.equal(helpers.elapsed(61234, true), "01:01.2");
+  assert.equal(helpers.latency(null), "—");
+  assert.equal(helpers.latency(5037), "5.04 s");
+  assert.equal(helpers.ageLabel(null), "No capture received");
+});
+
+test("separates capture freshness, telemetry freshness, and displayed pixel age", () => {
+  assert.equal(helpers.captureState({captured_at: NOW - 1000, feed_status: "online"}, NOW).fresh, true);
+  assert.equal(helpers.captureState({captured_at: NOW - 20000, feed_status: "online"}, NOW).fresh, false);
+  assert.equal(helpers.captureState({captured_at: NOW - 1000, feed_status: "stale"}, NOW).fresh, false);
+  assert.equal(helpers.telemetryState({updated_at: NOW - 30000, feed_status: "online"}, NOW).label, "Telemetry stale");
+  assert.equal(helpers.telemetryState({updated_at: NOW - 1000, feed_status: "controller-offline"}, NOW).fresh, false);
+  assert.equal(helpers.displayedFrameState(NOW - 60000, NOW).fresh, false);
+  assert.equal(helpers.displayedFrameState(NOW - 1000, NOW).fresh, true);
+  assert.equal(helpers.captureState({captured_at: NOW + 5000, feed_status: "online"}, NOW).fresh, false);
+  assert.equal(helpers.telemetryState({updated_at: NOW + 5000, feed_status: "online"}, NOW).fresh, false);
+  assert.equal(helpers.displayedFrameState(NOW + 5000, NOW).fresh, false);
+});
+
+test("does not starve slow images when capture metadata advances", () => {
+  const ui = observerHarness();
+  ui.set({capture_seq: 1, captured_at: NOW, updated_at: NOW, feed_status: "online"});
+  ui.updateCapture();
+  assert.equal(ui.images.length, 1);
+  ui.set({capture_seq: 2, captured_at: NOW + 1000, updated_at: NOW + 1000, feed_status: "online"});
+  ui.updateCapture();
+  assert.equal(ui.images.length, 1, "Exactly one JPEG request can be in flight");
+  ui.images[0].onload();
+  assert.equal(ui.element("game-frame").src, "/api/frame.jpg?seq=1");
+  assert.equal(ui.element("game-frame").hidden, false);
+  assert.equal(ui.images.length, 2, "A completed older capture starts the latest capture next");
+  assert.equal(ui.images[1].src, "/api/frame.jpg?seq=2");
+});
+
+test("fresh metadata cannot label old displayed pixels live after image failure", () => {
+  const ui = observerHarness();
+  ui.set({capture_seq: 1, captured_at: NOW, updated_at: NOW, feed_status: "online"});
+  ui.updateCapture(); ui.images[0].onload();
+  ui.setNow(NOW + 30000);
+  ui.set({capture_seq: 2, captured_at: NOW + 30000, updated_at: NOW + 30000, feed_status: "online"});
+  ui.updateCapture(); ui.images[1].onerror(); ui.updateCapture();
+  assert.equal(ui.element("feed-status").querySelector("span").textContent, "Stale frame");
+  assert.equal(ui.element("frame-notice").hidden, false);
+  assert.equal(ui.element("capture-age").textContent, "Captured 30s ago");
+});
+
+test("respects explicit offline status even while the displayed frame is recent", () => {
+  const ui = observerHarness();
+  ui.set({capture_seq: 1, captured_at: NOW, updated_at: NOW, feed_status: "online"});
+  ui.updateCapture(); ui.images[0].onload();
+  ui.setNow(NOW + 5000);
+  ui.set({capture_seq: 1, captured_at: NOW, updated_at: NOW, feed_status: "offline"});
+  ui.updateCapture();
+  assert.equal(ui.element("feed-status").querySelector("span").textContent, "Stale frame");
+  assert.equal(ui.element("frame-notice").hidden, false);
+});
+
+test("can show an initial archived capture with an explicit stale indicator", () => {
+  const ui = observerHarness();
+  ui.set({capture_seq: 1, captured_at: NOW - 60000, updated_at: NOW - 60000, feed_status: "stale"});
+  ui.updateCapture();
+  assert.equal(ui.images.length, 1);
+  ui.images[0].onload();
+  assert.equal(ui.element("game-frame").hidden, false);
+  assert.equal(ui.element("feed-status").querySelector("span").textContent, "Stale frame");
+  assert.equal(ui.element("frame-notice").hidden, false);
+});
+
+test("stale published telemetry cannot leave active input keys highlighted", () => {
+  const ui = observerHarness();
+  const state = {status: "running", keys: ["forward"], action: {keys: ["forward"], duration_ticks: 6}};
+  ui.set({updated_at: NOW, feed_status: "online", state, runs: []});
+  ui.renderState();
+  assert.equal(ui.forwardKey.classList.contains("active"), true);
+  assert.equal(ui.element("agent-status").textContent, "Agent running");
+  ui.setNow(NOW + 30000); ui.renderState();
+  assert.equal(ui.forwardKey.classList.contains("active"), false);
+  assert.equal(ui.element("agent-status").textContent, "Telemetry stale");
+  assert.equal(ui.element("input-caption").textContent, "Unavailable");
+});
+
+test("merges snapshot and archived events by sequence and preserves claim language", () => {
+  const events = helpers.mergeEvents(
+    [{seq: 2, elapsed_ms: 20, type: "action", data: {}}],
+    [{seq: 1, elapsed_ms: 10, type: "plan", data: {}}, {seq: 2, elapsed_ms: 20, type: "action", data: {updated: true}}],
+  );
+  assert.equal(JSON.stringify(events.map((event) => event.seq)), "[1,2]");
+  assert.equal(events[1].data.updated, true);
+  assert.equal(helpers.eventDescription({type: "plan", data: {provider: "holo", decision: {objective: "Collect visible logs"}}}), "Holo4 · Collect visible logs · awaiting validation");
+  assert.equal(helpers.eventDescription({type: "inference_metrics", data: {provider: "jev", latency_ms: 250, usage: {input_tokens: 12, output_tokens: 3}}}), "Jev · 250 ms · 12 in / 3 out");
+  assert.match(helpers.eventDescription({type: "milestone", data: {id: "wood", evidence: "Model reports a log"}}), /^Visual claim:/);
+});
+
+test("all literal UI element references resolve to unique HTML IDs", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const match of source.matchAll(/\$\("([^"\n]+)"\)/g)) assert.ok(ids.includes(match[1]), `Missing element ${match[1]}`);
+});
+
+test("milestones retain distinct game-state, simulated, and model evidence labels", () => {
+  assert.equal(helpers.milestoneLabel({verification: "game_state"}, "live"), "Confirmed from game state");
+  assert.equal(helpers.milestoneLabel({verification: "simulated"}, "live"), "Simulated");
+  assert.equal(helpers.milestoneLabel({}, "demo"), "Simulated");
+  assert.equal(helpers.milestoneLabel({verification: "model_visual_claim"}, "live"), "Visual claim");
+  assert.equal(helpers.milestoneLabel({}, "live"), "Visual claim");
+  assert.match(helpers.eventDescription({type: "milestone", data: {id: "wood", verification: "game_state", evidence: "Inventory contains birch_log"}}), /^Confirmed from game state: Gather wood/);
+  assert.equal(helpers.eventDescription({type: "milestone", data: {id: "wood", verification: "game_state", evidence: {inventory: {"minecraft:birch_log": 4}}}}), "Confirmed from game state: Gather wood · birch log × 4");
+  assert.equal(helpers.eventDescription({type: "milestone", data: {id: "nether", verification: "game_state", evidence: {dimension: "minecraft:the_nether"}}}), 'Confirmed from game state: Nether entry · {"dimension":"minecraft:the_nether"}');
+});
+
+test("skill progress belongs to the current item, target, and skill attempt", () => {
+  const action = {skill: "mine", item: "minecraft:birch_log", target_count: 4};
+  const progress = {seq: 9, elapsed_ms: 1000, type: "skill_progress", data: {
+    inventory_count: 2, skill: {kind: "mine", item: "minecraft:birch_log", target_count: 4, phase: "mining"},
+  }};
+  assert.equal(helpers.skillTelemetry(action, [progress]).count, 2);
+  assert.equal(helpers.skillTelemetry(action, [progress]).item, "birch log");
+  assert.equal(helpers.skillTelemetry({...action, target_count: 6}, [progress]).count, null);
+  assert.equal(helpers.skillTelemetry({...action, item: "minecraft:stone"}, [progress]).count, null);
+  assert.equal(helpers.skillTelemetry(action, [progress, {seq: 10, type: "skill_started"}]).count, null);
+  assert.equal(helpers.skillTelemetry(action, [{...progress, seq: 11}, {seq: 10, type: "skill_started"}]).count, 2);
+  assert.equal(helpers.skillTelemetry(null, [progress]), null);
+});
+
+test("resource samples survive a recent-event window but never cross run IDs", () => {
+  const ui = observerHarness();
+  const sample = {seq: 2, elapsed_ms: 12300, type: "state_summary", data: {
+    inventory: {"minecraft:birch_log": 3, "minecraft:stick": 0},
+    player: {health: 0, hunger: 16, position: {x: -12.25, y: 64, z: 3.2}}, tick: 300,
+  }};
+  const action = {skill: "mine", item: "minecraft:birch_log", target_count: 4};
+  ui.resources({run_id: "current", status: "running", action, events: [sample]});
+  assert.equal(ui.element("player-health").textContent, "0 / 20", "Zero health is evidence, not missing data");
+  assert.equal(ui.element("player-hunger").textContent, "16 / 20");
+  assert.equal(ui.element("player-position").textContent, "-12.3 / 64.0 / 3.2");
+  assert.equal(ui.element("inventory-items").textContent, "birch log · 3");
+  assert.equal(ui.element("skill-state").textContent, "Current skill");
+  assert.equal(ui.element("skill-count").textContent, "— / 4");
+  ui.resources({run_id: "current", status: "running", action, events: []}, false);
+  assert.equal(ui.element("resource-stamp").textContent, "Last recorded 00:12 · tick 300");
+  assert.equal(ui.element("skill-state").textContent, "Last reported skill");
+  assert.equal(ui.element("inventory-items").textContent, "birch log · 3");
+  ui.resources({run_id: "historical-without-structured-state", events: []});
+  assert.equal(ui.element("inventory-items").textContent, "");
+  assert.equal(ui.element("player-health").textContent, "—");
+  assert.equal(ui.element("inventory-note").textContent, "Inventory not recorded for this run.");
+});
+
+test("structured inventory distinguishes an empty sample from missing state and uses plain text", () => {
+  const ui = observerHarness();
+  ui.resources({run_id: "a", events: [{seq: 1, type: "state_summary", data: {inventory: {}}}]});
+  assert.equal(ui.element("inventory-note").textContent, "Inventory empty at this sample.");
+  ui.resources({run_id: "a", events: [{seq: 2, type: "state_summary", data: {inventory: {"<img onerror=bad>": 1}}}]});
+  assert.equal(ui.element("inventory-items").textContent, "<img onerror=bad> · 1");
+  assert.match(helpers.eventDescription({type: "skill_progress", data: {inventory_count: 2, skill: {item: "minecraft:birch_log", target_count: 4, phase: "mining"}}}), /birch log · 2 \/ 4 · mining/);
+});
+
+test("operator fragment is removed before requests and kept only in session storage", () => {
+  const token = "test-operator-capability-with-at-least-32-characters";
+  const ui = observerHarness({hash: `#control=${token}`});
+  assert.deepEqual(ui.replacedUrls, ["/"]);
+  assert.equal(ui.stored.get("holospeed.operator"), token);
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
+  ui.renderControls();
+  assert.equal(ui.element("operator-status").textContent, "Operator access");
+  assert.equal(ui.element("control-resume").disabled, false);
+  assert.equal(ui.element("control-pause").disabled, true);
+  assert.ok(!ui.element("control-feedback").textContent.includes(token));
+  ui.lockControls();
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+  assert.equal(ui.element("control-resume").disabled, true);
+});
+
+test("public, stale, disconnected, and pending states cannot issue unintended controls", () => {
+  const running = {status: "running", connected: true, run_id: "run-1"};
+  for (const values of [[true, false, false], [false, true, false], [true, true, true]]) {
+    const availability = helpers.controlAvailability(running, ...values);
+    assert.equal(Object.values(availability).some(Boolean), false);
+  }
+  assert.equal(helpers.controlAvailability(running, true, true, false).pause, true);
+  assert.equal(helpers.controlAvailability(running, true, true, false).resume, false);
+  assert.equal(helpers.controlAvailability({...running, connected: false}, true, true, false).start_new, false);
+  const ui = observerHarness({token: "valid-stored-operator-capability-32-characters", hash: "#control=invalid"});
+  ui.renderControls();
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+  assert.equal(ui.element("operator-status").textContent, "View only");
+  assert.equal(ui.element("control-start_new").disabled, true);
+});
+
+test("operator commands send only UUID/action to the same-origin queue with bearer authorization", async () => {
+  const token = "test-operator-capability-with-at-least-32-characters";
+  const requests = [];
+  const ui = observerHarness({token, fetch: async (url, options) => {
+    requests.push({url, options});
+    return {ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", status: "completed", detail: "Run resumed."}})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
+  ui.renderControls();
+  await ui.submitCommand("resume");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/api/commands");
+  assert.equal(requests[0].options.headers.Authorization, `Bearer ${token}`);
+  assert.deepEqual(JSON.parse(requests[0].options.body), {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "resume"});
+  assert.equal(ui.element("control-feedback").textContent, "Run resumed.");
+  assert.ok(!requests[0].options.body.includes(token));
+});
+
+test("JPEG fallback polls once per second and preserves one image in flight", async () => {
+  let sequence = 1;
+  const requests = [];
+  const ui = observerHarness({fetch: async (url) => {
+    requests.push(url);
+    return {ok: true, json: async () => ({capture_seq: sequence, captured_at: NOW, updated_at: NOW, feed_status: "online"})};
+  }});
+  await ui.pollCapture();
+  assert.equal(ui.timers.at(-1).delay, 1000);
+  assert.equal(ui.images.length, 1);
+  sequence = 2;
+  await ui.pollCapture();
+  assert.equal(ui.images.length, 1);
+  ui.images[0].onload();
+  assert.equal(ui.images.length, 2);
+  assert.equal(ui.images[1].src, "/api/frame.jpg?seq=2");
+  assert.deepEqual(requests, ["/api/capture", "/api/capture"]);
+});
+
+test("video freshness requires advancing playback, not only recent upload metadata", () => {
+  const metadata = {status: "live", captured_at: NOW};
+  const playback = {reachable: true, paused: false, last_frame_at: NOW - 20, playing_at: NOW - 1200, behind_live_seconds: 1};
+  assert.equal(helpers.videoPlaybackState(metadata, playback, NOW).fresh, true);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, paused: true}, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, last_frame_at: NOW - 2000}, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, playing_at: NOW - 30000}, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, playing_at: null, behind_live_seconds: 30}, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, playing_at: null, behind_live_seconds: null}, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState({...metadata, status: "stale"}, playback, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, reachable: false}, NOW).fresh, false);
+  assert.equal(helpers.videoPlaybackState(metadata, {...playback, playing_at: NOW + 3000}, NOW).fresh, false);
+});
+
+test("HLS video stays composited while starting and reports measured presented FPS", () => {
+  const players = [];
+  class Hls {
+    static isSupported() {return true;}
+    static Events = {MANIFEST_PARSED: "manifest", ERROR: "error"};
+    constructor() {players.push(this);}
+    on() {}
+    loadSource(url) {this.url = url;}
+    attachMedia(video) {this.video = video;}
+    destroy() {this.destroyed = true;}
+    get playingDate() {return new Date(NOW - 1000);}
+  }
+  const ui = observerHarness({Hls});
+  const metadata = {status: "live", generation: "a", captured_at: NOW, playlist_url: "/api/live/index.m3u8", target_fps: 60};
+  ui.videoMetadata(metadata); ui.renderVideo();
+  assert.equal(players[0].url, "/api/live/index.m3u8");
+  assert.equal(ui.element("game-video").hidden, false, "A ready playing video must remain composited so frame callbacks can begin");
+  assert.equal(ui.element("feed-status").querySelector("span").textContent, "Video delayed", "Metadata alone is not live playback");
+  ui.trackVideoFrame(0, {mediaTime: 1, presentedFrames: 1});
+  ui.setNow(NOW + 1000);
+  ui.trackVideoFrame(1000, {mediaTime: 2, presentedFrames: 61}); ui.renderVideo();
+  assert.equal(ui.element("feed-status").querySelector("span").textContent, "Live video");
+  assert.equal(ui.element("video-performance").textContent, "60.0 FPS / 60 target · ≈2.0s behind");
+  ui.setNow(NOW + 3000); ui.renderVideo();
+  assert.equal(ui.element("feed-status").querySelector("span").textContent, "Video delayed");
+  ui.videoMetadata({...metadata, generation: "b"});
+  assert.equal(players[0].destroyed, true);
+  assert.equal(players.length, 2, "A new encoder generation must reload its media timeline");
+});
+
+test("uncertain operator submission is checked by ID and never posted again automatically", async () => {
+  const requests = [];
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (url, options) => {
+    requests.push({url, method: options.method});
+    if (options.method === "POST") throw new Error("Network interrupted after dispatch");
+    return {ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", status: "completed", detail: "Paused."}})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "running", connected: true, run_id: "run-1"}});
+  ui.renderControls(); await ui.submitCommand("pause");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map((request) => request.method), ["POST", "GET"]);
+  assert.equal(requests[1].url, "/api/commands/ad67598a-6d1f-4e66-8730-0e2e76c1cd28");
+  assert.equal(ui.element("control-feedback").textContent, "Paused.");
+});
+
+test("locking controls during an in-flight POST ignores its late feedback", async () => {
+  let complete;
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: () => new Promise((resolve) => {complete = resolve;})});
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "running", connected: true, run_id: "run-1"}});
+  ui.renderControls();
+  const pending = ui.submitCommand("pause");
+  ui.lockControls("Controls locked by the operator.");
+  complete({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", status: "completed", detail: "Paused."}})});
+  await pending;
+  assert.equal(ui.element("operator-status").textContent, "View only");
+  assert.equal(ui.element("control-feedback").textContent, "Controls locked by the operator.");
+  assert.equal(ui.element("control-pause").disabled, true);
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+});
+
+test("the visual route names all eleven preparation and Nether checkpoints", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+  const ids = [...html.matchAll(/data-milestone="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(ids, ["wood", "crafting_table", "wooden_pickaxe", "stone_tools", "portal_located", "chest_looted", "obsidian_acquired", "ignition_acquired", "portal_repaired", "portal_lit", "nether"]);
+  for (const [id, label] of Object.entries({portal_located: "Locate the portal", chest_looted: "Loot the portal chest", obsidian_acquired: "Acquire obsidian", ignition_acquired: "Acquire ignition", portal_repaired: "Repair the portal", portal_lit: "Light the portal"})) {
+    assert.equal(helpers.eventDescription({type: "milestone", data: {id, verification: "game_state"}}), `Confirmed from game state: ${label}`);
+  }
+});

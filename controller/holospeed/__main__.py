@@ -29,6 +29,11 @@ def main() -> None:
     analyze.add_argument(
         "--submit", action="store_true", help="Create a Devin v3 session, capped at 2 ACU"
     )
+    analyze.add_argument(
+        "--context-file",
+        type=Path,
+        help="Optional JSON engineering notes (current_changes, verification, known_limitations, analysis_focus, source_revision)",
+    )
     report = sub.add_parser("report", help="Analyze a local run journal without model API calls")
     report.add_argument("run_dir", type=Path)
     compare = sub.add_parser("compare", help="Compare two or more local run journals")
@@ -67,10 +72,20 @@ def main() -> None:
     elif args.command == "analyze":
         summary = json.loads((args.run_dir / "summary.json").read_text())
         events = read_events(args.run_dir / "events.jsonl", exclude_model=True)
+        context = json.loads(args.context_file.read_text()) if args.context_file else None
+        if context is not None and not isinstance(context, dict):
+            parser.error("--context-file must contain a JSON object")
         if args.submit:
-            print(json.dumps(asyncio.run(submit_analysis(settings, summary, events)), indent=2))
+            print(
+                json.dumps(
+                    asyncio.run(
+                        submit_analysis(settings, summary, events, engineering_context=context)
+                    ),
+                    indent=2,
+                )
+            )
         else:
-            print(build_analysis_prompt(summary, events))
+            print(build_analysis_prompt(summary, events, context))
     elif args.command == "report":
         print(json.dumps(analyze_run(args.run_dir), indent=2))
     elif args.command == "compare":

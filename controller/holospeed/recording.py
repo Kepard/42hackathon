@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import io
 import json
@@ -105,6 +106,34 @@ class RunRecorder:
         metadata = observation.model_dump(exclude={"image_base64"})
         metadata.update({"sha256": digest, "frame_url": f"/api/runs/{self.id}/frames/{filename}"})
         return self.log("observation", metadata)
+
+    def save_game_state(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Preserve every full state poll without flooding the live event stream."""
+        raw = json.dumps(redact(snapshot), separators=(",", ":"), allow_nan=False).encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        directory = self.path / "states"
+        directory.mkdir(exist_ok=True)
+        filename = f"{self.sequence + 1:06d}-{digest[:12]}.json.gz"
+        with (directory / filename).open("wb") as stream:
+            stream.write(gzip.compress(raw, mtime=0))
+            stream.flush()
+            os.fsync(stream.fileno())
+        return self.log(
+            "game_state",
+            {
+                "id": snapshot["id"],
+                "tick": snapshot["tick"],
+                "sampled_at_ms": snapshot["sampled_at_ms"],
+                "cache_age_ms": snapshot.get("cache_age_ms"),
+                "dimension": snapshot.get("dimension"),
+                "world_ready": snapshot.get("world_ready", False),
+                "path": f"states/{filename}",
+                "sha256": digest,
+                "inventory": snapshot.get("inventory", []),
+                "player": snapshot.get("player"),
+                "skill": snapshot.get("skill"),
+            },
+        )
 
     def checkpoint(self, **updates: Any) -> None:
         self.summary.update(redact(updates))

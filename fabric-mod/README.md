@@ -1,10 +1,9 @@
 # HoloSpeed Fabric bridge
 
 Client-only Minecraft **Java 1.21.1**, Fabric Loader **0.16.14+**, Fabric API
-**0.116.5+1.21.1**, **JDK 21**. This is an original, small input bridge; it does
-not use Mineflayer or read inventory, coordinates, blocks, entities, or health
-for model decisions. The local watchdog uses player/world availability only to
-stop controls safely.
+**0.116.5+1.21.1**, **JDK 21**. This is a client input bridge with visual observations and optional, explicit
+structured state for planning. State reads use normal client APIs and currently
+loaded chunks; they do not load terrain or modify the world.
 
 ## Build and install
 
@@ -41,7 +40,9 @@ against the title screen is rejected. Keep GUI scale fixed during a run.
 
 ## Controls and safety
 
-* **F8** immediately stops held inputs and latches the bridge off. **F9** rearms
+* **F8** immediately stops held inputs and latches the bridge off. An explicit
+  dashboard Start can rearm through the guarded `arm` protocol while Minecraft
+  is focused; it resumes only normal pause/empty crafting screens. **F9** rearms
   and requests start/resume from the controller using a fresh screenshot. These
   keys work while inventory screens are open.
 * Focus loss, death, world change, controller disconnect, local pause, or the
@@ -62,8 +63,12 @@ The HUD shows objectives, status, held inputs, model latency, elapsed time, and
 milestones. Captures happen at the end of vanilla rendering, including inventory
 screens, **before** the HoloSpeed HUD is drawn. Thus model observations do not
 include the agent's own claims. PNG scaling and encoding run off the game thread.
+In state-aware mode the HUD reads actual vanilla and Baritone input flags and
+labels the active local skill; unavailable input readback is shown explicitly.
 
-See [the bridge protocol](../docs/protocol.md) for message schemas. `./gradlew test`
+See [the bridge protocol](../docs/protocol.md) for existing message schemas and
+[structured state](STATE_PROTOCOL.md) for the read-only `state` extension, and
+[bounded skills](SKILL_PROTOCOL.md) for normal-mechanics mining and crafting. `./gradlew test`
 checks action bounds and the stationary mining exception. A build/test pass does
 not establish successful gameplay; validate the early-game milestone in a real
 world with the selected providers.

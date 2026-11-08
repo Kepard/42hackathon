@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Presentation only: no game state is read or supplied to the agent. */
+/** Presentation only; the bridge supplies state and verified key telemetry. */
 public final class HoloHud {
     private static final int BACKGROUND = 0xDC0A101C;
     private static final int BORDER = 0x8050637D;
@@ -78,10 +78,14 @@ public final class HoloHud {
 
         String[][] keys = {
                 {"forward", "W"}, {"left", "A"}, {"back", "S"}, {"right", "D"},
-                {"jump", "SPC"}, {"sprint", "RUN"}, {"attack", "LMB"}, {"use", "RMB"}
+                {"jump", "SPC"}, {"sneak", "SFT"}, {"sprint", "RUN"}, {"attack", "LMB"}, {"use", "RMB"}
         };
         int keyX = x + 10;
-        for (String[] key : keys) {
+        if (heldKeys == null) {
+            text(context, font, fit(font, "LOCAL SKILL / INPUT READBACK UNAVAILABLE", width - 20),
+                x + 10, y + 92, AMBER);
+        }
+        for (String[] key : heldKeys == null ? new String[0][] : keys) {
             int keyWidth = Math.max(18, font.getWidth(key[1]) + 8);
             if (keyX + keyWidth > x + width - 10) {
                 break;
@@ -98,7 +102,7 @@ public final class HoloHud {
 
         String progress = milestones(data);
         text(context, font, fit(font, progress, width - 20), x + 10, y + 111, PURPLE);
-        String event = string(data, "event", "Visual decisions / bounded inputs");
+        String event = string(data, "event", "Holo4 strategy / bounded local inputs");
         text(context, font, fit(font, event, width - 20), x + 10, y + 126, MUTED);
         context.getMatrices().pop();
     }
@@ -137,7 +141,7 @@ public final class HoloHud {
     private static String milestones(JsonObject data) {
         JsonElement value = data.get("milestones");
         if (value == null || !value.isJsonArray()) {
-            return "PROGRESS  Awaiting visual confirmation";
+            return "PROGRESS  Awaiting confirmation";
         }
         JsonArray milestones = value.getAsJsonArray();
         List<String> names = new ArrayList<>();
@@ -152,7 +156,7 @@ public final class HoloHud {
                 }
             }
         }
-        return names.isEmpty() ? "PROGRESS  Awaiting visual confirmation" :
+        return names.isEmpty() ? "PROGRESS  Awaiting confirmation" :
                 "PROGRESS  " + String.join(" > ", names);
     }
 

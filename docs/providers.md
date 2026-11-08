@@ -1,8 +1,15 @@
 # Provider contracts
 
-Verified against official documentation on 2026-11-08. Adapters use one request per
-decision, with a deadline and no retries against stale screenshots. The local
-controller owns controls and recovery; model output is validated JSON, never code.
+Verified against official documentation on 2026-11-08. The default live path is
+`GAMEPLAY_MODE=state`: structured state, high-level skill selection, and local
+execution through Baritone and Minecraft's normal recipe/interaction APIs.
+Adapters use one request per decision with a deadline. Model output is validated
+JSON selecting supplied candidates, never executable code. See
+[architecture](architecture.md), [setup](setup.md), and
+[upstream integration sources and licenses](state-aware-research.md).
+The live environment default is `RUN_GOAL=nether`; `early_game` remains available
+for the wood-to-tools benchmark. The portal route is supplied only for its
+declared fixed seed and an advertised client capability.
 
 ## H Company: Holo4 planner
 
@@ -11,13 +18,33 @@ Both `holo4-27b` and `holo4-35b-a3b` are supported. `HOLO_MODEL` selects the mod
 the 35B variant performed better in the initial latency probes below.
 Use `GET /v1/models` to verify key access. Holo4 requires paid model access.
 
-The adapter declares native function tools with `tool_choice: required`, wraps
-each screenshot in `<observation>`, and validates one decision. GUI coordinates
-arrive as integers in 0–1000 and are converted to the bridge's 0–1 coordinates.
-No GUI clicks are accepted while the gameplay screen is active. Actions are
-bounded to one second, except stationary attack-only mining can last four seconds
-so bare-hand log breaking can finish without resetting progress. Milestone claims
-require visible evidence and remain claims to be checked against run observations.
+### Current state-aware strategy
+
+`StrategyProvider.choose(...)` receives structured game state, locally validated
+skill candidates, recent outcomes, and optional screenshot context. Holo uses the
+native `select_skill` tool with exactly `candidate_id` and a short `rationale`.
+The candidate ID must belong to the supplied set; the model cannot change the
+skill, item, quantity, coordinates, or deadline. The state-aware output budget is
+512 tokens, including hosted reasoning tokens; an observed 256-token response
+exhausted its budget before producing a usable selection. This does not change
+the legacy compact action adapter's 256-token budget with thinking disabled.
+
+Holo's role is choosing useful resources, progression phases, and alternatives
+after a blocked skill. Local code owns reach, path execution, continuous mining,
+pickup, recipe interactions, cancellation, and completion checks. A selection
+does not establish success. The controller rechecks fresh state before execution;
+milestones come from actual inventory, recorded client verification steps, and
+dimension evidence rather than model claims. For the portal candidate, the
+waypoint and expected chest/frame geometry are explicitly route knowledge to
+verify in-game. Neither a selected candidate nor a completed skill acknowledgment
+proves Nether entry; the controller checks `minecraft:the_nether` directly.
+
+Prompts summarize inventory counts, nearby resource samples, hazards, screen
+state, and recent skill results. Raw local geometry stays with the executor.
+Dropped-item stacks and screen slots remain separate from player inventory to
+avoid false acquisition counts. Unknown or unsampled terrain remains unknown.
+When an image is supplied, it is wrapped in `<observation>`; model screenshots
+exclude the HoloSpeed HUD.
 
 Reasoning is configurable with `HOLO_REASONING_EFFORT`. Holo4-27B supports `low`,
 `medium`, `xhigh`, and `none`; `high` is invalid and its hosted default is `xhigh`.
@@ -26,6 +53,18 @@ and ignored, while `none` explicitly disables thinking. Thus `low` on 35B means
 thinking is on, not that a low reasoning budget was applied. H recommends thinking
 for agent loops. Usage and raw responses are journaled; thinking traces are never
 copied into the next prompt. Explicit context carries durable facts.
+
+### Legacy visual-control adapter
+
+`GAMEPLAY_MODE=visual` retains the earlier screenshot-driven action loop for
+comparison and diagnostics. The following control schemas and all latency probes
+below describe that path, not the current state-aware skill API.
+
+The legacy adapter declares native action tools with `tool_choice: required`.
+GUI coordinates arrive as integers in 0–1000 and are converted to normalized
+bridge coordinates. Movement is bounded to one second, while stationary
+attack-only mining can last four seconds. Historical milestone labels are model
+visual claims with linked evidence, not state-confirmed resource acquisition.
 
 `HOLO_COMPACT=true` exposes controls plus a short `intent` phrase. The phrase is
 required for mining and GUI interactions so fresh-frame validation has a target;
@@ -74,7 +113,7 @@ a controlled latency comparison. No controls were executed and no gameplay
 progress was claimed. The smaller schema did not demonstrate a speed improvement.
 
 The full-adapter success exceeded the 15-second frame freshness budget. The
-controller therefore keeps controls released during Holo planning (30-second
+legacy visual controller therefore keeps controls released during Holo planning (30-second
 request deadline), captures a new screenshot, and asks Jev to validate the
 unexecuted proposal. The fresh frame retains its own 15-second action deadline;
 the original frame's lifetime is never extended. Hosted latency remains variable.
@@ -94,9 +133,9 @@ passed local control validation, reported zero cached input tokens, and were
 | Action-only | On (`low`, level ignored on 35B) | 1.534 s | 136, including 73 reasoning | Attack for 10 ticks to clear leaves |
 
 The thinking-on action matched the visible leaf obstruction; revealing or
-collecting a log was not verified. This small comparison supports trying compact
-output with thinking on for the next bounded gameplay trial, consistent with H's
-agent-loop guidance. It does not establish latency percentiles or prove that
+collecting a log was not verified. This small comparison supported the subsequent
+compact visual-control trial, consistent with H's agent-loop guidance. It does
+not establish latency for the new skill-selection path or prove that
 schema/output length alone caused the difference: hosted load and sampling can
 vary. Source requests/responses remain available in the local benchmark journals.
 
@@ -105,10 +144,34 @@ Sources: [API overview](https://hub.hcompany.ai/models-api/overview),
 [agent conventions](https://hub.hcompany.ai/models-api/build-an-agent/core-concepts),
 [completion reference](https://hub.hcompany.ai/models-api/chat-completions).
 
-## TypeSafe: Jev continuation decisions
+## TypeSafe: Jev candidate selection
 
 `POST https://api.typesafe.ai/v1/systemone`, bearer authentication.
-Pin `jev-1.14.0` for reproducibility. Jev vision is experimental and requires
+Pin `jev-1.14.0` for reproducibility.
+
+### Current state-aware choice
+
+The strategy adapter sends a structured `state` and one `choice` question named
+`skill`. Its criteria are the exact locally validated candidate IDs, plus
+`__replan__`. Jev handles routine candidate selection without generating new
+actions, parameters, milestones, or strategy prose. When a Jev key is configured,
+routine boundaries use Jev even for one remaining candidate; phase changes and
+recovery return to Holo. This path does not upload an
+image and does not require the experimental image header.
+
+Selected IDs, finite confidence metadata, and any returned probability
+distribution are validated. Confidence/probability describe the model selection;
+they are not extra per-tick execution gates. Explicit `__replan__`, unknown IDs,
+or malformed answers return a recorded error/replan outcome. The caller can
+rebuild candidates or use its deterministic locally validated fallback. Fresh
+state preconditions and the candidate's inventory or dimension postcondition
+remain authoritative. The six portal `verified_steps` come from client checks,
+not Jev's probability distribution.
+
+### Legacy visual continuation
+
+The earlier screenshot-based Jev adapter remains available for visual mode.
+Its vision support is experimental and requires
 `TypeSafe-Danger-Zone-Images: true`. PNG/JPEG assets use UUID references and raw
 base64, without a data-URI prefix.
 
@@ -137,8 +200,8 @@ for a Holo proposal that has not yet acted. It checks that exact proposal agains
 a newly captured screenshot, with only `continue` or `replan`; accepted actions
 are unchanged, including one-shot GUI inputs. Unclear targets, insufficient
 evidence, screen mismatches, and danger must replan. Pass `run_goal` and
-`plan_source_frame_id` for auditability. The controller enables this stage by
-default when Jev is configured (`VALIDATE_HOLO_PLANS=true`). It never confirms
+`plan_source_frame_id` for auditability. The visual controller enables this stage
+when Jev is configured and `VALIDATE_HOLO_PLANS=true`. It never confirms
 milestones and does not relax the ban on
 repeating GUI actions during ordinary continuation. The caller owns one-time
 execution and must retain the fresh observation's action deadline.
@@ -153,10 +216,19 @@ failed actions still require replanning. Probability thresholds and explicit
 replan decisions remain unchanged. Longer mining and GUI actions keep strict
 validation. Set `ALLOW_EXPLORATION=false` to restore strict evaluation everywhere.
 
-A batched blocker question makes abstentions useful to the next Holo plan:
-obstruction, mismatched target, danger, completed goal, or uncertainty. Clearing
-leaves is valid intermediate progress; the next bounded action need not finish
-an entire crafting objective. No threshold bypass is used to force progress.
+These visual-mode thresholds and `ALLOW_EXPLORATION` rules do not govern the
+state-aware candidate selector or interrupt each tick of a local mining skill.
+
+## Request logging and execution ownership
+
+Both strategy providers use the same request journal: a call ID links the
+redacted request written before HTTP starts with response, status, latency,
+transport failure, or cancellation. Actual model usage is retained. Complete
+records stay in the local archive. The hosted journal keeps sanitized nonimage
+request/response details within its upload limits; credentials and inline image
+payloads are removed. Full screenshots and compressed state assets stay local.
+Provider decisions are separate from requested skills, acknowledgments, running
+status, and confirmed outcomes. Neither Holo nor Jev owns an unbounded held key.
 
 Sources: [System One reference](https://docs.typesafe.ai/api/system-one),
 [models](https://docs.typesafe.ai/models), [images](https://docs.typesafe.ai/images),
@@ -169,6 +241,21 @@ Use `DEVIN_ORG_ID`; do not send a PAT to legacy v1 endpoints. Budget sessions wi
 `max_acu_limit`. Creation returns `session_id`, `url`, and `status`; poll for
 `status_detail: finished` as well as terminal status. `structured_output` is
 populated by get/list responses. This work must stay outside the gameplay loop.
+
+The [engineering workflow](devin.md) preserves bounded state-aware skill and
+inventory evidence, accepts current-fix context, and requests proposed regression
+test source with explicit validation status. Submission is capped at 2 ACU and
+never retried automatically after an ambiguous failure.
+
+This is a working integration: a real v3 identity request and one capped
+investigation of the recorded crafting-table return failure produced structured
+analysis and two proposed test patches. Those patches assumed APIs and were
+tested against Devin's own stubs, not the current HoloSpeed implementation; they
+were retained for review rather than automatically applied. The
+[investigation report](devin-investigation.md) links the actual session and records
+the evidence and limitations. Current fix context can be supplied with
+`analyze --context-file`; `devin-session` reads status and findings. No Devin
+session is created automatically by a game tick or a run failure.
 
 Sources: [PAT authentication](https://docs.devin.ai/api-reference/personal-access-tokens),
 [create-session reference](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions).

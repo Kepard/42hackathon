@@ -10,11 +10,14 @@ This seed and version appear in verified competitive set-seed runs, including
 The record route is useful future research; it is not a claim that HoloSpeed
 can reproduce it, or that this is the easiest ordinary early-game route.
 
-The initial agent objective remains visible logs → crafting table → wooden
-pickaxe → stone tools. No seed lookup, coordinates, or structure locations are
-fed to the model. Recreate the same settings for comparable attempts, and keep
-Minecraft resolution, GUI scale, render distance, and difficulty consistent.
-Model decisions remain visual-only.
+The initial agent objective remains acquired logs → crafting table → wooden
+pickaxe → stone pickaxe and axe. Current state-aware decisions use player
+coordinates, inventory, sampled blocks/entities, and optional screenshots;
+normal interactions and Baritone execute the selected skills. This changes the
+information available to the agent from the earlier visual-only trials.
+Recreate the same settings for comparable attempts, and keep resolution, GUI
+scale, render distance, difficulty, and gameplay mode consistent. Record the seed
+explicitly rather than treating a declared configuration value as a world query.
 
 Earlier control validation used seed `42`; keep those smoke-test results
 separate from the selected demo seed. A successful bridge test verifies

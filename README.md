@@ -1,14 +1,22 @@
 # HoloSpeed
 
-A visual Minecraft agent with Holo4 planning, fresh-frame Jev validation, a
-custom Fabric control bridge, and a live spectator console. The first gameplay
-target is **wood → crafting table → wooden pickaxe → stone tools**.
+A state-aware Minecraft speedrunning agent with **Holo4 strategy**, **Jev skill
+selection**, a custom Fabric bridge, and local navigation, mining, and crafting.
+The current target is **Nether entry**, with verified checkpoints for resources,
+portal discovery, chest loot, repair, ignition, and dimension transfer. Stone tools
+remain an independently verified early-game checkpoint. The agent uses normal
+survival interactions and checks progress against game state.
 
-This repository includes a runnable **simulated demonstration** and an experimental
-live integration for **Minecraft Java Edition 1.21.1**. The simulation uses generated
-frames and scripted decisions; it makes no model API calls and does not run Minecraft.
-Autonomous early-game success has not yet been validated in a real Minecraft session.
-Gladia voice integration is deferred.
+**[Watch the live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site)**
+H.264 live video, private operator controls, detailed event logs, input telemetry, model latency,
+objectives, and run archives. Its H Company-inspired design uses Cal Sans.
+The publisher must remain running alongside Minecraft; stale/offline states are explicit.
+See [dashboard setup and source](dashboard/README.md).
+
+Minecraft **Java Edition 1.21.1 + Fabric** is the live target. A separate simulated
+mode runs without Minecraft or model APIs. Actual trials have acquired wood, crafted
+tools, returned to a placed table, and autonomously reached the Nether from an
+empty inventory on the fixed seed; full speedrun completion is not yet implemented. Gladia is deferred.
 
 ## Try the console
 
@@ -34,7 +42,9 @@ presentation rehearsal and integration checks, not gameplay-performance claims.
 ## Connect Minecraft
 
 The selected demonstration seed is [`-1950884254474434485`](docs/demo-seed.md),
-used in verified Java 1.21.1 set-seed runs. Start with the wood-and-tools objective.
+used in verified Java 1.21.1 set-seed runs. Its nearby ruined portal supports a
+short [Nether-entry route](docs/nether-route.md). The executor checks actual loaded
+blocks and acquired chest supplies before attempting repair.
 
 Run the controller and Minecraft on the same computer. The bridge binds to
 loopback and authenticates with a local token.
@@ -46,11 +56,12 @@ loopback and authenticates with a local token.
 2. Copy `.env.example` to `.env` in this repository. Set `HCOMPANY_API_KEY` and,
    to enable Jev, `JEV_API_KEY`. The defaults are `holo4-35b-a3b` with reasoning
    effort `none`, `jev-1.14.0`, and a 30-second model request timeout.
-   `HOLO_COMPACT=true` uses concise native control calls to reduce response latency;
-   `HOLO_COMPACT=false` retains verbose strategy responses. Optional model intent
-   and control descriptions are displayed without inventing achieved outcomes.
-   Without a Jev key the controller uses Holo4 for every decision. Keep provider
-   credentials in the controller's environment, not the mod configuration.
+   `GAMEPLAY_MODE=state` and `RUN_GOAL=nether` are the live defaults. Set
+   `RUN_GOAL=early_game` to stop at stone tools. Holo4 chooses objectives at phase
+   boundaries using structured state and screenshots. Jev selects routine skills;
+   local prerequisites and inventory checks govern execution. Model planning is
+   bounded to eight seconds with a logged deterministic fallback. Keep provider
+   credentials in the controller environment, not the mod configuration.
 3. Generate matching controller/mod credentials from the repository root:
 
    ```sh
@@ -72,13 +83,22 @@ loopback and authenticates with a local token.
    `fabric-mod/build/libs/holospeed-0.1.0.jar` into the instance's `mods` folder
    together with [Fabric API](https://modrinth.com/mod/fabric-api) for **1.21.1**
    (the build uses `0.116.5+1.21.1`). Do not install the `-sources.jar`.
-5. Return to the repository root and start the controller:
+5. Install the pinned [Baritone](https://github.com/cabaletta/baritone) **1.11.3**
+   Fabric API distribution into the same profile (required for mining/navigation):
+
+   ```sh
+   python scripts/install-baritone.py --minecraft-dir "/path/to/your/game-directory"
+   ```
+
+   The installer verifies the official artifact's SHA-256 and writes source/license
+   attribution beside it. Baritone remains an unmodified, replaceable LGPL dependency.
+6. Return to the repository root and start the controller:
 
    ```sh
    uv run holospeed serve --mode live
    ```
 
-6. Restart Minecraft with that Fabric profile, enter a survival world, and wait
+7. Restart Minecraft with that Fabric profile, enter a survival world, and wait
    for the bridge to connect. Keep Minecraft focused and press **F9** to start
    or resume a run. Actions are rejected when the world is unavailable, the game
    is paused, or the window is unfocused.
@@ -93,12 +113,11 @@ in inventory screens. See the [mod guide](fabric-mod/README.md) and
 [demo checklist](docs/demo-checklist.md). Disconnects, expired actions, focus loss,
 and world changes also release held controls.
 
-Live observations contain screenshots and bridge metadata, not inventory,
-coordinates, block queries, or entity lists. Decisions are validated and executed
-one at a time. Movement and interaction actions are bounded to 20 ticks; a
-stationary attack-only mining action may last up to 80 ticks so bare-hand mining
-can complete. Model latency, crafting precision, and this control loop's limits
-still require in-game measurement.
+The bridge exposes player/inventory state, screens, crosshair, nearby loaded blocks,
+collision geometry, and entities through a bounded 5 Hz cache. Baritone executes
+navigation and mining; native recipe and inventory interactions craft tools and
+place/open a carried table. Local tick loops continue without model round trips.
+Skills have inventory targets, tick/wall deadlines, and cancellation guards.
 
 ## Logs, replay, and comparison
 
@@ -108,13 +127,16 @@ Each run is preserved locally under `runs/<run-id>/`:
 summary.json     mode, status, elapsed time, configuration, metrics, milestones
 events.jsonl     ordered observations, model payloads, decisions, inputs, ACKs, errors
 frames/          captured PNG/JPEG observations with hashes in the event journal
+states/          complete structured snapshots, compressed JSON with journal hashes
 ```
 
 The default `runs/` directory and `.env` files are Git-ignored. Logs retain model
 requests and responses, including their image payloads, with credential redaction.
 Frame files are retained separately for replay. There is no automatic retention
 policy, so plan disk space and keep the entire run directory when archiving a demo.
-Live recovery notes also persist in `runs/memory.jsonl` for later run context.
+Legacy visual-mode recovery notes also persist in `runs/memory.jsonl` for later context.
+The hosted dashboard receives sanitized, size-bounded archives; local run directories
+remain the complete record, including screenshots and every polled state snapshot.
 
 Open **Run archive**, select two saved runs, and choose **Compare runs** for a
 side-by-side view of duration, completed actions, observations, errors, recoveries,
@@ -138,10 +160,16 @@ and preserve the distinction between recorded execution and claimed progress.
 Replay reconstructs recorded observations and actions. It does not replay inputs
 into Minecraft or reproduce the world deterministically. The timer measures
 elapsed session wall time, including pauses, rather than official speedrun
-in-game time. Milestones in live mode are model visual claims with evidence to
-review, not independently verified achievements.
+in-game time. State-aware milestones require actual inventory or table evidence and are labeled
+`game_state`. Historical visual-mode milestones remain model claims; simulated
+records are labeled separately.
 
 ## Ask Devin to investigate a run
+
+The [live integration investigation](docs/devin-investigation.md) includes actual
+Devin findings and explicitly unvalidated test proposals. See the [Devin guide](docs/devin.md)
+for current-fix context and the bounded, redacted workflow.
+
 
 Analysis is separate from gameplay and never starts automatically. First prepare
 the bounded, redacted digest without calling Devin:
@@ -178,48 +206,35 @@ may already have been created. Inspect Devin session history before retrying.
 
 ```mermaid
 flowchart LR
-    MC[Minecraft + Fabric bridge] -->|Screenshot and ACK| C[Local controller]
-    C -->|Bounded inputs| MC
-    C --> H[Holo4 visual planner]
-    H --> C
-    C -->|Fresh screenshot + proposed action| J[Jev validation and continuation]
-    J --> C
-    C --> L[Local run journal + frames]
-    C --> UI[Live console + game HUD]
-    L --> R[Visual replay]
+    MC[Minecraft + Fabric + Baritone] -->|State, screenshots, skill results| C[Local controller]
+    C -->|Bounded mining and crafting skills| MC
+    C <--> H[Holo4 strategy and recovery]
+    C <--> J[Jev routine skill selection]
+    C --> L[Complete local journal, frames, state snapshots]
+    C --> UI[Game HUD + operator console]
+    C --> P[Read-only hosted dashboard]
     L -->|Explicit redacted digest| D[Devin analysis]
 ```
 
-Holo4 proposes an action from a screenshot. With Jev configured and
-`VALIDATE_HOLO_PLANS=true` (the default), the controller releases controls,
-captures a new screenshot, and asks Jev to validate that unexecuted plan. Only
-the validated action executes, against the fresh frame. Jev also validates exact
-bounded continuations with a binary continue/replan choice; uncertainty or danger returns to Holo4. Both stages'
-latency and usage are recorded. Eight consecutive model abstentions stop the run
-for review. This adds a validation call after each Holo plan to check scene
-changes during planning.
-Completed non-idle inputs reset that consecutive-veto counter; total recovery
-attempts remain visible in the run metrics. Stuck detection and run budgets apply
-independently, so an acknowledged input is never treated as proof of progress.
+The prerequisite planner credits existing tools and consumed ingredients, choosing
+only currently eligible skills. Holo4 selects among those candidates at the first
+objective, milestone changes, and recovery points. Jev handles routine selections.
+Models choose candidate IDs; they cannot change counts or inject arbitrary controls.
+Fresh state revalidates each selection before execution, and inventory postconditions
+verify completion afterward. Failed routes are excluded for unchanged inventory;
+three consecutive skill failures stop the run.
 
-The request timeout (`MODEL_TIMEOUT_SECONDS=30`) and the source-frame freshness
-budget are distinct: a request completing within its timeout does not authorize
-execution from an expired frame. Holo-only runs retain direct frame-age checks.
-`MAX_ACTIONS=300` and `MAX_RUN_SECONDS=1800` bound a run by default.
-Local code owns action expiry, input release, cancellation, recovery
-budgets, and recording. Persistent failure notes are experience memory, not
-model-weight training. Provider contracts and trade-offs are documented in
-[providers](docs/providers.md), [gameplay research](docs/gameplay.md), and the
-[bridge protocol](docs/protocol.md).
+`MAX_ACTIONS=300` counts completed skills and `MAX_RUN_SECONDS=1800` bounds elapsed
+run time by default. Each mining skill has its own limit and stuck detection;
+crafting waits for inventory synchronization. F8, focus loss, world changes,
+disconnects, and deadlines cancel local execution.
 
-`ALLOW_EXPLORATION=true` permits short, bounded world-input experiments when
-Jev sees no concrete hazard. After identical rejected proposals, the controller
-can propose a camera-only scan for Jev validation, then ask Holo to inspect the
-new view. Four scans are allowed per run; the stricter mode disables them.
-Recovery context distinguishes rejected proposals from executed inputs and asks
-Holo to reassess stale subgoals after repeated vetoes. See the
-[recorded gameplay findings](docs/gameplay-findings.md) and
-[Jev evaluation](docs/jev-evaluation.md) for the evidence behind these changes.
+`GAMEPLAY_MODE=visual` preserves the earlier screenshot/control experiment,
+including fresh Jev validation, eight consecutive vetoes, and bounded camera recovery.
+Its latency and progress limitations motivated the current architecture. Historical
+[gameplay findings](docs/gameplay-findings.md) and [Jev evaluation](docs/jev-evaluation.md)
+remain available. See [architecture](docs/architecture.md), [providers](docs/providers.md),
+[research and attribution](docs/state-aware-research.md), and [protocol](docs/protocol.md).
 
 ## Development and current limits
 
@@ -236,10 +251,9 @@ tests. Python tests exercise provider contracts with mock transports, redaction,
 replay journals, pause/timeout/disconnect behavior, and the complete simulated
 demo. They do not establish performance in an actual Minecraft world.
 
-The current milestone is an observable, controllable early-game prototype.
-Reliable wood/tool progression, advanced GUI gestures, combat, Nether routing,
-and full speedrun completion remain to be validated or developed. Jev's image
-support is experimental. The observation/action loop waits for inference and
-completion; it is not a demonstrated continuous high-frequency game policy.
-Use the [demo checklist](docs/demo-checklist.md) to distinguish tested behavior
-from the next gameplay experiments.
+The ruined-portal route currently targets the declared fixed seed and requires
+actual chest supplies; random-seed portal construction, combat, stronghold routing,
+and full speedrun completion remain future work. Structured
+state is bounded to loaded nearby terrain; it is not an omniscient world map.
+Automated tests verify orchestration and inventory accounting; only recorded real
+Minecraft trials establish gameplay success. See the [demo checklist](docs/demo-checklist.md).

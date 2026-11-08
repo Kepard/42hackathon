@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 @dataclass
 class Settings:
     mode: str = "demo"
+    gameplay_mode: str = "state"
+    run_goal: str = "early_game"
     host: str = "127.0.0.1"
     port: int = 8765
     runs_dir: Path = field(default_factory=lambda: Path("runs"))
@@ -39,6 +41,8 @@ class Settings:
         load_dotenv()
         return cls(
             mode=os.getenv("HOLOSPEED_MODE", "demo"),
+            gameplay_mode=os.getenv("GAMEPLAY_MODE", "state"),
+            run_goal=os.getenv("RUN_GOAL", "nether"),
             host=os.getenv("HOLOSPEED_HOST", "127.0.0.1"),
             port=int(os.getenv("HOLOSPEED_PORT", "8765")),
             runs_dir=Path(os.getenv("HOLOSPEED_RUNS_DIR", "runs")),

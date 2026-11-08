@@ -161,3 +161,155 @@ async def test_identity_does_not_need_org_and_session_read_uses_org():
 async def test_session_identifier_cannot_change_endpoint():
     with pytest.raises(ValueError, match="session_id"):
         await get_session(Settings(devin_api_key="test", devin_org_id="org-example"), "../self")
+
+
+def digest_of(summary, events, context=None):
+    return json.loads(
+        build_analysis_prompt(summary, events, context).split("RUN_DIGEST_JSON\n", 1)[1]
+    )
+
+
+def test_skill_history_survives_many_state_polls_and_keeps_inventory_facts():
+    events = [
+        {
+            "seq": 1,
+            "type": "skill_started",
+            "data": {"skill": "mine", "item": "minecraft:cobblestone", "target_count": 6},
+        },
+        *[{"seq": i, "type": "skill_progress", "data": {"tick": i}} for i in range(2, 202)],
+        {
+            "seq": 202,
+            "type": "skill_completed",
+            "data": {
+                "candidate_id": "mine-stone-6",
+                "state_id": "state-202",
+                "inventory": {"minecraft:cobblestone": 6},
+            },
+        },
+        {
+            "seq": 203,
+            "type": "state_summary",
+            "data": {
+                "player": {"position": {"x": 36.5, "y": 52, "z": 35.6}, "health": 20},
+                "inventory": {"minecraft:stick": 6},
+                "known_table": {"x": 32, "y": 67, "z": 41},
+            },
+        },
+        {"seq": 204, "type": "error", "data": {"message": "No eligible skill"}},
+    ]
+    digest = digest_of({}, events)
+    selected = digest["recent_events"]
+    assert selected[0]["seq"] == 1
+    assert len(selected) <= 40
+    assert digest["omitted_event_count"] + len(selected) == len(events)
+    completed = next(event for event in selected if event["type"] == "skill_completed")
+    assert completed["data"]["inventory"] == {"minecraft:cobblestone": 6}
+    assert completed["data"]["state_id"] == "state-202"
+    state = next(event for event in selected if event["type"] == "state_summary")
+    assert state["data"]["player"]["position"]["z"] == 35.6
+    assert state["data"]["known_table"] == {"x": 32, "y": 67, "z": 41}
+
+
+def test_dynamic_inventory_keys_are_strict_and_private_paths_are_scrubbed():
+    digest = digest_of(
+        {},
+        [
+            {
+                "type": "game_state",
+                "data": {
+                    "inventory": {
+                        "minecraft:stone_pickaxe": 1,
+                        "api_key": "secret",
+                        "minecraft:oak_log": True,
+                        "minecraft:dirt": -1,
+                        "minecraft:stone": 9000,
+                    },
+                    "message": "inspect /workspace/private/file.json /mnt/private.json /secret.txt or C:\\Users\\name\\secret.txt",
+                    "path": "/workspace/private/state.json.gz",
+                },
+            }
+        ],
+    )
+    data = digest["recent_events"][0]["data"]
+    assert data["inventory"] == {"minecraft:stone_pickaxe": 1}
+    assert "path" not in data
+    assert "/workspace" not in data["message"] and "C:" not in data["message"]
+    assert "/mnt" not in data["message"] and "/secret.txt" not in data["message"]
+
+
+def test_inventory_slot_shape_cannot_forward_extra_data():
+    slots = [
+        {"slot": 0, "item": "minecraft:birch_log", "count": 3, "secret": "sensitive"},
+        {"slot": 1, "item": "cog_private", "count": 1},
+        {"slot": "secret-slot", "item": "minecraft:dirt", "count": 1},
+    ]
+    digest = digest_of({}, [{"type": "game_state", "data": {"inventory": slots}}])
+    assert digest["recent_events"][0]["data"]["inventory"] == [
+        {"slot": 0, "item": "minecraft:birch_log", "count": 3}
+    ]
+
+
+def test_current_engineering_context_is_bounded_and_only_explicit_fields_survive():
+    context = {
+        "current_changes": "Known table navigation implemented",
+        "verification": "Stone tools acquired in live continuation",
+        "analysis_focus": "regression tests " * 1000,
+        "headers": {"secret": "do-not-forward"},
+    }
+    digest = digest_of({}, [], context)
+    assert digest["engineering_context"]["current_changes"] == context["current_changes"]
+    assert len(digest["engineering_context"]["analysis_focus"]) < 750
+    assert "headers" not in digest["engineering_context"]
+
+
+def test_digest_budget_removes_large_poll_samples_before_skill_history():
+    events = [
+        {
+            "seq": 1,
+            "type": "skill_started",
+            "data": {"skill": "mine", "item": "minecraft:cobblestone", "target_count": 6},
+        }
+    ]
+    inventory = [{"slot": i, "item": "minecraft:dirt", "count": 64} for i in range(41)]
+    events.extend(
+        {"seq": i, "type": "game_state", "data": {"inventory": inventory}} for i in range(2, 80)
+    )
+    events.extend(
+        [
+            {
+                "seq": 80,
+                "type": "skill_completed",
+                "data": {"inventory": {"minecraft:cobblestone": 6}, "state_id": "state-80"},
+            },
+            {"seq": 81, "type": "error", "data": {"message": "No eligible skill"}},
+        ]
+    )
+    digest = digest_of({}, events)
+    assert len(json.dumps(digest, ensure_ascii=True)) <= 18_000
+    assert digest["recent_events"][0]["seq"] == 1
+    assert [e["seq"] for e in digest["recent_events"]][-2:] == [80, 81]
+    assert digest["omitted_event_count"] + len(digest["recent_events"]) == len(events)
+
+
+async def test_submission_redacts_context_secrets_and_requests_test_source():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"session_id": "test-session"})
+
+    settings = Settings(devin_api_key="nonstandard-private-secret", devin_org_id="org-example")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await submit_analysis(
+            settings,
+            {},
+            [],
+            client,
+            engineering_context={"current_changes": "nonstandard-private-secret"},
+        )
+    payload = requests[0]
+    assert "nonstandard-private-secret" not in payload["prompt"]
+    assert "test_patches" in payload["structured_output_schema"]["required"]
+    schema = payload["structured_output_schema"]["properties"]["test_patches"]["items"]
+    assert "code" in schema["required"] and "validation_status" in schema["required"]
+    assert "proposed/unrun unless actually tested" in payload["prompt"]

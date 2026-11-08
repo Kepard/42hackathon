@@ -1,7 +1,14 @@
 # Verification and observed limits
 
-Tested on 2026-11-08. These results separate simulation, control integration,
-and actual model-driven gameplay.
+For current state-aware gameplay, see [state-aware verification](state-aware-verification.md).
+
+Tested on 2026-11-08. The results below are historical **visual-control** trials
+and their associated automated/interface checks, preceding the state-aware
+Baritone/recipe integration. They separate simulation, control integration, and
+actual model-driven gameplay. Test counts and latency values describe those
+recorded revisions, not a current state-aware benchmark. See
+[architecture](architecture.md) for the new mode; no state-aware wood/tool
+completion is established by these historical results.
 
 ## Automated and interface checks
 

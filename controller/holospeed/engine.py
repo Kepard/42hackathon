@@ -17,6 +17,7 @@ from .models import Action, Decision
 from .providers import HoloProvider, JevProvider, ProviderError, ReplanRequired
 from .recording import RunRecorder, redact
 from .recovery import shape_recovery_context
+from .strategy import StrategyProvider
 
 
 class RunBudgetReached(RuntimeError):
@@ -34,6 +35,7 @@ class AgentEngine:
         self.lock = asyncio.Lock()
         self.subscribers: set[asyncio.Queue] = set()
         self.holo = HoloProvider(settings)
+        self.strategist = StrategyProvider(settings, journal=self.log)
         self.jev = JevProvider(settings) if settings.jev_api_key else None
         self.holo.journal = self.log
         if self.jev:
@@ -120,10 +122,13 @@ class AgentEngine:
                         "holo_model": self.settings.holo_model,
                         "jev_model": self.settings.jev_model,
                         "jev_enabled": bool(self.jev),
-                        "observation_mode": "visual_only",
+                        "observation_mode": "structured_state_and_vision"
+                        if self.settings.gameplay_mode == "state"
+                        else "visual_only",
+                        "gameplay_mode": self.settings.gameplay_mode,
                         "planner_interval": self.settings.planner_interval,
                         "minecraft": "1.21.1",
-                        "goal": "wood_to_stone_tools",
+                        "goal": self.settings.run_goal,
                         "validate_holo_plans": self.settings.validate_holo_plans,
                         "model_timeout_s": self.settings.model_timeout_s,
                         "max_actions": self.settings.max_actions,
@@ -281,6 +286,11 @@ class AgentEngine:
         return result
 
     async def run(self) -> None:
+        if self.settings.mode == "live" and self.settings.gameplay_mode == "state":
+            from .state_engine import run_state_agent
+
+            await run_state_agent(self)
+            return
         generation = self.generation
         repeat = 0
         last_signature = None
@@ -768,5 +778,6 @@ class AgentEngine:
                 terminal_status, metrics=self.state["metrics"], milestones=self.state["milestones"]
             )
         await self.holo.aclose()
+        await self.strategist.aclose()
         if self.jev:
             await self.jev.aclose()

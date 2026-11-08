@@ -23,6 +23,16 @@ _CHUNK_SIZE = 65536
 _STRING_SPECIAL = re.compile(r'["\\]')
 _ACK_TYPES = {"ack", "bridge_ack", "raw_bridge_ack"}
 _TERMINAL = {"completed", "rejected", "cancelled"}
+_PORTAL_STEPS = frozenset(
+    {
+        "portal_located",
+        "chest_looted",
+        "obsidian_acquired",
+        "ignition_acquired",
+        "portal_repaired",
+        "portal_lit",
+    }
+)
 _ACTION_FIELDS = (
     "keys",
     "duration_ticks",
@@ -233,6 +243,250 @@ def _no_input(action: dict) -> bool:
     )
 
 
+def _inventory_counts(value: Any) -> dict[str, int]:
+    """Read only player inventory, never GUI slots or nearby dropped entities."""
+    counts: Counter = Counter()
+    if isinstance(value, dict):
+        stacks = [{"item": item, "count": count} for item, count in list(value.items())[:256]]
+    elif isinstance(value, list):
+        stacks = value[:256]
+    else:
+        return {}
+    seen_slots = set()
+    for stack in stacks:
+        if not isinstance(stack, dict):
+            continue
+        item, count, slot = stack.get("item"), stack.get("count"), stack.get("slot")
+        if slot is not None:
+            if type(slot) is not int or slot in seen_slots or not 0 <= slot <= 40:
+                continue
+            seen_slots.add(slot)
+        if isinstance(item, str) and item != "minecraft:air" and type(count) is int and count > 0:
+            counts[_text(item, 160)] += count
+    return dict(counts)
+
+
+def _portal_steps(value: Any) -> list[str]:
+    """Accept only bounded client-recorded step identifiers, never arbitrary claims."""
+    if not isinstance(value, list) or len(value) > len(_PORTAL_STEPS):
+        return []
+    if any(not isinstance(item, str) or item not in _PORTAL_STEPS for item in value):
+        return []
+    if len(set(value)) != len(value):
+        return []
+    return value.copy()
+
+
+def _ready_milestone_state(milestone: dict, state: dict | None) -> bool:
+    return bool(
+        state
+        and state["world_ready"] is True
+        and state["cache_age_ms"] is not None
+        and 0 <= state["cache_age_ms"] <= 1000
+        and state["player_health"] is not None
+        and state["player_health"] > 0
+        and milestone["elapsed_ms"] is not None
+        and state["elapsed_ms"] <= milestone["elapsed_ms"]
+        and (
+            milestone["event_seq"] is None
+            or not isinstance(state["seq"], int)
+            or state["seq"] < milestone["event_seq"]
+        )
+    )
+
+
+class _SkillJournal:
+    """Keep skill requests, immediate ACKs, and verified outcomes distinct."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.by_id: dict[str, dict] = {}
+        self.acks: dict[str, dict] = {}
+        self.outcomes: list[dict] = []
+        self.seen_outcomes: set[tuple] = set()
+        self.duplicate_acks = self.conflicting_acks = self.duplicate_outcomes = 0
+
+    @staticmethod
+    def identity(data: dict) -> tuple:
+        return tuple(data.get(key) for key in ("skill", "item", "target_count", "max_ticks"))
+
+    def start(self, seq: Any, elapsed: float, data: dict, dispatched: bool = False) -> dict:
+        request = {
+            "seq": seq,
+            "elapsed_ms": elapsed,
+            "candidate_id": _text(data.get("candidate_id" if dispatched else "id"), 200),
+            "id": _text(data.get("id"), 200) if dispatched else "",
+            "skill": _text(data.get("skill"), 30),
+            "item": _text(data.get("item"), 160),
+            "target_count": _number(data.get("target_count")),
+            "max_ticks": _number(data.get("max_ticks")),
+            "postcondition": _text(data.get("postcondition", "inventory"), 40),
+            "expected_dimension": _text(data.get("expected_dimension"), 100) or None,
+            "dispatched_ms": elapsed if dispatched else None,
+            "ack": None,
+            "outcome": None,
+        }
+        self.requests.append(request)
+        if request["id"]:
+            self.by_id[request["id"]] = request
+        return request
+
+    def dispatch(self, seq: Any, elapsed: float, data: dict) -> None:
+        identifier = _text(data.get("id"), 200)
+        request = self.by_id.get(identifier) or next(
+            (
+                item
+                for item in reversed(self.requests)
+                if item["dispatched_ms"] is None
+                and item["outcome"] is None
+                and self.identity(item) == self.identity(data)
+            ),
+            None,
+        )
+        if request is None:
+            request = self.start(seq, elapsed, data, dispatched=True)
+        request.update(id=identifier, dispatched_ms=elapsed)
+        if identifier:
+            self.by_id[identifier] = request
+
+    def acknowledge(self, seq: Any, elapsed: float, packet: dict) -> None:
+        if packet.get("status") not in {"accepted", "completed", "rejected"}:
+            return
+        identifier = _text(packet.get("id"), 200)
+        request = self.by_id.get(identifier) if identifier else None
+        key = identifier or f"orphan:{seq}"
+        if key in self.acks:
+            self.duplicate_acks += 1
+            self.conflicting_acks += self.acks[key]["status"] != packet["status"]
+            return
+        ack = {
+            "id": identifier or None,
+            "seq": seq,
+            "elapsed_ms": elapsed,
+            "status": packet["status"],
+            "skill_id": _text(packet.get("skill_id"), 200) or None,
+            "request_seq": request["seq"] if request else None,
+        }
+        self.acks[key] = ack
+        if request:
+            request["ack"] = ack
+
+    def finish(self, kind: str, seq: Any, elapsed: float, data: dict, states: dict) -> None:
+        candidate = _text(data.get("candidate_id"), 200)
+        state_id = _text(data.get("state_id"), 200)
+        identity = (kind, candidate, state_id)
+        if state_id and identity in self.seen_outcomes:
+            self.duplicate_outcomes += 1
+            return
+        self.seen_outcomes.add(identity)
+        request = next(
+            (
+                item
+                for item in reversed(self.requests)
+                if candidate and item["candidate_id"] == candidate and item["outcome"] is None
+            ),
+            None,
+        )
+        item = _text(data.get("item"), 160)
+        target = data.get("target_count")
+        inventory = _inventory_counts(data.get("inventory"))
+        state = states.get(state_id)
+        linked = (
+            kind == "skill_completed"
+            and request is not None
+            and type(target) is int
+            and 1 <= target <= 64
+            and (item, target) == (request["item"], request["target_count"])
+            and state is not None
+            and state["elapsed_ms"] >= request["elapsed_ms"]
+            and (
+                not isinstance(state["seq"], int)
+                or not isinstance(request["seq"], int)
+                or state["seq"] > request["seq"]
+            )
+        )
+        postcondition = _text(data.get("postcondition", "inventory"), 40)
+        inventory_verified = bool(
+            linked
+            and postcondition == request["postcondition"] == "inventory"
+            and inventory.get(item, 0) >= target
+            and state["inventory_counts"].get(item, 0) >= target
+        )
+        expected_dimension = _text(data.get("expected_dimension"), 100) or None
+        dimension = _text(data.get("dimension"), 100) or None
+        dimension_verified = bool(
+            linked
+            and postcondition == request["postcondition"] == "dimension"
+            and item == "minecraft:nether_portal"
+            and expected_dimension == "minecraft:the_nether"
+            and expected_dimension == request["expected_dimension"]
+            and dimension == expected_dimension == state["dimension"]
+            and state["world_ready"] is True
+            and state["cache_age_ms"] is not None
+            and 0 <= state["cache_age_ms"] <= 1000
+            and state["player_health"] is not None
+            and state["player_health"] > 0
+        )
+        result = {
+            "candidate_id": candidate,
+            "seq": seq,
+            "elapsed_ms": elapsed,
+            "status": "completed" if kind == "skill_completed" else "failed",
+            "request_seq": request["seq"] if request else None,
+            "item": item,
+            "target_count": _number(target),
+            "inventory_count": inventory.get(item, 0),
+            "postcondition": postcondition,
+            "inventory_verified": inventory_verified,
+            "dimension_verified": dimension_verified,
+            "postcondition_verified": inventory_verified or dimension_verified,
+            "expected_dimension": expected_dimension,
+            "dimension": dimension,
+            "state_ref": state,
+            "reason": _text(data.get("reason")),
+        }
+        self.outcomes.append(result)
+        if request:
+            request["outcome"] = result
+
+    def report(self) -> dict:
+        statuses = Counter(ack["status"] for ack in self.acks.values())
+        return {
+            "requests": len(self.requests),
+            "dispatched": sum(item["dispatched_ms"] is not None for item in self.requests),
+            "acknowledged": len(self.acks),
+            "accepted_acks": statuses["accepted"],
+            "already_satisfied_acks": statuses["completed"],
+            "rejected_acks": statuses["rejected"],
+            "duplicate_acks": self.duplicate_acks,
+            "conflicting_acks": self.conflicting_acks,
+            "orphan_acks": sum(ack["request_seq"] is None for ack in self.acks.values()),
+            "completion_events": sum(item["status"] == "completed" for item in self.outcomes),
+            "completed": sum(item["postcondition_verified"] for item in self.outcomes),
+            "inventory_verified": sum(item["inventory_verified"] for item in self.outcomes),
+            "dimension_verified": sum(item["dimension_verified"] for item in self.outcomes),
+            "unverified_completions": sum(
+                item["status"] == "completed" and not item["postcondition_verified"]
+                for item in self.outcomes
+            ),
+            "failed": sum(item["status"] == "failed" for item in self.outcomes),
+            "duplicate_outcomes": self.duplicate_outcomes,
+            "orphan_outcomes": sum(item["request_seq"] is None for item in self.outcomes),
+            "unacknowledged_requests": sum(item["ack"] is None for item in self.requests),
+            "unresolved_requests": sum(
+                item["outcome"] is None
+                and (item["ack"] is None or item["ack"]["status"] != "rejected")
+                for item in self.requests
+            ),
+            "outcome_samples": self.outcomes[:25],
+            "unacknowledged_samples": [
+                {key: item[key] for key in ("seq", "id", "candidate_id", "skill", "item")}
+                for item in self.requests
+                if item["ack"] is None
+            ][:25],
+        }
+
+
 def analyze_run(path: Path) -> dict:
     """Analyze one run directory or events.jsonl file without reading images.
 
@@ -262,17 +516,22 @@ def analyze_run(path: Path) -> dict:
         "oversized_strings_omitted": 0,
         "oversized_records_skipped": 0,
         "duplicate_sequences": 0,
+        "duplicate_model_records": 0,
         "summary_error": summary_error,
     }
     event_counts: Counter = Counter()
     seen_sequences: set = set()
     frames: dict[str, dict] = {}
+    states: dict[str, dict] = {}
+    skills = _SkillJournal()
     requests: list[dict] = []
     request_by_seq: dict[Any, dict] = {}
     request_by_id: dict[str, dict] = {}
     acks: dict[str, dict] = {}
     calls: list[dict] = []
     latest_call: dict[str, dict] = {}
+    active_call_ids: dict[str, str] = {}
+    transport_calls: dict[str, dict] = {}
     legacy_decisions: list[dict] = []
     veto_records: list[dict] = []
     latest_veto: dict | None = None
@@ -385,6 +644,58 @@ def analyze_run(path: Path) -> dict:
                 "sha256": _text(data.get("sha256"), 64),
                 "frame_url": _text(data.get("frame_url"), 500),
             }
+        elif kind == "game_state":
+            identifier = _text(data.get("id"), 200)
+            if identifier:
+                states[identifier] = {
+                    "id": identifier,
+                    "seq": seq,
+                    "elapsed_ms": elapsed,
+                    "tick": _number(data.get("tick")),
+                    "path": _text(data.get("path"), 500),
+                    "sha256": _text(data.get("sha256"), 64),
+                    "inventory_counts": _inventory_counts(data.get("inventory")),
+                    "world_ready": data.get("world_ready") is True,
+                    "cache_age_ms": _number(data.get("cache_age_ms")),
+                    "sampled_at_ms": _number(data.get("sampled_at_ms")),
+                    "dimension": _text(data.get("dimension"), 100) or None,
+                    "player_health": _number(data.get("player", {}).get("health"))
+                    if isinstance(data.get("player"), dict)
+                    else None,
+                    "verified_steps": _portal_steps(data.get("skill", {}).get("verified_steps"))
+                    if isinstance(data.get("skill"), dict)
+                    else [],
+                }
+        elif kind == "model_request":
+            provider = _text(data.get("provider", "unknown"), 100).lower()
+            active_call_ids[provider] = _text(data.get("call_id"), 200)
+            # A new HTTP request separates calls even if their rounded latencies match.
+            latest_call.pop(provider, None)
+        elif kind in {"model_response", "model_error", "model_cancelled"}:
+            provider = _text(data.get("provider", "unknown"), 100).lower()
+            identifier = _text(data.get("call_id"), 200)
+            if identifier:
+                transport_calls[identifier] = {
+                    "provider": provider,
+                    "latency_ms": _number(data.get("latency_ms")),
+                    "usage": _usage(data),
+                    "elapsed_ms": elapsed,
+                    "seq": seq,
+                    "source": kind,
+                    "raw_seq": None,
+                    "error": kind != "model_response"
+                    or (_number(data.get("http_status")) or 0) >= 400,
+                    "model": _text(data.get("model"), 200),
+                    "simulated": bool(data.get("simulated")) or summary.get("mode") == "demo",
+                    "call_id": identifier,
+                    "candidate_id": None,
+                }
+                active_call_ids[provider] = identifier
+        elif kind == "strategy_fallback":
+            provider = _text(data.get("provider", "unknown"), 100).lower()
+            failed = transport_calls.get(active_call_ids.get(provider, ""))
+            if failed:
+                failed["error"] = True
         elif kind in {"model_call", "inference_metrics", "decision"}:
             provider = _text(data.get("provider", "unknown"), 100).lower()
             call = {
@@ -398,12 +709,48 @@ def analyze_run(path: Path) -> dict:
                 "error": bool(data.get("error")),
                 "model": _text(data.get("model"), 200),
                 "simulated": bool(data.get("simulated")) or summary.get("mode") == "demo",
+                "call_id": _text(data.get("call_id"), 200) or active_call_ids.get(provider),
+                "candidate_id": _text(data.get("candidate_id"), 200) or None,
             }
+            previous = latest_call.get(provider)
+            same_identity = (
+                previous and previous["call_id"] and previous["call_id"] == call["call_id"]
+            )
+            same_latency = (
+                previous
+                and call["latency_ms"] is not None
+                and previous["latency_ms"] == call["latency_ms"]
+                and not (
+                    previous["call_id"]
+                    and call["call_id"]
+                    and previous["call_id"] != call["call_id"]
+                )
+            )
+            pair = previous and (
+                same_identity or (same_latency and 0 <= elapsed - previous["elapsed_ms"] <= 2000)
+            )
             if kind == "decision":
                 legacy_decisions.append(call)
             elif kind == "model_call":
-                calls.append(call)
-                latest_call[provider] = call
+                if (
+                    pair
+                    and previous["source"] == "inference_metrics"
+                    and previous["raw_seq"] is None
+                ):
+                    # The skill loop records metrics first; retain that sample once
+                    # while enriching it with the actual raw selection/error metadata.
+                    previous.update(
+                        raw_seq=seq,
+                        error=call["error"],
+                        model=call["model"],
+                        candidate_id=call["candidate_id"],
+                        call_id=previous["call_id"] or call["call_id"],
+                    )
+                    if not previous["usage"]["reported"]:
+                        previous["usage"] = call["usage"]
+                else:
+                    calls.append(call)
+                    latest_call[provider] = call
                 reason = _text(data.get("error"))
                 if provider.startswith("jev") and any(
                     word in reason.lower()
@@ -417,12 +764,10 @@ def analyze_run(path: Path) -> dict:
                     }
                     veto_records.append(latest_veto)
             else:
-                previous = latest_call.get(provider)
-                # Current journals emit metrics after the matching model_call. A
-                # crash may leave one unpaired raw call; retain that call once.
-                same_latency = previous and previous["latency_ms"] == call["latency_ms"]
-                if previous and previous["source"] == "model_call" and same_latency:
+                # The visual loop records raw calls first. Consume each pair once.
+                if pair and previous["source"] == "model_call":
                     previous.update(source="inference_metrics", elapsed_ms=elapsed, seq=seq)
+                    previous["call_id"] = previous["call_id"] or call["call_id"]
                     if call["usage"]["reported"]:
                         previous["usage"] = call["usage"]
                 else:
@@ -448,6 +793,12 @@ def analyze_run(path: Path) -> dict:
                         "source": "recovery",
                     }
                     veto_records.append(latest_veto)
+        elif kind == "skill_started":
+            skills.start(seq, elapsed, data)
+        elif kind == "bridge_command" and data.get("type") == "skill":
+            skills.dispatch(seq, elapsed, data)
+        elif kind in {"skill_completed", "skill_failed"}:
+            skills.finish(kind, seq, elapsed, data, states)
         elif kind == "action":
             make_request(event, data, False)
         elif kind == "bridge_command" and data.get("type") == "action":
@@ -473,11 +824,20 @@ def analyze_run(path: Path) -> dict:
             request["id"] = packet_id
             if packet_id:
                 request_by_id[packet_id] = request
-        elif kind in _ACK_TYPES:
+        elif kind in _ACK_TYPES or kind == "skill_ack":
             packet = data.get("ack", data.get("message", data))
-            if not isinstance(packet, dict) or packet.get("status") not in _TERMINAL:
+            if not isinstance(packet, dict):
                 continue
             packet_id = _text(packet.get("id"), 200)
+            if (
+                kind == "skill_ack"
+                or packet.get("type") == "skill_ack"
+                or packet_id in skills.by_id
+            ):
+                skills.acknowledge(seq, elapsed, packet)
+                continue
+            if packet.get("status") not in _TERMINAL:
+                continue
             request = request_by_id.get(packet_id) if packet_id else None
             action_seq = packet.get("action_seq")
             if request is None and isinstance(action_seq, (str, int)):
@@ -524,12 +884,58 @@ def analyze_run(path: Path) -> dict:
                     "evidence": _text(data.get("evidence"), 2000),
                     "frame_id": _text(data.get("frame_id"), 200),
                     "verification": _text(data.get("verification", "unverified_model_claim"), 100),
+                    "state_id": _text(data.get("state_id"), 200) or None,
+                    "tick": _number(data.get("tick")),
+                    "state_inventory_evidence": _inventory_counts(
+                        data.get("evidence", {}).get("inventory")
+                    )
+                    if isinstance(data.get("evidence"), dict)
+                    else None,
+                    "state_dimension_evidence": _text(
+                        data.get("evidence", {}).get("dimension"), 100
+                    )
+                    if isinstance(data.get("evidence"), dict)
+                    else None,
+                    "state_steps_evidence": _portal_steps(data["evidence"]["verified_steps"])
+                    if isinstance(data.get("evidence"), dict)
+                    and "verified_steps" in data["evidence"]
+                    else None,
                     "source": "journal",
                 }
             )
 
     if not calls:
         calls = legacy_decisions
+    # Identity remains definitive when a copied record gets a new journal seq.
+    unique_calls: list[dict] = []
+    call_by_id: dict[str, dict] = {}
+    for call in calls:
+        identifier = call["call_id"]
+        previous = call_by_id.get(identifier) if identifier else None
+        if previous:
+            diagnostics["duplicate_model_records"] += 1
+            previous["error"] = previous["error"] or call["error"]
+            previous["candidate_id"] = previous["candidate_id"] or call["candidate_id"]
+            if not previous["usage"]["reported"]:
+                previous["usage"] = call["usage"]
+        else:
+            unique_calls.append(call)
+            if identifier:
+                call_by_id[identifier] = call
+    calls = unique_calls
+    represented = {call["call_id"] for call in calls if call["call_id"]}
+    for call in calls:
+        transport = transport_calls.get(call["call_id"])
+        if transport:
+            call["error"] = call["error"] or transport["error"]
+            call["elapsed_ms"] = transport["elapsed_ms"]
+            if call["latency_ms"] is None:
+                call["latency_ms"] = transport["latency_ms"]
+            if not call["usage"]["reported"]:
+                call["usage"] = transport["usage"]
+    # Rejected strategy parses, transport failures, cancellation, and crashes
+    # can have a complete HTTP journal without a higher-level model_call.
+    calls.extend(call for key, call in transport_calls.items() if key not in represented)
     duration = max(_number(summary.get("duration_ms")) or 0, last_elapsed)
     if active_loop is not None:
         loop_intervals.append(
@@ -565,6 +971,7 @@ def analyze_run(path: Path) -> dict:
         measured = [call["latency_ms"] for call in group if call["latency_ms"] is not None]
         providers[provider] = {
             "calls": len(group),
+            "skill_selections": sum(call["candidate_id"] is not None for call in group),
             "simulated_calls": sum(call["simulated"] for call in group),
             "recorded_error_calls": sum(call["error"] for call in group),
             "sources": dict(Counter(call["source"] for call in group)),
@@ -654,6 +1061,24 @@ def analyze_run(path: Path) -> dict:
                         "verification": _text(
                             milestone.get("verification", "unverified_model_claim"), 100
                         ),
+                        "state_id": _text(milestone.get("state_id"), 200) or None,
+                        "tick": _number(milestone.get("tick")),
+                        "state_inventory_evidence": _inventory_counts(
+                            milestone.get("evidence", {}).get("inventory")
+                        )
+                        if isinstance(milestone.get("evidence"), dict)
+                        else None,
+                        "state_dimension_evidence": _text(
+                            milestone.get("evidence", {}).get("dimension"), 100
+                        )
+                        if isinstance(milestone.get("evidence"), dict)
+                        else None,
+                        "state_steps_evidence": _portal_steps(
+                            milestone["evidence"]["verified_steps"]
+                        )
+                        if isinstance(milestone.get("evidence"), dict)
+                        and "verified_steps" in milestone["evidence"]
+                        else None,
                         "source": "summary",
                     }
                 )
@@ -661,6 +1086,66 @@ def analyze_run(path: Path) -> dict:
         frame = frames.get(milestone["frame_id"])
         milestone["observation_ref"] = frame
         milestone["independently_verified"] = False
+        milestone["state_ref"] = states.get(milestone["state_id"])
+        milestone["state_evidence_correlated"] = bool(
+            milestone["state_ref"]
+            and (milestone["tick"] is None or milestone["tick"] == milestone["state_ref"]["tick"])
+            and milestone["state_inventory_evidence"] is not None
+            and milestone["state_inventory_evidence"] == milestone["state_ref"]["inventory_counts"]
+        )
+        dimension = milestone["state_dimension_evidence"]
+        steps = milestone["state_steps_evidence"]
+        state = milestone["state_ref"]
+        if milestone["id"] == "nether" or dimension:
+            milestone["state_evidence_correlated"] = bool(
+                milestone["state_evidence_correlated"]
+                and dimension == state["dimension"]
+                and (milestone["id"] != "nether" or dimension == "minecraft:the_nether")
+                and _ready_milestone_state(milestone, state)
+            )
+        if milestone["id"] in _PORTAL_STEPS:
+            name = milestone["id"]
+            inventory = state["inventory_counts"] if state else {}
+            held_resource = (
+                name == "obsidian_acquired" and inventory.get("minecraft:obsidian", 0) > 0
+            ) or (
+                name == "ignition_acquired"
+                and any(
+                    inventory.get(item, 0) > 0
+                    for item in ("minecraft:fire_charge", "minecraft:flint_and_steel")
+                )
+            )
+            recorded_step = bool(
+                state and name in state["verified_steps"] and name in (steps or [])
+            )
+            milestone["state_evidence_correlated"] = bool(
+                milestone["state_evidence_correlated"]
+                and _ready_milestone_state(milestone, state)
+                and (held_resource or recorded_step)
+            )
+            milestone["portal_step_evidence"] = (
+                None
+                if not milestone["state_evidence_correlated"]
+                else "current_inventory"
+                if held_resource
+                else "client_verified_step"
+                if recorded_step
+                else None
+            )
+        if milestone["verification"] == "game_state":
+            # Table confirmation can refer to a placed table, not an inventory
+            # stack. Preserve controller provenance without pretending to replay
+            # its complete geometry checks from the bounded journal metadata.
+            milestone["evidence"] = {"inventory": milestone["state_inventory_evidence"] or {}}
+            if dimension:
+                milestone["evidence"]["dimension"] = dimension
+            if steps is not None:
+                milestone["evidence"]["verified_steps"] = steps
+        milestone.pop("state_inventory_evidence")
+        milestone.pop("state_dimension_evidence")
+        milestone.pop("state_steps_evidence")
+    state_milestones = [item for item in milestones if item["verification"] == "game_state"]
+    model_milestones = [item for item in milestones if item["verification"] != "game_state"]
     model_wait = _union_ms(model_intervals, duration)
     action_wait = _union_ms(action_intervals, duration)
     accounted = _union_ms(model_intervals + action_intervals, duration)
@@ -673,14 +1158,24 @@ def analyze_run(path: Path) -> dict:
             "status": _text(summary.get("status", "unknown"), 50),
             "started_at": _text(summary.get("started_at"), 100),
             "operator_declared_seed": _text(config.get("operator_declared_seed"), 100) or None,
+            "gameplay_mode": _text(config.get("gameplay_mode", "legacy_or_unspecified"), 50),
         },
         "facts": {
             "journal": diagnostics,
             "event_counts": dict(event_counts),
             "observations": event_counts["observation"],
+            "state_observations": event_counts["game_state"],
             "recoveries": event_counts["recovery"],
+            "strategy_fallbacks": event_counts["strategy_fallback"],
             "error_events": event_counts["error"],
             "providers": providers,
+            "skills": skills.report(),
+            "state_confirmed_milestones": [
+                item for item in state_milestones if item["state_evidence_correlated"]
+            ],
+            "uncorroborated_state_milestones": [
+                item for item in state_milestones if not item["state_evidence_correlated"]
+            ],
             "actions": {
                 "requests": len(requests),
                 "dispatched": sum(item["dispatched_ms"] is not None for item in requests),
@@ -751,15 +1246,18 @@ def analyze_run(path: Path) -> dict:
                     for reason, count in veto_counts.most_common()
                 ],
             },
-            "milestones": milestones,
+            "milestones": model_milestones,
         },
         "interpretation": [
-            "ACKs confirm control execution, not gameplay progress. Milestones and veto reasons are model claims; screenshots were not inspected.",
+            "Raw action ACKs confirm input execution, not gameplay progress. Skill ACKs are separate request acknowledgments and do not establish skill completion.",
+            "Completed skill counts require a matching skill_completed event and post-start game_state: inventory skills meet their requested target in both records; dimension skills match the requested dimension in a ready world with a live player. Missing or contradictory evidence remains unverified.",
+            "Game-state milestones preserve recorded controller verification with matching linked state inventory and, for Nether entry, ready-world dimension evidence; full snapshots and the world were not independently revalidated. Model claims and missing or contradictory evidence remain separate; screenshots were not inspected.",
+            "Portal substeps require matching step identifiers in milestone evidence and the linked ready/live client state; obsidian and ignition acquisition may instead use current inventory. Retained client verification can record an earlier acquisition after items were consumed; model response flags are not evidence.",
             "Identical actions or images are patterns, not proof of being stuck; mining and deliberate waiting may be valid.",
             "Model wait is inferred from recorded latency ending at the call event. Command windows include scheduling and acknowledgment overhead.",
             "Tick execution uses nominal 20 TPS and may differ from wall time. Unattributed time includes observations, pauses, idle time, logging, and unresolved commands.",
             "Active loop intervals use explicit start/resume and stop/error events. Open intervals are lower bounds ending at the last journal event, not the archive checkpoint; post-stop inspection is separate.",
-            "Exact call metrics prefer inference_metrics paired to model_call by provider/order/latency; unpaired calls survive crashes. Decision metrics are a legacy fallback only.",
+            "Exact call metrics pair inference_metrics and model_call in either order, once, by request identity or provider/order/measured latency. New model_request events separate calls; missing latency alone is not a match. Decision metrics are a legacy fallback only.",
         ],
     }
 
@@ -771,6 +1269,7 @@ def compare_runs(paths: list[Path]) -> dict:
     analyses = [analyze_run(Path(path)) for path in paths]
     metrics: dict[str, list] = defaultdict(list)
     milestone_ids = []
+    state_milestone_ids = []
     for analysis in analyses:
         facts = analysis["facts"]
         metrics["duration_ms"].append(facts["timing"]["recorded_duration_ms"])
@@ -778,8 +1277,12 @@ def compare_runs(paths: list[Path]) -> dict:
         metrics["post_stop_inspection_ms"].append(facts["timing"]["post_stop_inspection_ms"])
         for key in ("completed", "rejected", "cancelled", "unacknowledged_requests"):
             metrics[f"actions_{key}"].append(facts["actions"][key])
+        for key in ("completed", "failed", "unverified_completions", "unacknowledged_requests"):
+            metrics[f"skills_{key}"].append(facts["skills"][key])
         for key in ("observations", "recoveries", "error_events"):
             metrics[key].append(facts[key])
+        metrics["state_observations"].append(facts["state_observations"])
+        metrics["state_confirmed_milestones"].append(len(facts["state_confirmed_milestones"]))
         for key in ("input_tokens", "output_tokens", "total_tokens"):
             metrics[key].append(
                 sum(provider["usage"][key] for provider in facts["providers"].values())
@@ -788,6 +1291,9 @@ def compare_runs(paths: list[Path]) -> dict:
         for milestone in analysis["model_claims"]["milestones"]:
             if milestone["id"] not in milestone_ids:
                 milestone_ids.append(milestone["id"])
+        for milestone in facts["state_confirmed_milestones"]:
+            if milestone["id"] not in state_milestone_ids:
+                state_milestone_ids.append(milestone["id"])
     seeds = [analysis["run"]["operator_declared_seed"] for analysis in analyses]
     return {
         "schema_version": 1,
@@ -816,12 +1322,31 @@ def compare_runs(paths: list[Path]) -> dict:
             }
             for identifier in milestone_ids
         ],
+        "state_confirmed_milestones": [
+            {
+                "id": identifier,
+                "runs": [
+                    next(
+                        (
+                            item
+                            for item in analysis["facts"]["state_confirmed_milestones"]
+                            if item["id"] == identifier
+                        ),
+                        None,
+                    )
+                    for analysis in analyses
+                ],
+            }
+            for identifier in state_milestone_ids
+        ],
         "comparability": {
             "same_mode": len({analysis["run"]["mode"] for analysis in analyses}) == 1,
+            "same_gameplay_mode": len({analysis["run"]["gameplay_mode"] for analysis in analyses})
+            == 1,
             "same_declared_seed": len(set(seeds)) == 1 if all(seeds) else None,
             "independently_verified_outcomes": False,
         },
         "notes": [
-            "Values are recorded evidence, not a benchmark ranking. Modes, world conditions, pause time, and unverified milestone claims affect comparisons."
+            "Values are recorded evidence, not a benchmark ranking. Gameplay modes, world conditions, pause time, and evidence quality affect comparisons. Raw completed actions and postcondition-verified skills are separate measures."
         ],
     }

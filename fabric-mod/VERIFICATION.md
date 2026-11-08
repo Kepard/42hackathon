@@ -55,3 +55,49 @@ HUD are not evidence of successful mining by themselves.
 A subsequent [autonomous compact-planning trial](../docs/verification.md#compact-planning-and-exact-jev-continuation)
 did visibly break a birch log through the same 80-tick control path. That separate
 result demonstrates block breaking, while collected wood remains unverified.
+
+
+## State-aware skills and stone tools
+
+The user later approved structured client state and normal interaction APIs.
+The bounded state sampler, recipe interactions, optional Baritone 1.11.3 mining,
+world-scoped table memory, and operator `arm` protocol were compiled and tested.
+The first live mining attempt exposed a render-thread deadlock in Baritone's
+block-drop lookup. Immutable lookup construction now runs on a daemon worker;
+only the prepared lookup is passed to the mining process on the client thread.
+Cancellation discards late preparation results without issuing controls.
+
+The actual state-aware trial `20261108T093147-8080fe49` completed six skills:
+three birch logs, twelve planks, a crafting table, eight sticks, a wooden pickaxe,
+and six cobblestone. Each result was verified from inventory. Mining ended at
+y=52, while the previously placed table was at y=67, leaving the original
+planner without a reachable table.
+
+After bounded loaded-chunk table rediscovery and normal Baritone return were
+implemented, continuation run `20261108T094549-4c23f633` returned from y=52 to
+y=66 and crafted both a stone pickaxe and a stone axe. The controller verified
+both in inventory: two skills, zero failures, 25.540 seconds. The operator
+`arm` and API start flow also worked. Screenshot evidence was saved at
+`/tmp/holospeed-stone-tools.png`. This was a continuation of the earlier six
+skills, not a fresh complete eight-skill run.
+
+## Ruined portal implementation
+
+The latest artifact compiles and remaps successfully with all 64 JUnit tests
+passing. It adds the seed-specific ruined portal route documented in
+[SKILL_PROTOCOL.md](SKILL_PROTOCOL.md), using normal navigation, chest clicks,
+owned-item placement, ignition, and portal dwell. Six intermediate milestones
+are derived from observed geometry, server-confirmed inventory gains, and
+actual portal blocks. Nether entry requires the actual Nether dimension.
+
+Chest verification uses a read-only client network mixin to observe when a full
+server inventory packet has been applied. The helper normally reopens the chest
+and waits for a new packet before confirming a loot gain. It does not assume
+loot-table contents or infer success from client prediction alone.
+
+This new portal workflow has not yet completed live validation. Its geometry,
+request validation, inventory synchronization identity tracking, and existing
+control lifecycle tests pass; the actual route, new mixin startup, placement,
+and dimension transition still need the next Minecraft trial. A separate
+normal-mechanics furnace helper also compiles and passes seven focused tests,
+but it is not exposed as an executable capability or used by this route.

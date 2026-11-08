@@ -2,6 +2,8 @@ package ai.holospeed.client;
 
 import ai.holospeed.client.mixin.KeyBindingAccessor;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonNull;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -9,6 +11,10 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.GameMenuScreen;
+import net.minecraft.client.gui.screen.ingame.CraftingScreen;
+import net.minecraft.client.gui.screen.ingame.InventoryScreen;
+import net.minecraft.screen.AbstractRecipeScreenHandler;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.util.InputUtil;
@@ -30,7 +36,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** A client-only, visual-only bridge. Every game interaction runs on the client thread. */
+/** A client-only controls and observations bridge. Game access stays on the client thread. */
 public final class HoloSpeedClient implements ClientModInitializer {
     private static final Logger LOGGER = LoggerFactory.getLogger("holospeed");
     private static volatile Set<String> syntheticKeys = Set.of();
@@ -39,9 +45,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
         Thread thread = new Thread(r, "holospeed-image-encoder"); thread.setDaemon(true); return thread;
     });
     private final Set<String> seenActions = new LinkedHashSet<>();
+    private final GameStateCollector gameState = new GameStateCollector();
+    private final SkillInputTelemetry skillInputs = new SkillInputTelemetry();
     private MinecraftClient client;
     private BridgeConfig config;
     private BridgeTransport bridge;
+    private SkillController skills;
     private KeyBinding emergency;
     private KeyBinding startKey;
     private Map<String, KeyBinding> bindings;
@@ -59,6 +68,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
     private long actionEnd;
     private long actionDeadline;
     private Object actionWorld;
+    private Object skillWorld;
+    private long skillDeadline;
+    private String pendingArm;
+    private long armDeadline;
+    private Object armWorld;
+    private Object armPlayer;
     private boolean longAttack;
 
     @Override public void onInitializeClient() {
@@ -82,6 +97,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
             Map.entry("sprint", client.options.sprintKey), Map.entry("attack", client.options.attackKey),
             Map.entry("use", client.options.useKey), Map.entry("inventory", client.options.inventoryKey),
             Map.entry("drop", client.options.dropKey), Map.entry("swap", client.options.swapHandsKey));
+        skills = new SkillController(client);
         bridge = new BridgeTransport(config, message -> client.execute(() -> receive(message)),
             () -> client.execute(() -> { cancel("bridge disconnected"); pendingObservation = null; frameId = null; }));
         instance = this;
@@ -90,11 +106,20 @@ public final class HoloSpeedClient implements ClientModInitializer {
     public static void renderTail() {
         HoloSpeedClient self = instance;
         if (self == null) return;
+        self.pollArm();
         self.watchdog();
         // Full vanilla frame, including inventory screens, but no HoloSpeed overlay.
         if (self.pendingObservation != null && !self.encoding) self.capture();
         DrawContext context = new DrawContext(self.client, self.client.getBufferBuilders().getEntityVertexConsumers());
-        if (self.client.player != null) HoloHud.render(context, self.client, self.status, syntheticKeys, self.bridge.connected(), self.enabled);
+        if (self.client.player != null) {
+            JsonObject display = self.status.deepCopy();
+            if (self.skills.active()) {
+                JsonObject skill = self.skills.snapshot();
+                display.addProperty("event", "LOCAL " + skill.get("kind").getAsString().toUpperCase(java.util.Locale.ROOT)
+                    + " / " + skill.get("phase").getAsString().replace('_', ' '));
+            }
+            HoloHud.render(context, self.client, display, self.heldInputs(), self.bridge.connected(), self.enabled);
+        }
         context.draw();
     }
 
@@ -105,7 +130,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
 
     private void onTick() {
         tick++;
+        pollArm();
         watchdog();
+        boolean skillWasActive = skills.active();
+        try { skills.tick(); }
+        catch (RuntimeException error) { cancel("skill tick failed"); event("skill_error", error.getClass().getSimpleName()); }
+        if (skillWasActive && !skills.active()) frameId = null;
         if (actionId != null && tick >= actionEnd) complete();
         if (!bridge.connected() && System.nanoTime() >= reconnectAt) {
             reconnectAt = System.nanoTime() + 5_000_000_000L;
@@ -131,6 +161,14 @@ public final class HoloSpeedClient implements ClientModInitializer {
     }
 
     private void watchdog() {
+        if (skills != null && skills.active() && (!enabled || !bridge.connected()
+            || (!skills.permitsWorldTransition() && (client.player == null || client.world != skillWorld))
+            || (client.player != null && !client.player.isAlive())
+            || client.isPaused() || !client.isWindowFocused() || System.nanoTime() > skillDeadline)) {
+            cancel(System.nanoTime() > skillDeadline ? "skill wall-clock deadline reached"
+                : "skill focus, connection, or world changed");
+            frameId = null;
+        }
         if (actionId == null) return;
         if (!enabled || !bridge.connected() || client.player == null || client.world != actionWorld
             || !client.player.isAlive() || client.isPaused() || !client.isWindowFocused()
@@ -149,6 +187,13 @@ public final class HoloSpeedClient implements ClientModInitializer {
                     pendingObservation = message.get("id").getAsString();
                 }
                 case "action" -> accept(message);
+                case "state" -> {
+                    JsonObject response = gameState.reply(client, tick, GameStateCache.requestId(message));
+                    response.add("skill", skillSnapshot());
+                    bridge.send(response);
+                }
+                case "skill" -> startSkill(message);
+                case "arm" -> arm(message);
                 case "stop" -> { cancel("controller stop"); pendingObservation = null; frameId = null; }
                 case "status" -> status = message.deepCopy();
                 default -> event("protocol_error", "unknown message type");
@@ -163,6 +208,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         String id = message.has("id") ? message.get("id").getAsString() : "unknown";
         try {
             if (!enabled) throw new IllegalArgumentException("F8 safety latch is off");
+            if (skills.active()) throw new IllegalArgumentException("skill owns game inputs");
             if (actionId != null) throw new IllegalArgumentException("action already running");
             if (seenActions.contains(id)) throw new IllegalArgumentException("duplicate action");
             seenActions.add(id);
@@ -232,6 +278,114 @@ public final class HoloSpeedClient implements ClientModInitializer {
         }
     }
 
+    private void startSkill(JsonObject message) {
+        String id = message.has("id") && message.get("id").isJsonPrimitive()
+            ? message.get("id").getAsString() : "unknown";
+        boolean startAttempted = false;
+        try {
+            if (!enabled) throw new IllegalArgumentException("F8 safety latch is off");
+            if (actionId != null || pendingObservation != null || encoding) throw new IllegalArgumentException("game bridge busy");
+            if (skills.active()) throw new IllegalArgumentException("skill already running");
+            if (client.player == null || client.world == null || !client.player.isAlive()
+                || client.isPaused() || !client.isWindowFocused()) throw new IllegalArgumentException("world unavailable or not focused");
+            release();
+            startAttempted = true;
+            JsonObject response = skills.start(message);
+            if (skills.active()) {
+                skillWorld = client.world;
+                int maxTicks = ActionSpec.integer(skills.snapshot(), "max_ticks", 1200, 20, 1800);
+                skillDeadline = System.nanoTime() + (maxTicks * 50L + 2000) * 1_000_000;
+                frameId = null;
+            }
+            bridge.send(response);
+        } catch (RuntimeException error) {
+            if (startAttempted) skills.cancel("skill start failed");
+            JsonObject response = new JsonObject();
+            response.addProperty("type", "skill_ack");
+            response.addProperty("id", id);
+            response.addProperty("status", "rejected");
+            JsonObject snapshot = skills.snapshot();
+            response.add("skill_id", snapshot.get("skill_id"));
+            response.add("skill", snapshot);
+            String reason = error.getMessage() == null ? "invalid skill" : error.getMessage();
+            response.addProperty("reason", reason.substring(0, Math.min(300, reason.length())));
+            bridge.send(response);
+        }
+    }
+
+    private void arm(JsonObject message) {
+        String id = "unknown";
+        try {
+            id = GameStateCache.requestId(message);
+            if (id.isBlank() || id.length() > 128) throw new IllegalArgumentException("invalid arm request id");
+            cancel("operator start requested");
+            enabled = false;
+            pendingObservation = null;
+            frameId = null;
+            String rejection = armRejection();
+            if (rejection != null) { armAck(id, "rejected", rejection); return; }
+            if (client.currentScreen instanceof GameMenuScreen) client.currentScreen.close();
+            else if (client.currentScreen instanceof InventoryScreen || client.currentScreen instanceof CraftingScreen) {
+                client.player.closeHandledScreen();
+            }
+            pendingArm = id;
+            armWorld = client.world;
+            armPlayer = client.player;
+            armDeadline = System.nanoTime() + 2_000_000_000L;
+            // Minecraft updates isPaused during its next render pass. Never
+            // block this thread waiting for a just-closed pause menu to resume.
+            pollArm();
+        } catch (RuntimeException error) {
+            armAck(id, "rejected", error.getMessage() == null ? "could not arm controls" : error.getMessage());
+        }
+    }
+
+    private String armRejection() {
+        Screen screen = client.currentScreen;
+        ArmPolicy.ScreenKind kind = screen == null ? ArmPolicy.ScreenKind.NONE
+            : screen instanceof GameMenuScreen ? ArmPolicy.ScreenKind.PAUSE_MENU
+            : screen instanceof InventoryScreen || screen instanceof CraftingScreen ? ArmPolicy.ScreenKind.CRAFTING
+            : ArmPolicy.ScreenKind.OTHER;
+        boolean cursorEmpty = client.player != null && client.player.currentScreenHandler.getCursorStack().isEmpty();
+        boolean gridEmpty = true;
+        if (client.player != null && client.player.currentScreenHandler instanceof AbstractRecipeScreenHandler<?, ?> handler) {
+            for (int slot = 1; slot < handler.getCraftingSlotCount(); slot++) {
+                if (!handler.getSlot(slot).getStack().isEmpty()) { gridEmpty = false; break; }
+            }
+        }
+        return ArmPolicy.rejection(client.world != null && client.player != null,
+            client.player != null && client.player.isAlive(), client.isWindowFocused(), kind, cursorEmpty, gridEmpty);
+    }
+
+    private void pollArm() {
+        if (pendingArm == null) return;
+        String rejection = armRejection();
+        if (client.world != armWorld || client.player != armPlayer) rejection = "world or player changed while resuming";
+        if (rejection == null && System.nanoTime() > armDeadline) rejection = "game or input release did not become ready before arm deadline";
+        if (rejection != null) { rejectPendingArm(rejection); return; }
+        if (client.isPaused() || skills.active()) return;
+        String id = pendingArm;
+        pendingArm = null;
+        enabled = true;
+        gameState.invalidate();
+        armAck(id, "ready", null);
+    }
+
+    private void rejectPendingArm(String reason) {
+        String id = pendingArm;
+        pendingArm = null;
+        if (id != null) armAck(id, "rejected", reason);
+    }
+
+    private void armAck(String id, String result, String reason) {
+        JsonObject response = new JsonObject();
+        response.addProperty("type", "arm_ack");
+        response.addProperty("id", id);
+        response.addProperty("status", result);
+        response.addProperty("reason", reason == null ? null : reason.substring(0, Math.min(300, reason.length())));
+        bridge.send(response);
+    }
+
     private void release() {
         for (String key : syntheticKeys) {
             KeyBinding binding = bindings.get(key);
@@ -241,6 +395,35 @@ public final class HoloSpeedClient implements ClientModInitializer {
             }
         }
         syntheticKeys = Set.of();
+    }
+
+    private Set<String> heldInputs() {
+        Set<String> held = new LinkedHashSet<>(syntheticKeys);
+        for (String key : Set.of("forward", "back", "left", "right", "jump", "sneak", "sprint", "attack", "use")) {
+            if (bindings.get(key).isPressed()) held.add(key);
+        }
+        JsonObject skill = skills.snapshot();
+        if (skills.active() && (skill.get("kind").getAsString().equals("mine")
+            || skill.get("kind").getAsString().equals("portal")
+            || skill.get("phase").getAsString().equals("returning_table"))) {
+            Set<String> forced = skillInputs.read();
+            if (forced == null) return null;
+            held.addAll(forced);
+        }
+        held.retainAll(Set.of("forward", "back", "left", "right", "jump", "sneak", "sprint", "attack", "use"));
+        return Set.copyOf(held);
+    }
+
+    private JsonObject skillSnapshot() {
+        JsonObject snapshot = skills.snapshot();
+        Set<String> held = heldInputs();
+        if (held == null) snapshot.add("keys", JsonNull.INSTANCE);
+        else {
+            JsonArray keys = new JsonArray();
+            held.stream().sorted().forEach(keys::add);
+            snapshot.add("keys", keys);
+        }
+        return snapshot;
     }
 
     private void complete() {
@@ -254,6 +437,8 @@ public final class HoloSpeedClient implements ClientModInitializer {
         String id = actionId;
         long start = actionStart;
         release(); actionId = null;
+        rejectPendingArm(reason);
+        if (skills != null) skills.cancel(reason);
         if (id != null) ack(id, "cancelled", start, reason);
     }
 

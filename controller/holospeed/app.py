@@ -35,6 +35,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     if settings.mode not in {"demo", "live"}:
         raise ValueError("HOLOSPEED_MODE must be demo or live")
+    if settings.run_goal not in {"early_game", "nether"}:
+        raise ValueError("RUN_GOAL must be early_game or nether")
     bridge = GameBridge()
     engine = AgentEngine(settings, bridge)
 
@@ -88,8 +90,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/start")
     async def start():
         try:
+            if settings.mode == "live" and (engine.task is None or engine.task.done()):
+                await bridge.arm()
             await engine.start()
-        except ValueError as error:
+        except (ValueError, BridgeError) as error:
             raise HTTPException(409, str(error)) from error
         return {"ok": True}
 
@@ -196,6 +200,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         except ValueError as error:
                             engine.log("error", {"message": str(error)})
                     if message.get("name") in {"emergency_stop", "world_changed", "disconnected"}:
+                        if (
+                            message.get("name") == "world_changed"
+                            and engine.state["status"] == "running"
+                            and (engine.state.get("action") or {}).get("skill") == "portal"
+                        ):
+                            # The skill releases controls during normal portal transfer;
+                            # only a fresh Nether snapshot can confirm its postcondition.
+                            continue
                         # Pause cancels an outstanding action; process asynchronously so ACKs can drain.
                         await engine.pause(message.get("detail", "Game paused"))
                 else:

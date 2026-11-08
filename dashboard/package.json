@@ -1,0 +1,1 @@
+{"name":"holospeed-live-dashboard","private":true,"type":"module","scripts":{"build":"node scripts/build.mjs","test":"node worker/api.test.mjs && node tests/commands.test.mjs && node tests/video.test.mjs && node tests/ui.test.cjs"}}

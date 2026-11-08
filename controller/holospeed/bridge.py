@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from .game_state import GameState
 from .models import Action, Observation
 
 
@@ -49,7 +50,7 @@ class GameBridge:
         self.pending.clear()
 
     async def receive(self, message: dict[str, Any]) -> None:
-        if message.get("type") == "ack" and self.journal:
+        if message.get("type") in {"ack", "skill_ack"} and self.journal:
             self.journal("bridge_ack", message)
         if message.get("type") == "hello":
             if message.get("protocol") != 1 or message.get("minecraft") != "1.21.1":
@@ -112,6 +113,51 @@ class GameBridge:
             "cancelled",
         }:
             raise BridgeError("Invalid action acknowledgment")
+        return message
+
+    async def game_state(self) -> GameState:
+        message = await self.request({"type": "state"}, timeout=5)
+        if message.get("type") != "game_state":
+            raise BridgeError("The Fabric mod does not support structured game state")
+        state = GameState.model_validate(message)
+        if not state.is_fresh(time.time() * 1000):
+            raise BridgeError("Structured game state is stale")
+        return state
+
+    async def arm(self) -> None:
+        """Explicit operator start can rearm F8 and resume the pause menu."""
+        message = await self.request({"type": "arm"}, timeout=5)
+        if message.get("type") != "arm_ack" or message.get("status") != "ready":
+            raise BridgeError(str(message.get("reason") or "Minecraft cannot be armed"))
+
+    async def start_skill(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        if candidate.get("skill") not in {"mine", "craft", "portal"}:
+            raise BridgeError("Unsupported normal-mechanics skill")
+        packet = {key: candidate[key] for key in ("skill", "item", "target_count", "max_ticks")}
+        if type(packet["target_count"]) is not int or not 1 <= packet["target_count"] <= 64:
+            raise BridgeError("Invalid skill inventory target")
+        if type(packet["max_ticks"]) is not int or not 20 <= packet["max_ticks"] <= 1800:
+            raise BridgeError("Invalid skill deadline")
+        if packet["skill"] == "portal":
+            if packet["item"] != "minecraft:nether_portal" or packet["target_count"] != 1:
+                raise BridgeError("Invalid portal objective")
+            target = candidate.get("target")
+            if not isinstance(target, dict) or set(target) != {"x", "y", "z"}:
+                raise BridgeError("Portal requires a bounded landmark")
+            if any(type(value) is not int for value in target.values()) or not (
+                -64 <= target["y"] <= 320
+                and abs(target["x"]) <= 29_999_984
+                and abs(target["z"]) <= 29_999_984
+            ):
+                raise BridgeError("Invalid portal landmark")
+            packet["target"] = target.copy()
+        message = await self.request({"type": "skill", **packet}, timeout=5)
+        if message.get("type") != "skill_ack" or message.get("status") not in {
+            "accepted",
+            "completed",
+            "rejected",
+        }:
+            raise BridgeError("Invalid skill acknowledgment")
         return message
 
     async def stop(self, reason: str) -> None:

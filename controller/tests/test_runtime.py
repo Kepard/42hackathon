@@ -187,7 +187,9 @@ async def test_actual_demo_flow_produces_complete_replay_and_summary(tmp_path, m
 async def test_pause_during_inference_never_executes_late_result(tmp_path, suppress_cancellation):
     bridge = FakeBridge()
     engine = AgentEngine(
-        Settings(mode="live", runs_dir=tmp_path, holo_api_key="test-unused"),
+        Settings(
+            mode="live", gameplay_mode="visual", runs_dir=tmp_path, holo_api_key="test-unused"
+        ),
         bridge,
     )
     await engine.holo.aclose()
@@ -218,7 +220,13 @@ async def test_run_deadline_cancels_inference_without_executing_late_result(
 ):
     bridge = FakeBridge()
     engine = AgentEngine(
-        Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused", max_run_seconds=0.1),
+        Settings(
+            mode="live",
+            gameplay_mode="visual",
+            runs_dir=tmp_path,
+            holo_api_key="unused",
+            max_run_seconds=0.1,
+        ),
         bridge,
     )
     await engine.holo.aclose()
@@ -268,7 +276,13 @@ async def test_run_deadline_cancels_execution_and_releases_inputs_without_comple
 
     bridge = SlowBridge()
     engine = AgentEngine(
-        Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused", max_run_seconds=0.1),
+        Settings(
+            mode="live",
+            gameplay_mode="visual",
+            runs_dir=tmp_path,
+            holo_api_key="unused",
+            max_run_seconds=0.1,
+        ),
         bridge,
     )
 
@@ -315,7 +329,10 @@ async def test_run_deadline_cancels_execution_and_releases_inputs_without_comple
 
 async def test_holo_completion_claim_pauses_without_executing_an_action(tmp_path, monkeypatch):
     bridge = FakeBridge()
-    engine = AgentEngine(Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused"), bridge)
+    engine = AgentEngine(
+        Settings(mode="live", gameplay_mode="visual", runs_dir=tmp_path, holo_api_key="unused"),
+        bridge,
+    )
     calls = []
 
     async def completed_decision(observation, context):
@@ -368,7 +385,10 @@ async def test_close_preserves_terminal_error_in_summary_and_journal(tmp_path):
             raise BridgeError("Test bridge disconnected before capture")
 
     bridge = BrokenBridge()
-    engine = AgentEngine(Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused"), bridge)
+    engine = AgentEngine(
+        Settings(mode="live", gameplay_mode="visual", runs_dir=tmp_path, holo_api_key="unused"),
+        bridge,
+    )
     try:
         await engine.start()
         await asyncio.wait_for(engine.task, timeout=2)
@@ -396,7 +416,10 @@ async def test_disconnect_pause_preserves_error_before_finalizing_run(tmp_path, 
             raise BridgeError("Capture failed before the bridge disconnected")
 
     bridge = BrokenBridge()
-    engine = AgentEngine(Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused"), bridge)
+    engine = AgentEngine(
+        Settings(mode="live", gameplay_mode="visual", runs_dir=tmp_path, holo_api_key="unused"),
+        bridge,
+    )
     try:
         await engine.start()
         await asyncio.wait_for(engine.task, timeout=2)
@@ -448,6 +471,7 @@ async def test_holo_plan_executes_only_after_jev_validates_a_fresh_frame(tmp_pat
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -547,6 +571,7 @@ async def test_jev_rejection_prevents_all_actions_and_exhausts_recovery_budget(
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -635,6 +660,7 @@ async def test_repeated_rejections_require_jev_approval_before_one_shot_camera_s
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -740,6 +766,7 @@ async def test_completed_noop_replans_with_holo_instead_of_jev_continuation(
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -810,6 +837,7 @@ async def test_repeated_noops_record_unverified_feedback_and_stop_at_recovery_bu
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -887,6 +915,7 @@ async def test_provider_error_after_completed_action_does_not_blame_that_action(
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -956,6 +985,7 @@ async def test_completed_movement_resets_consecutive_veto_budget_but_retains_tot
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -1023,6 +1053,7 @@ async def test_camera_recovery_requires_new_consecutive_vetoes_after_completed_m
     engine = AgentEngine(
         Settings(
             mode="live",
+            gameplay_mode="visual",
             runs_dir=tmp_path,
             holo_api_key="unused-holo",
             jev_api_key="unused-jev",
@@ -1234,7 +1265,10 @@ async def test_engine_rejects_corrupt_observation_before_inference_or_action(tmp
     observation = frame()
     observation.image_base64 = base64.b64encode(b"bad frame").decode()
     bridge = FakeBridge(observation)
-    engine = AgentEngine(Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused"), bridge)
+    engine = AgentEngine(
+        Settings(mode="live", gameplay_mode="visual", runs_dir=tmp_path, holo_api_key="unused"),
+        bridge,
+    )
     await engine.holo.aclose()
     provider = WaitingProvider()
     engine.holo = provider

@@ -1,6 +1,6 @@
 # Gameplay plan and research
 
-HoloSpeed's first playable target is visual early-game progression: collect wood,
+HoloSpeed's first playable target is state-aware early-game progression: collect wood,
 craft a table, make a wooden pickaxe, then obtain stone tools. This is an acceptance
 target, not a claim that the initial implementation already completes it. A working
 bridge or synthetic demo does not establish autonomous Minecraft performance.
@@ -8,23 +8,25 @@ bridge or synthetic demo does not establish autonomous Minecraft performance.
 ## First milestone
 
 Use a documented fixed seed, survival mode, daylight start, and nearby wood and
-exposed stone. Save the seed and game/mod versions with the run. The planner must
-use screenshots and keyboard/mouse-equivalent actions; structured diagnostics must
-not silently become inventory, block, coordinate, or entity observations.
+exposed stone. Save the seed and game/mod versions with the run. The current mode
+explicitly uses structured inventory, coordinates, blocks, entities, and screenshots.
+Baritone handles navigation/mining/pickup, and normal recipe/interaction APIs
+handle crafting. See [architecture](architecture.md) and [setup](setup.md).
 
 | Stage | Expected behavior | Evidence required |
 | --- | --- | --- |
-| Wood | Locate a tree, approach it, aim, hold attack, collect dropped logs | Before/after frames and visible inventory or hotbar evidence |
-| Crafting table | Open inventory, craft planks and table, place table | GUI action acknowledgments and a frame showing the placed table |
-| Wooden pickaxe | Craft sticks and pickaxe through the table GUI | Screenshot showing the resulting item, not only a model assertion |
-| Stone tools | Reach stone, mine cobblestone, craft stone pickaxe | Visible result and linked executed actions |
+| Wood | Locate a tree, approach, mine continuously, collect dropped logs | Fresh player inventory counts, with linked state/frame evidence |
+| Crafting table | Craft planks and table; place/use it when needed | Actual inventory or reachable placed-table state |
+| Wooden pickaxe | Craft sticks and pickaxe with the correct crafting handler | Pickaxe in player inventory after ingredient consumption |
+| Stone tools | Reach stone, mine materials, craft a stone pickaxe and stone axe | Both tools in inventory, linked to skill outcomes |
 | Recovery | Encounter a deliberate obstruction or failed interaction, inspect, change approach | Failure reason, a distinct retry, and verified progress or a clear pause |
 | Operator control | Pause during movement/mining or disconnect the controller | All held inputs released within the bridge watchdog budget |
 
 Run the same scenario at least five times and report success count, completion
 time, human interventions, model latency percentiles, failed actions, and recovery
-outcomes. Then test multiple seeds before claiming generalized progress. Model
-milestone labels are hypotheses until their screenshot evidence is reviewed.
+outcomes. Then test multiple seeds before claiming generalized progress. Current
+milestones require state evidence; historical visual-mode labels remain model
+claims until their screenshot evidence is reviewed.
 
 ## Route progression
 
@@ -47,19 +49,21 @@ scenarios version-specific.
 
 ## Controls and latency
 
-Holo4 should ground objectives in the current screenshot and revise the plan.
-Jev can refine bounded actions using that plan. Local code owns tick timing,
-acknowledgments, expiry, and input release. Cloud inference latency must never
-determine how long a key remains pressed. One action is in flight at a time;
-late results must not overwrite a newer pause or plan.
+Holo4 chooses high-level strategy and revises it after blocked skills, using
+structured state and optional visual context. Jev selects among locally validated
+routine candidates. Local code owns navigation, tick timing, continuous mining,
+pickup, recipe interactions, acknowledgments, cancellation, and input release.
+Cloud inference latency must never determine how long a key remains pressed.
+One executor owns controls at a time; late replies cannot override a pause.
 
-Movement, camera rotation, and inventory manipulation need different semantics.
+The retained visual-control mode still has separate movement, camera, and GUI
+input semantics.
 World look uses relative yaw/pitch; GUI interactions use normalized cursor
 coordinates converted using the captured frame and current GUI dimensions.
 Begin with short movement bursts and bounded mining holds. These are tuning
-choices, not measured latency guarantees. The first protocol does not implement
-every human crafting gesture: advanced click-drag crafting and precise combat
-timing need dedicated in-game validation before they are advertised.
+choices, not measured latency guarantees. State mode uses normal recipe/slot
+interactions instead of timing screen coordinates for each ingredient. Precise
+combat and advanced speedrun techniques still need dedicated live validation.
 
 The core distinction is whether an action was requested, accepted, started, or
 completed. Log each stage. Avoid rewarding a request that never reached the mod.
@@ -69,25 +73,28 @@ invalidate old work. See [the bridge protocol](protocol.md).
 ## Recovery and memory
 
 Similar screenshots alone do not prove failure: successful mining keeps the
-camera nearly stationary. Compare repeated actions with their expected effects,
-elapsed time, visible changes, and previous failures. A recovery sequence is:
-release controls, inspect a fresh frame, change aim or position, retry within a
-small budget, then replan or pause. Repeated camera motion is also not evidence
-of objective progress.
+camera nearly stationary. Compare skill progress, path/distance changes, block
+updates, inventory deltas, elapsed time, and failure reasons. A recovery sequence
+is: cancel active work, inspect fresh state and frame, revise target or unmet
+prerequisite, retry within a small budget, then replan or pause. Rejected proposals
+are not physical failures, and camera motion is not resource acquisition.
 
 Keep concise failure notes attached to run, objective, and observation IDs, such
-as "two mining attempts produced no visible progress; try a closer position."
+as "mining reached the target, but the dropped item was not collected."
 Treat them as fallible observations. Persisting these notes is experience memory,
 not model-weight training or proof of general learning. Voyager's
 [iterative feedback and verified skill-library design](https://arxiv.org/abs/2305.16291)
-is useful inspiration; its code-based Minecraft control is a different capability
-from visual keyboard/mouse execution.
+is useful inspiration. Reuse reviewed skill/task patterns rather than its
+command-enabled research harness; no model-generated code executes in our loop.
 
 ## Reuse references
 
 | Project | Useful ideas | Boundary |
 | --- | --- | --- |
-| [CraftGround](https://github.com/yhs0602/CraftGround) | Fabric bridge, capture pipeline, human-style action space | GPL-3.0; do not copy code without handling its license. Its [action reference](https://yhs0602.github.io/CraftGround/action_space.html) is a useful comparison. |
+| [Baritone](https://github.com/cabaletta/baritone/releases/tag/v1.11.3) | Supported Fabric navigation, continuous mining, dropped-item pickup | Separate official 1.11.3 API JAR; LGPL-3.0 metadata, source headers v3-or-later. |
+| [AltoClef](https://github.com/gaucho-matrero/altoclef) | Survival task decomposition, inventory targets, prerequisites, recovery | MIT; upstream targets 1.18.2/custom Baritone, so it is a reference rather than a drop-in dependency. |
+| [Mineflayer](https://github.com/PrismarineJS/mineflayer) | Inventory-aware crafting and approach/mine/pickup patterns | MIT; a separate protocol bot backend, not the current Fabric player. |
+| [CraftGround](https://github.com/yhs0602/CraftGround) | Structured observation schema and evaluation | README, LICENSE, and package metadata conflict; no implementation copied. See [verified research](state-aware-research.md). |
 | [MineStudio](https://github.com/CraftJarvis/MineStudio) | Trajectory organization, callbacks, recording, crash recovery | MIT; its MineRL-based environment is not the custom Fabric bridge. |
 | [Fabric HUD documentation](https://docs.fabricmc.net/1.21.1/develop/rendering/hud) | Rendering the in-game presentation | Use documentation matching the game version; rendering APIs change. |
 

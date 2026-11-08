@@ -430,3 +430,28 @@ def test_verified_portal_steps_are_optional_bounded_unique_and_strictly_typed():
         payload["skill"]["verified_steps"] = invalid
         with pytest.raises(ValidationError):
             GameState.model_validate(payload)
+
+
+@pytest.mark.parametrize("kind", ["smelt", "cast_portal"])
+def test_from_scratch_skill_state_preserves_owned_furnace_and_verified_cast_steps(kind):
+    payload = sample()
+    payload["skill"] = {
+        "baritone_available": True,
+        "active": True,
+        "kind": kind,
+        "target_count": 1,
+        "inventory_count": 0,
+        "status": "running",
+        "phase": "working",
+        "elapsed_ticks": 30,
+        "max_ticks": 1800,
+        "known_furnace": {"x": 2, "y": 64, "z": -1},
+        "verified_steps": ["water_collected", "lava_located", "portal_built", "portal_lit"],
+    }
+    state = GameState.model_validate(payload)
+    assert state.skill.kind == kind
+    assert state.skill.known_furnace == BlockPos(x=2, y=64, z=-1)
+    assert state.skill.verified_steps == payload["skill"]["verified_steps"]
+    payload["skill"]["known_furnace"]["x"] = "2"
+    with pytest.raises(ValidationError):
+        GameState.model_validate(payload)

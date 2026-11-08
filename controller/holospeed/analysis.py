@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from .game_state import LOG_ITEMS, PLANK_ITEMS
 from .recording import redact
 
 _STRING_LIMIT = 8192
@@ -31,8 +32,25 @@ _PORTAL_STEPS = frozenset(
         "ignition_acquired",
         "portal_repaired",
         "portal_lit",
+        "water_collected",
+        "lava_located",
+        "portal_built",
     }
 )
+_INVENTORY_MILESTONES = {
+    "stone_pickaxe": {"minecraft:stone_pickaxe"},
+    "furnace": {"minecraft:furnace"},
+    "iron_mined": {"minecraft:raw_iron", "minecraft:iron_ore", "minecraft:deepslate_iron_ore"},
+    "iron_smelted": {"minecraft:iron_ingot"},
+    "bucket": {"minecraft:bucket", "minecraft:water_bucket", "minecraft:lava_bucket"},
+    "flint_and_steel": {"minecraft:flint_and_steel"},
+}
+_FROM_SCRATCH_INVENTORY_MILESTONES = {
+    **_INVENTORY_MILESTONES,
+    "wood": LOG_ITEMS | PLANK_ITEMS,
+    "crafting_table": {"minecraft:crafting_table"},
+    "wooden_pickaxe": {"minecraft:wooden_pickaxe"},
+}
 _ACTION_FIELDS = (
     "keys",
     "duration_ticks",
@@ -411,6 +429,16 @@ class _SkillJournal:
             and postcondition == request["postcondition"] == "inventory"
             and inventory.get(item, 0) >= target
             and state["inventory_counts"].get(item, 0) >= target
+            and (
+                request["skill"] != "smelt"
+                or state["skill_kind"] == "smelt"
+                and state["skill_status"] == "completed"
+                and state["world_ready"] is True
+                and state["cache_age_ms"] is not None
+                and 0 <= state["cache_age_ms"] <= 1000
+                and state["player_health"] is not None
+                and state["player_health"] > 0
+            )
         )
         expected_dimension = _text(data.get("expected_dimension"), 100) or None
         dimension = _text(data.get("dimension"), 100) or None
@@ -427,6 +455,12 @@ class _SkillJournal:
             and state["player_health"] is not None
             and state["player_health"] > 0
         )
+        full_frame_verified = bool(
+            dimension_verified
+            and request["skill"] == "cast_portal"
+            and state["skill_kind"] == "cast_portal"
+            and {"portal_built", "portal_lit"}.issubset(state["verified_steps"])
+        )
         result = {
             "candidate_id": candidate,
             "seq": seq,
@@ -434,12 +468,15 @@ class _SkillJournal:
             "status": "completed" if kind == "skill_completed" else "failed",
             "request_seq": request["seq"] if request else None,
             "item": item,
+            "skill": request["skill"] if request else None,
             "target_count": _number(target),
             "inventory_count": inventory.get(item, 0),
             "postcondition": postcondition,
             "inventory_verified": inventory_verified,
             "dimension_verified": dimension_verified,
-            "postcondition_verified": inventory_verified or dimension_verified,
+            "full_frame_verified": full_frame_verified,
+            "postcondition_verified": inventory_verified
+            or (dimension_verified and (request["skill"] != "cast_portal" or full_frame_verified)),
             "expected_dimension": expected_dimension,
             "dimension": dimension,
             "state_ref": state,
@@ -465,6 +502,7 @@ class _SkillJournal:
             "completed": sum(item["postcondition_verified"] for item in self.outcomes),
             "inventory_verified": sum(item["inventory_verified"] for item in self.outcomes),
             "dimension_verified": sum(item["dimension_verified"] for item in self.outcomes),
+            "full_frame_verified": sum(item["full_frame_verified"] for item in self.outcomes),
             "unverified_completions": sum(
                 item["status"] == "completed" and not item["postcondition_verified"]
                 for item in self.outcomes
@@ -636,6 +674,11 @@ def analyze_run(path: Path) -> dict:
                 active_loop = None
         if kind == "run_started" and not summary.get("mode"):
             summary["mode"] = data.get("mode", "unknown")
+        if kind == "run_started" and isinstance(data.get("config"), dict):
+            summary["config"] = {
+                **data["config"],
+                **(summary.get("config") if isinstance(summary.get("config"), dict) else {}),
+            }
         if kind == "observation":
             frame_id = _text(data.get("frame_id"), 200)
             frames[frame_id] = {
@@ -665,6 +708,12 @@ def analyze_run(path: Path) -> dict:
                     "verified_steps": _portal_steps(data.get("skill", {}).get("verified_steps"))
                     if isinstance(data.get("skill"), dict)
                     else [],
+                    "skill_kind": _text(data.get("skill", {}).get("kind"), 30)
+                    if isinstance(data.get("skill"), dict)
+                    else None,
+                    "skill_status": _text(data.get("skill", {}).get("status"), 30)
+                    if isinstance(data.get("skill"), dict)
+                    else None,
                 }
         elif kind == "model_request":
             provider = _text(data.get("provider", "unknown"), 100).lower()
@@ -1082,6 +1131,13 @@ def analyze_run(path: Path) -> dict:
                         "source": "summary",
                     }
                 )
+    config = summary.get("config", {}) if isinstance(summary.get("config"), dict) else {}
+    route = (
+        config.get("route") if config.get("route") in {"from_scratch", "ruined_portal"} else None
+    )
+    inventory_milestones = (
+        _FROM_SCRATCH_INVENTORY_MILESTONES if route == "from_scratch" else _INVENTORY_MILESTONES
+    )
     for milestone in milestones:
         frame = frames.get(milestone["frame_id"])
         milestone["observation_ref"] = frame
@@ -1103,17 +1159,31 @@ def analyze_run(path: Path) -> dict:
                 and (milestone["id"] != "nether" or dimension == "minecraft:the_nether")
                 and _ready_milestone_state(milestone, state)
             )
+        if milestone["id"] in inventory_milestones:
+            inventory = state["inventory_counts"] if state else {}
+            milestone["state_evidence_correlated"] = bool(
+                milestone["state_evidence_correlated"]
+                and _ready_milestone_state(milestone, state)
+                and any(
+                    inventory.get(item, 0) > 0 for item in inventory_milestones[milestone["id"]]
+                )
+            )
+            milestone["acquisition_evidence"] = (
+                "current_inventory" if milestone["state_evidence_correlated"] else None
+            )
         if milestone["id"] in _PORTAL_STEPS:
             name = milestone["id"]
             inventory = state["inventory_counts"] if state else {}
             held_resource = (
-                name == "obsidian_acquired" and inventory.get("minecraft:obsidian", 0) > 0
-            ) or (
-                name == "ignition_acquired"
-                and any(
-                    inventory.get(item, 0) > 0
-                    for item in ("minecraft:fire_charge", "minecraft:flint_and_steel")
+                (name == "obsidian_acquired" and inventory.get("minecraft:obsidian", 0) > 0)
+                or (
+                    name == "ignition_acquired"
+                    and any(
+                        inventory.get(item, 0) > 0
+                        for item in ("minecraft:fire_charge", "minecraft:flint_and_steel")
+                    )
                 )
+                or (name == "water_collected" and inventory.get("minecraft:water_bucket", 0) > 0)
             )
             recorded_step = bool(
                 state and name in state["verified_steps"] and name in (steps or [])
@@ -1149,7 +1219,6 @@ def analyze_run(path: Path) -> dict:
     model_wait = _union_ms(model_intervals, duration)
     action_wait = _union_ms(action_intervals, duration)
     accounted = _union_ms(model_intervals + action_intervals, duration)
-    config = summary.get("config", {}) if isinstance(summary.get("config"), dict) else {}
     return {
         "schema_version": 1,
         "run": {
@@ -1159,6 +1228,8 @@ def analyze_run(path: Path) -> dict:
             "started_at": _text(summary.get("started_at"), 100),
             "operator_declared_seed": _text(config.get("operator_declared_seed"), 100) or None,
             "gameplay_mode": _text(config.get("gameplay_mode", "legacy_or_unspecified"), 50),
+            "route": route,
+            "goal": _text(config.get("goal"), 50) or None,
         },
         "facts": {
             "journal": diagnostics,
@@ -1250,9 +1321,9 @@ def analyze_run(path: Path) -> dict:
         },
         "interpretation": [
             "Raw action ACKs confirm input execution, not gameplay progress. Skill ACKs are separate request acknowledgments and do not establish skill completion.",
-            "Completed skill counts require a matching skill_completed event and post-start game_state: inventory skills meet their requested target in both records; dimension skills match the requested dimension in a ready world with a live player. Missing or contradictory evidence remains unverified.",
+            "Completed skill counts require a matching skill_completed event and post-start game_state: inventory skills meet their target in both records, and smelting also requires completed client status. Dimension skills match the requested dimension in a ready world with a live player; cast_portal additionally requires retained portal_built and portal_lit checks from the casting executor. Missing or contradictory evidence remains unverified.",
             "Game-state milestones preserve recorded controller verification with matching linked state inventory and, for Nether entry, ready-world dimension evidence; full snapshots and the world were not independently revalidated. Model claims and missing or contradictory evidence remain separate; screenshots were not inspected.",
-            "Portal substeps require matching step identifiers in milestone evidence and the linked ready/live client state; obsidian and ignition acquisition may instead use current inventory. Retained client verification can record an earlier acquisition after items were consumed; model response flags are not evidence.",
+            "Portal substeps require matching step identifiers in milestone evidence and the linked ready/live client state; obsidian, ignition and water acquisition may instead use current inventory. New iron, tool, furnace and bucket milestones require their exact current inventory items. Inventory evidence establishes acquisition, not independent proof of the production process. Retained client checks can record consumed resources; model response flags are not evidence.",
             "Identical actions or images are patterns, not proof of being stuck; mining and deliberate waiting may be valid.",
             "Model wait is inferred from recorded latency ending at the call event. Command windows include scheduling and acknowledgment overhead.",
             "Tick execution uses nominal 20 TPS and may differ from wall time. Unattributed time includes observations, pauses, idle time, logging, and unresolved commands.",
@@ -1277,7 +1348,13 @@ def compare_runs(paths: list[Path]) -> dict:
         metrics["post_stop_inspection_ms"].append(facts["timing"]["post_stop_inspection_ms"])
         for key in ("completed", "rejected", "cancelled", "unacknowledged_requests"):
             metrics[f"actions_{key}"].append(facts["actions"][key])
-        for key in ("completed", "failed", "unverified_completions", "unacknowledged_requests"):
+        for key in (
+            "completed",
+            "failed",
+            "unverified_completions",
+            "unacknowledged_requests",
+            "full_frame_verified",
+        ):
             metrics[f"skills_{key}"].append(facts["skills"][key])
         for key in ("observations", "recoveries", "error_events"):
             metrics[key].append(facts[key])

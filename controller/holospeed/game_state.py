@@ -28,6 +28,9 @@ PortalStep = Literal[
     "ignition_acquired",
     "portal_repaired",
     "portal_lit",
+    "water_collected",
+    "lava_located",
+    "portal_built",
 ]
 PORTAL_STEPS = (
     "portal_located",
@@ -36,6 +39,9 @@ PORTAL_STEPS = (
     "ignition_acquired",
     "portal_repaired",
     "portal_lit",
+    "water_collected",
+    "lava_located",
+    "portal_built",
 )
 
 
@@ -189,7 +195,7 @@ class SkillState(StateModel):
     baritone_available: bool
     active: bool
     skill_id: str | None = Field(default=None, min_length=1, max_length=128)
-    kind: Literal["mine", "craft", "portal"] | None = None
+    kind: Literal["mine", "craft", "smelt", "portal", "cast_portal"] | None = None
     item: RegistryId | None = None
     target_count: int = Field(ge=0, le=64)
     inventory_count: int = Field(ge=0, le=41 * 99)
@@ -199,8 +205,9 @@ class SkillState(StateModel):
     elapsed_ticks: int = Field(ge=0, le=1800)
     max_ticks: int = Field(ge=0, le=1800)
     known_table: BlockPos | None = None
+    known_furnace: BlockPos | None = None
     capabilities: list[Capability] = Field(default_factory=list, max_length=64)
-    verified_steps: list[PortalStep] = Field(default_factory=list, max_length=6)
+    verified_steps: list[PortalStep] = Field(default_factory=list, max_length=len(PORTAL_STEPS))
     keys: (
         list[
             Literal["forward", "back", "left", "right", "jump", "sneak", "sprint", "attack", "use"]
@@ -440,6 +447,7 @@ def find_reachable_block(
     block_ids: Collection[str] = LOG_ITEMS,
     *,
     max_reach: float | None = None,
+    target_position: BlockPos | None = None,
 ) -> BlockState | None:
     """Nearest breakable target with known clear eye-to-center reach.
 
@@ -461,7 +469,9 @@ def find_reachable_block(
     candidates = {
         position: block
         for position, block in candidates.items()
-        if block.id in block_ids and block.hardness >= 0
+        if block.id in block_ids
+        and block.hardness >= 0
+        and (target_position is None or block.position == target_position)
     }
     eye = snapshot.player.eye_position
     for block in sorted(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from dataclasses import dataclass, field
@@ -13,6 +14,10 @@ class Settings:
     mode: str = "demo"
     gameplay_mode: str = "state"
     run_goal: str = "early_game"
+    nether_route: str = "from_scratch"
+    route_target: dict[str, int] | None = None
+    demo_template_dir: Path | None = None
+    minecraft_saves_dir: Path | None = None
     host: str = "127.0.0.1"
     port: int = 8765
     runs_dir: Path = field(default_factory=lambda: Path("runs"))
@@ -39,10 +44,32 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         load_dotenv()
+        route = os.getenv("NETHER_ROUTE", "from_scratch")
+        if route not in {"from_scratch", "ruined_portal"}:
+            raise ValueError("NETHER_ROUTE must be from_scratch or ruined_portal")
+        target_text = os.getenv("CAST_PORTAL_TARGET", "")
+        target = json.loads(target_text) if target_text else None
+        if target is not None and (
+            not isinstance(target, dict)
+            or set(target) != {"x", "y", "z"}
+            or any(type(value) is not int for value in target.values())
+            or not -64 <= target["y"] <= 320
+            or abs(target["x"]) > 29_999_984
+            or abs(target["z"]) > 29_999_984
+        ):
+            raise ValueError("CAST_PORTAL_TARGET must be a bounded integer x/y/z landmark")
         return cls(
             mode=os.getenv("HOLOSPEED_MODE", "demo"),
             gameplay_mode=os.getenv("GAMEPLAY_MODE", "state"),
             run_goal=os.getenv("RUN_GOAL", "nether"),
+            nether_route=route,
+            route_target=target,
+            demo_template_dir=Path(os.environ["DEMO_TEMPLATE_DIR"])
+            if os.getenv("DEMO_TEMPLATE_DIR")
+            else None,
+            minecraft_saves_dir=Path(os.environ["MINECRAFT_SAVES_DIR"])
+            if os.getenv("MINECRAFT_SAVES_DIR")
+            else None,
             host=os.getenv("HOLOSPEED_HOST", "127.0.0.1"),
             port=int(os.getenv("HOLOSPEED_PORT", "8765")),
             runs_dir=Path(os.getenv("HOLOSPEED_RUNS_DIR", "runs")),

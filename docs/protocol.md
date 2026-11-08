@@ -31,10 +31,14 @@ Start a local skill with:
 {"type":"skill","id":"skill-request-id","skill":"mine","item":"minecraft:birch_log","target_count":3,"max_ticks":1200}
 ```
 
-For `mine` and `craft`, `target_count` is the total desired inventory count
+For `mine`, `craft`, and `smelt`, `target_count` is the total desired inventory count
 (1–64), not an additional quantity. `max_ticks` is 20–1800, with
 a wall-clock watchdog as well. The mod uses a small target allowlist, Baritone
-for navigation/mining/pickup, and ordinary recipe/screen-handler APIs for crafting.
+for navigation/mining/pickup, and ordinary recipe/screen-handler APIs for crafting
+and smelting. Raw iron,
+coal, flint, and dirt are supported mining targets; flint requires actual flint
+in inventory, not merely broken gravel. Furnace, bucket, and flint and steel
+are supported crafting targets.
 
 The immediate `skill_ack` echoes `id`, supplies `skill_id`, and has status
 `accepted`, `completed` (already satisfied), or `rejected`, with diagnostic reason
@@ -57,41 +61,68 @@ remembered table requires Baritone and a longer bounded crafting deadline.
 pairs. An omitted list supports only the existing early-game behavior; the
 controller never assumes a new skill from a generic label.
 
-### Portal route and verified steps
+`skill.known_furnace` is a nullable world-scoped position remembered from placing
+an owned furnace. Like table memory, it does not insert a block into the current
+sample or establish reachability. The capability list has at most 64 unique
+entries; strategy summaries preserve all entries within that bound.
 
-The advertised `portal:minecraft:nether_portal` capability accepts:
+### Smelting owned iron
 
-```json
-{"type":"skill","id":"portal-request-id","skill":"portal","item":"minecraft:nether_portal","target_count":1,"max_ticks":1800,"target":{"x":48,"y":68,"z":48}}
-```
-
-This is the Java 1.21.1 route for declared seed `-1950884254474434485`, selected
-only with `RUN_GOAL=nether`, the matching declaration, Overworld state, and the
-required capability. The client verifies the actual site and uses normal chest
-transfers, block placement, item use, and movement. Expected geometry is route
-knowledge, not a replacement for those checks. This candidate's postcondition
-is a fresh ready/alive player in `minecraft:the_nether`; `target_count:1` does
-not represent an obtainable portal item. The skill's `inventory_count` therefore
-does not prove completion.
-
-Portal phases include approaching/looting the chest, approaching/repairing the
-frame, ignition, and entry. `skill.verified_steps` is an optional list, default
-`[]`, with at most six unique values:
+The `smelt:minecraft:iron_ingot` capability accepts:
 
 ```json
-["portal_located","chest_looted","obsidian_acquired","ignition_acquired","portal_repaired","portal_lit"]
+{"type":"skill","id":"smelt-four-iron","skill":"smelt","item":"minecraft:iron_ingot","target_count":4,"max_ticks":1200}
 ```
 
-The mod emits them only after its geometry, inventory, server synchronization,
-or portal-block check succeeds. In particular, a chest opening or an optimistic
-client slot update alone is not `chest_looted`; the normal transfer must produce
-relevant owned inventory after authoritative synchronization. Acquisition steps
-remain recorded after consuming the item. The controller may also confirm
-obsidian/ignition acquisition directly from current owned items.
+This requests four total ingots in inventory. No `target` position is accepted.
+The helper places an owned furnace, transfers owned ore/fuel through normal
+container interactions, waits for vanilla cooking, then reopens the furnace and
+requires a newer server inventory synchronization before confirming collection.
+It does not collect output from an unrelated structure furnace. Cancellation
+releases controls while the furnace's ordinary cooking may continue; a later
+attempt must recheck owned-furnace state and remaining quantities.
 
-Phase names and terminal status never imply these steps. Milestones retain
-their state ID, tick, inventory, dimension, and verified-step evidence. The
-final `nether` milestone is independent and requires the actual dimension.
+### Casting a complete portal
+
+The active capability is `cast_portal:minecraft:nether_portal`:
+
+```json
+{"type":"skill","id":"cast-new-portal","skill":"cast_portal","item":"minecraft:nether_portal","target_count":1,"max_ticks":1800,"target":{"x":4,"y":63,"z":2}}
+```
+
+The target is a bounded integer natural-lava landmark, configured by
+`CAST_PORTAL_TARGET`. The demonstration uses `NETHER_ROUTE=from_scratch` and
+seed `-7131204740862824481`. The executor checks the actual loaded cells and
+requires an empty or water-filled bucket, flint and steel, a stone pickaxe, and
+nine combined dirt/cobblestone supports. A lava bucket alone does not meet its
+water-collection starting prerequisite. The active mod rejects the former
+structure-looting `portal` command and no longer advertises its capability.
+
+The source scan is bounded to 40,817 already-loaded cells. It requires ten
+exposed still-lava source cells near the landmark and a clear 5×6 casting area
+with six blocks of headroom and separation between water-flow landings and the
+pool. Normal bucket use and temporary support placement/mining cast ten new
+obsidian cells. Each cast verifies an actual server block update; existing
+obsidian or portal blocks cannot count toward the frame. The last cast consumes
+the owned water source. The temporary interior header is removed, remaining flow
+drains, and crafted flint and steel ignites the frame. See the detailed
+[skill schema](../fabric-mod/SKILL_PROTOCOL.md) for geometry and interaction bounds.
+
+The candidate postcondition is a fresh ready/alive player in
+`minecraft:the_nether`. `target_count:1` does not represent an obtainable portal
+item, so `inventory_count` cannot establish completion. The active executor
+records these unique `skill.verified_steps` only after their physical checks:
+
+```json
+["water_collected","lava_located","portal_built","portal_lit"]
+```
+
+The full state parser also recognizes historical ruined-portal step IDs so old
+journals remain readable; those IDs are not part of the new route. A water bucket
+can directly confirm water acquisition. Casting proof requires all ten new frame
+cells; ignition proof requires actual portal interior blocks. Phase labels,
+model claims, or terminal status do not imply these proofs. Milestones retain
+their supporting state ID, tick, inventory, dimension, and verified steps.
 
 Raw actions cannot overlap a skill. Skill starts are rejected while an action
 or observation capture is pending. State polling remains available during skill
@@ -102,6 +133,13 @@ work. Expected transfer during an active portal skill releases controls, then
 allows up to five seconds for fresh destination state. It does not reuse old
 coordinates or old inventory as destination evidence. Other world changes pause
 the controller.
+
+After recording goal evidence, the controller may send
+`{"type":"pause_game","id":"request-id"}`. The client releases inputs and opens
+Minecraft's normal single-player pause state when available, replying with
+`{"type":"pause_game_ack","id":"request-id","status":"paused"}` or
+`status:"unavailable"`. This protects the completed single-player demonstration;
+it is not evidence of goal completion and does not pause a multiplayer server.
 
 ## Explicit operator rearm
 
@@ -170,7 +208,10 @@ old frame's input lifetime. Without Jev validation, results beyond the frame age
 budget are discarded. Resuming requires a fresh screenshot and replan.
 
 In state mode, Holo4/Jev choose among validated high-level candidates instead.
-The controller rereads state after inference, starts one eligible skill, polls
+With Jev validation enabled, Holo4 proposals receive a newly sampled state check
+by Jev, followed by another local eligibility check. Explicit vetoes do not execute;
+service fallbacks are labeled and cannot overturn an earlier veto. The controller
+starts one eligible skill, polls
 its local progress, and verifies the candidate's inventory or dimension
 postcondition. Cloud inference does not time the
 skill's key presses. See [architecture](architecture.md) and

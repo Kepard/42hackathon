@@ -59,4 +59,13 @@ class FurnaceControllerTest {
         for (String item : new String[]{"minecraft:raw_gold", "minecraft:iron_ingot", "minecraft:raw_iron_block", "minecraft:stone"}) assertFalse(FurnaceController.ironInput(item));
         assertFalse(FurnaceController.ironInput(null));
     }
+
+    @Test void predictedOrEarlierInventoryCannotConfirmSmeltingCompletion() {
+        assertFalse(FurnaceController.confirmedInventory(12, 12, 4, 4));
+        assertFalse(FurnaceController.confirmedInventory(12, 11, 4, 4));
+        assertFalse(FurnaceController.confirmedInventory(12, 13, 4, 3));
+        assertFalse(FurnaceController.confirmedInventory(-1, 13, 4, 4));
+        assertTrue(FurnaceController.confirmedInventory(12, 13, 4, 4));
+        assertTrue(FurnaceController.confirmedInventory(12, 13, 4, 7));
+    }
 }

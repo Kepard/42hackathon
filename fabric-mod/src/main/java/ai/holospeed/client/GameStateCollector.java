@@ -195,7 +195,8 @@ final class GameStateCollector {
     private static boolean interesting(BlockState state) {
         return !state.isAir() && (state.isIn(BlockTags.LOGS) || state.isIn(BlockTags.LEAVES)
             || state.isIn(BlockTags.BASE_STONE_OVERWORLD) || state.isIn(BlockTags.BASE_STONE_NETHER)
-            || !state.getFluidState().isEmpty() || state.isOf(Blocks.GRAVEL) || priority(state));
+            || !state.getFluidState().isEmpty() || state.isOf(Blocks.GRAVEL) || state.isOf(Blocks.DIRT)
+            || state.isOf(Blocks.GRASS_BLOCK) || priority(state));
     }
 
     private static boolean priority(BlockState state) {

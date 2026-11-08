@@ -38,10 +38,12 @@ class PortalRouteTest {
         }
     }
 
-    @Test void portalRequestCannotBeConfusedWithAnInventoryCountOrOtherSkillTarget() {
+    @Test void theRetiredStructureLootRouteCannotBeRequested() {
         JsonObject request = json("{\"skill\":\"portal\",\"item\":\"minecraft:nether_portal\",\"target_count\":1,\"max_ticks\":1800,\"target\":{\"x\":48,\"y\":68,\"z\":48}}");
+        assertThrows(IllegalArgumentException.class, () -> SkillController.parseRequest(request));
+        request.addProperty("skill", "cast_portal");
         var parsed = SkillController.parseRequest(request);
-        assertEquals("portal", parsed.kind());
+        assertEquals("cast_portal", parsed.kind());
         assertEquals(PortalRoute.LANDMARK, parsed.target());
         request.addProperty("target_count", 2);
         assertThrows(IllegalArgumentException.class, () -> SkillController.parseRequest(request));
@@ -49,7 +51,7 @@ class PortalRouteTest {
         request.addProperty("skill", "mine");
         request.addProperty("item", "minecraft:stone");
         assertThrows(IllegalArgumentException.class, () -> SkillController.parseRequest(request));
-        request.addProperty("skill", "portal");
+        request.addProperty("skill", "cast_portal");
         request.addProperty("item", "minecraft:nether_portal");
         request.add("target", JsonParser.parseString("[]"));
         assertThrows(IllegalArgumentException.class, () -> SkillController.parseRequest(request));

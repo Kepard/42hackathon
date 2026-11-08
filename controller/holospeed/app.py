@@ -14,9 +14,11 @@ from fastapi.staticfiles import StaticFiles
 
 from .bridge import BridgeError, GameBridge
 from .config import Settings
+from .demo_launch import DemoLauncher
 from .engine import AgentEngine
 from .engineering import Engineering
 from .recording import read_events
+from .voice import VoiceControl
 
 STATIC = Path(__file__).parent / "static"
 
@@ -40,7 +42,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raise ValueError("RUN_GOAL must be early_game or nether")
     bridge = GameBridge()
     engine = AgentEngine(settings, bridge)
+    launcher = DemoLauncher(engine, settings)
     engineering = Engineering(settings)
+    voice = VoiceControl(engine, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -60,6 +64,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ticker.cancel()
             investigations.cancel()
             await engine.close()
+            await launcher.close()
+            await voice.close()
             await engineering.close()
             done, _ = await asyncio.wait((ticker, investigations), timeout=2)
             for task in done:
@@ -68,8 +74,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="HoloSpeed", lifespan=lifespan)
     app.state.engine = engine
+    app.state.launcher = launcher
     app.state.bridge = bridge
     app.state.engineering = engineering
+    app.state.voice = voice
 
     @app.middleware("http")
     async def protect_local_control(request: Request, call_next):
@@ -98,22 +106,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/start")
     async def start():
         try:
-            if settings.mode == "live" and (engine.task is None or engine.task.done()):
-                await bridge.arm()
-            await engine.start()
+            await engine.start(arm=settings.mode == "live")
         except (ValueError, BridgeError) as error:
             raise HTTPException(409, str(error)) from error
         return {"ok": True}
 
+    @app.post("/api/new-run", status_code=202)
+    async def new_run(request: Request):
+        raw = await request.body()
+        if len(raw) > 512:
+            raise HTTPException(400, "New run request is too large")
+        try:
+            value = json.loads(raw)
+            if not isinstance(value, dict) or set(value) != {"command_id"}:
+                raise ValueError("New run requires only a command_id")
+            return {"ok": True, "launch": await launcher.begin(value["command_id"])}
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        except OSError as error:
+            raise HTTPException(
+                409, "Could not persist the launch request; no new run was started"
+            ) from error
+
     @app.post("/api/pause")
     async def pause():
-        await engine.pause()
+        await engine.pause(pause_world=True)
         return {"ok": True}
 
     @app.post("/api/finish")
     async def finish():
-        await engine.finish()
+        await engine.finish(pause_world=True)
         return {"ok": True}
+
+    @app.post("/api/voice")
+    async def voice_command(request: Request):
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise HTTPException(400, "Voice command exceeds its bounded size")
+        try:
+            value = json.loads(raw)
+            return {"ok": True, "data": await voice.apply(value)}
+        except (ValueError, BridgeError) as error:
+            raise HTTPException(409, str(error)) from error
 
     def run_path(run_id: str) -> Path:
         if not run_id or any(c not in "0123456789TZ-abcdef" for c in run_id):
@@ -238,10 +272,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         except ValueError as error:
                             engine.log("error", {"message": str(error)})
                     if message.get("name") in {"emergency_stop", "world_changed", "disconnected"}:
-                        if (
-                            message.get("name") == "world_changed"
-                            and engine.state["status"] == "running"
-                            and (engine.state.get("action") or {}).get("skill") == "portal"
+                        if message.get("name") == "world_changed" and (
+                            launcher.active
+                            or (
+                                engine.state["status"] == "running"
+                                and (engine.state.get("action") or {}).get("skill")
+                                in {"portal", "cast_portal"}
+                            )
                         ):
                             # The skill releases controls during normal portal transfer;
                             # only a fresh Nether snapshot can confirm its postcondition.

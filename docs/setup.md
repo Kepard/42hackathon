@@ -19,16 +19,20 @@ instance-specific token; model credentials remain in the controller environment.
    `jev-1.14.0`, and `MODEL_TIMEOUT_SECONDS=30`; state-aware orchestration applies
    an additional eight-second strategy-selection cap. Record missing providers or local
    fallback use accurately; do not describe a fallback-only run as a model result.
-   `HOLO_COMPACT`, `VALIDATE_HOLO_PLANS`, and `ALLOW_EXPLORATION` configure the
-   legacy visual-action path rather than the state-aware skill selector.
+   Keep `VALIDATE_HOLO_PLANS=true` for fresh-state Jev validation after Holo4
+   planning. `HOLO_COMPACT` and `ALLOW_EXPLORATION` also configure the legacy
+   visual-action path; they do not replace the local skill precondition checks.
 
    The environment-backed goal defaults to `RUN_GOAL=nether`. The implemented
-   ruined-portal route requires this exact declaration and a matching world:
+   from-scratch route uses a new world and the verified natural lava landmark:
 
    ```dotenv
    GAMEPLAY_MODE=state
    RUN_GOAL=nether
-   MINECRAFT_SEED=-1950884254474434485
+   NETHER_ROUTE=from_scratch
+   MINECRAFT_SEED=-7131204740862824481
+   CAST_PORTAL_TARGET={"x":4,"y":63,"z":2}
+   VALIDATE_HOLO_PLANS=true
    ```
 
    Create or select the intended Java 1.21.1 survival world separately. Setting
@@ -87,22 +91,36 @@ instance-specific token; model credentials remain in the controller environment.
 
 ## Check the first run
 
-Confirm structured state, Baritone availability, and the portal capability
-`portal:minecraft:nether_portal`. The Nether planner uses the fixed-seed waypoint
-`(48,68,48)` only when the declared seed and capability match. The executor must
-open the actual chest and verify the actual frame, items, repair, and ignition;
-route research does not establish current loot. See [route evidence](nether-route.md).
+Confirm structured state, Baritone availability, and the capabilities
+`smelt:minecraft:iron_ingot` and `cast_portal:minecraft:nether_portal`. The active
+Fabric mod rejects the old structure-looting `portal` command. The new planner
+requires actual gathering, crafting, mining, and smelting before casting; it
+never substitutes a chest-loot shortcut. See [seed setup](demo-seed.md) and
+[verified resource research](new-route-research.md).
 
-Watch the verified steps: portal located, chest looted, obsidian acquired,
-ignition acquired, portal repaired, portal lit, then Nether entered. A phase
-label or accepted request is not a completed step. The final check is a fresh
-`minecraft:the_nether` dimension with a ready, living player. Mining/crafting
-skills instead complete against actual total inventory counts. Intermediate
-client proofs remain available after obsidian or fire charges are consumed.
+The nominal empty-inventory plan has 16 bounded skills: logs, planks, table,
+sticks, wooden pickaxe, three cobblestone, stone pickaxe, eight furnace materials,
+furnace, four raw iron, flint, four smelted ingots, bucket, flint and steel, nine
+mold blocks, and portal casting/entry. Extra materials acquired during navigation
+can remove a redundant gathering step; failures can require additional attempts.
+The two-minute objective is a live performance target, not a fixed delay or a
+claim that this sequence has already achieved that time.
 
-Holo selects high-level strategy and Jev chooses routine candidates when
-configured. Local skills execute across ticks without a cloud call per key
-press. [Architecture](architecture.md) explains the division of work.
+The dashboard reports 14 evidence-backed checkpoints: wood, crafting table,
+wooden pickaxe, stone pickaxe, furnace, iron mined, iron smelted, bucket, flint
+and steel, water collected, lava located, portal built, portal lit, and Nether.
+First acquisition establishes a resource milestone; the separate skill outcome
+must still verify its complete target quantity. The portal requires ten newly
+formed obsidian blocks and actual portal interior blocks, followed by a fresh,
+ready, living player in `minecraft:the_nether`. A phase label or accepted request
+is not a completed step.
+
+Holo4 chooses high-level strategy using state and screenshots. Jev checks a fresh
+state after Holo4 proposals and selects routine candidates. The controller then
+checks local eligibility again before dispatch. Explicit vetoes cannot be erased
+by a later provider outage; fallback use is recorded accurately. Local skills
+execute across ticks without a cloud call per key press. [Architecture](architecture.md)
+explains this division of work.
 
 Test F8 during movement/mining, pause during inference, and disconnect recovery
 before a longer attempt. During the expected portal transfer, controls release
@@ -132,11 +150,19 @@ controller. H.264/fMP4 HLS targets 60 FPS with this command; omitting
 to one FPS. Target capture rate, measured playback FPS, and Minecraft render
 rate are distinct. Only the named Minecraft window is captured.
 
-The public viewing URL does not grant control. A separate private
-`#control=<CONTROL_TOKEN>` operator link enables New recorded run, Resume,
-Pause, and Stop & archive. Keep that link separate from the public URL and
-publisher credentials. New recorded run archives the current recording and
-starts another in the same Minecraft world; it does not reset the world.
+Unlock **Operator access** with the configured password at the page footer to
+enable **New run**, **Resume**, **Pause**, and **End run**. A private
+`#control=<CONTROL_TOKEN>` link also works; keep it separate from the public
+viewing URL and publisher credentials. **Lock controls** removes access from
+the current tab.
+
+**New run** saves the previous world, copies the prepared empty-inventory
+template into a new save, loads it, verifies the starting state, and starts the
+agent. The dashboard reports **Save → Copy → Load → Verify → Start**; gameplay
+timing starts after loading, and previous worlds and recordings are preserved.
+Configure the template once using the [prepared-world guide](demo-seed.md).
+During preparation, **Pause**, **End run**, or F8 cancels launch. During gameplay,
+**Resume** continues the same recording and **End run** stops and archives it.
 
 Commands expire after 30 seconds if not dispatched. The publisher persists each
 claim before applying a local controller operation. If a request's outcome is
@@ -167,7 +193,7 @@ Generated tests are proposals requiring repository validation. See the
 | State request fails | Update both controller and mod; the earlier screenshot-only bridge cannot run state-aware skills. |
 | Skill rejected or paused | Read the recorded reason: focus/pause/world state, input ownership, prerequisites, inventory, or deadline may have changed. |
 | No candidate is available | Inspect inventory, sampled resources, hazards, and crafting prerequisites; missing sampled terrain is not known air. |
-| Nether route is absent | `RUN_GOAL=nether`, exact `MINECRAFT_SEED`, Overworld state, Baritone, and a mod advertising `portal:minecraft:nether_portal` are required. |
+| Nether route is absent | Check `RUN_GOAL=nether`, `NETHER_ROUTE=from_scratch`, `CAST_PORTAL_TARGET`, Overworld state, Baritone, and exact `smelt`/`cast_portal` capabilities. Resource prerequisites must be satisfied before casting appears. |
 | Dashboard start is rejected | Refocus Minecraft and inspect the rearm reason; a different screen, occupied cursor/grid, dead player, or unavailable world can block it. |
 | Camera target says 60 but playback is slower | Inspect measured playback FPS, capture age, upload logs, and game rendering; target FPS alone is not throughput evidence. |
 | Resource claim looks wrong | Inspect exact inventory slots and milestone evidence; dropped items and model prose do not prove acquisition. |
@@ -178,5 +204,16 @@ Baritone source and LGPL notices are linked in the installed source notice and
 [license](https://github.com/cabaletta/baritone/blob/v1.11.3/LICENSE), and
 [artifact guidance](https://github.com/cabaletta/baritone/blob/v1.11.3/SETUP.md).
 
+## Gladia voice interaction
+
+The dashboard's operator-only microphone uses Gladia transcription and the same
+private command path as typed requests. Recording starts only after an explicit
+microphone click. Final transcripts can pause, stop, resume, supply bounded
+objective guidance, or ask Holo4 about the recorded state; partial captions do
+not dispatch actions. Configure the server-side `GLADIA_API_KEY` and follow
+[voice setup and verification limits](gladia.md). The API key stays on the
+server. Production microphone/browser validation is distinct from API and
+synthetic-audio tests.
+
 For a simulated presentation without a game or credentials, use
-`uv run holospeed serve --mode demo`. Gladia remains deferred.
+`uv run holospeed serve --mode demo`.

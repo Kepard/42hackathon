@@ -71,6 +71,22 @@ class SkillControllerTest {
     }
 
     @Test
+    void normalMiningSmeltingAndRecipesHaveSeparateExactTargets() {
+        for (String item : new String[]{"raw_iron", "coal", "flint", "dirt"}) {
+            JsonObject input = mine(); input.addProperty("item", item);
+            assertEquals("minecraft:" + item, SkillController.parseRequest(input).item());
+        }
+        for (String item : new String[]{"furnace", "bucket", "flint_and_steel"}) {
+            JsonObject input = json("{\"skill\":\"craft\"}"); input.addProperty("item", item);
+            assertEquals("minecraft:" + item, SkillController.parseRequest(input).item());
+        }
+        assertEquals("smelt", SkillController.parseRequest(json("{\"skill\":\"smelt\",\"item\":\"iron_ingot\",\"target_count\":4}")).kind());
+        for (String source : new String[]{"{\"skill\":\"mine\",\"item\":\"iron_ingot\"}",
+            "{\"skill\":\"smelt\",\"item\":\"gold_ingot\"}", "{\"skill\":\"craft\",\"item\":\"iron_ingot\"}"})
+            assertThrows(IllegalArgumentException.class, () -> SkillController.parseRequest(json(source)));
+    }
+
+    @Test
     void exactTargetAndDeadlineLimitsAreAllowed() {
         for (int count : new int[]{1, 64}) {
             for (int ticks : new int[]{20, 1800}) {

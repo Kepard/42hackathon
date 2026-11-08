@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from typing import Any
@@ -50,7 +51,7 @@ class GameBridge:
         self.pending.clear()
 
     async def receive(self, message: dict[str, Any]) -> None:
-        if message.get("type") in {"ack", "skill_ack"} and self.journal:
+        if message.get("type") in {"ack", "skill_ack", "world_ack"} and self.journal:
             self.journal("bridge_ack", message)
         if message.get("type") == "hello":
             if message.get("protocol") != 1 or message.get("minecraft") != "1.21.1":
@@ -130,15 +131,50 @@ class GameBridge:
         if message.get("type") != "arm_ack" or message.get("status") != "ready":
             raise BridgeError(str(message.get("reason") or "Minecraft cannot be armed"))
 
+    async def _world_request(self, operation: str, expected: str, **fields) -> dict:
+        message = await self.request(
+            {"type": "world_" + operation, **fields}, timeout=5 if operation == "cancel" else 125
+        )
+        if (
+            message.get("type") != "world_ack"
+            or message.get("operation") != operation
+            or message.get("status") != expected
+            or message.get("controls_armed") is not False
+            or (operation == "load" and message.get("save_name") != fields["save_name"])
+        ):
+            raise BridgeError("Minecraft did not confirm the requested world lifecycle operation")
+        return message
+
+    async def unload_world(self) -> dict:
+        """Return only after the integrated server's final save has completed."""
+        return await self._world_request("unload", "unloaded")
+
+    async def load_world(self, save_name: str) -> dict:
+        if not re.fullmatch(r"holospeed-demo-[A-Za-z0-9_-]{1,80}", save_name):
+            raise ValueError("Invalid fresh-world save name")
+        return await self._world_request("load", "ready", save_name=save_name)
+
+    async def cancel_world(self) -> dict:
+        return await self._world_request("cancel", "cancelled")
+
+    async def pause_game(self) -> bool:
+        """Freeze a local singleplayer world after final goal evidence is recorded."""
+        message = await self.request({"type": "pause_game"}, timeout=5)
+        if message.get("type") != "pause_game_ack":
+            raise BridgeError("Invalid game pause acknowledgment")
+        return message.get("status") == "paused"
+
     async def start_skill(self, candidate: dict[str, Any]) -> dict[str, Any]:
-        if candidate.get("skill") not in {"mine", "craft", "portal"}:
+        if candidate.get("skill") not in {"mine", "craft", "smelt", "portal", "cast_portal"}:
             raise BridgeError("Unsupported normal-mechanics skill")
         packet = {key: candidate[key] for key in ("skill", "item", "target_count", "max_ticks")}
         if type(packet["target_count"]) is not int or not 1 <= packet["target_count"] <= 64:
             raise BridgeError("Invalid skill inventory target")
         if type(packet["max_ticks"]) is not int or not 20 <= packet["max_ticks"] <= 1800:
             raise BridgeError("Invalid skill deadline")
-        if packet["skill"] == "portal":
+        if packet["skill"] == "smelt" and packet["item"] != "minecraft:iron_ingot":
+            raise BridgeError("Unsupported smelting item")
+        if packet["skill"] in {"portal", "cast_portal"}:
             if packet["item"] != "minecraft:nether_portal" or packet["target_count"] != 1:
                 raise BridgeError("Invalid portal objective")
             target = candidate.get("target")
@@ -150,6 +186,12 @@ class GameBridge:
                 and abs(target["z"]) <= 29_999_984
             ):
                 raise BridgeError("Invalid portal landmark")
+            if packet["skill"] == "cast_portal" and not (
+                -63 <= target["y"] <= 313
+                and -29_999_968 <= target["x"] <= 29_999_967
+                and -29_999_968 <= target["z"] <= 29_999_967
+            ):
+                raise BridgeError("Portal construction needs room within world bounds")
             packet["target"] = target.copy()
         message = await self.request({"type": "skill", **packet}, timeout=5)
         if message.get("type") != "skill_ack" or message.get("status") not in {

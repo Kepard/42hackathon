@@ -136,6 +136,96 @@ def test_state_summary_keeps_inventory_and_geometry_meaning_without_raw_arrays(s
     assert state["local_blocks"] == original["local_blocks"]
 
 
+def test_state_summary_preserves_portal_capability_after_twelve_mining_entries(state):
+    capabilities = [f"mine:minecraft:resource_{index}" for index in range(12)] + [
+        "craft:minecraft:crafting_table",
+        "portal:minecraft:nether_portal",
+    ]
+    state["skill"] = {"baritone_available": True, "active": False, "capabilities": capabilities}
+    summary = summarize_state(state)
+    assert summary["skill"]["capabilities"] == capabilities
+    assert summary["skill"]["capabilities_omitted"] == 0
+
+
+@pytest.mark.parametrize("veto", [False, True])
+async def test_empty_inventory_portal_start_contract_preserves_jev_veto(settings, state, veto):
+    """The live2170a4ce request confused missing future supplies with entry requirements."""
+    state["inventory"] = []
+    state["skill"] = {
+        "baritone_available": True,
+        "active": False,
+        "capabilities": [f"mine:minecraft:resource_{index}" for index in range(12)]
+        + ["portal:minecraft:nether_portal"],
+    }
+    candidate = {
+        "id": "portal-fixed-seed-48-68-48",
+        "skill": "portal",
+        "item": "minecraft:nether_portal",
+        "target_count": 1,
+        "max_ticks": 1800,
+        "target": {"x": 48, "y": 68, "z": 48},
+        "reason": "Inspect the chest and frame, repair, ignite, and enter the Nether.",
+        "postcondition": "dimension",
+        "expected_dimension": "minecraft:the_nether",
+        "owned_supplies": {"minecraft:obsidian": 0, "minecraft:fire_charge": 0},
+        "path_validated": False,
+        "risks": ["required_chest_supplies_unverified"],
+    }
+    original = copy.deepcopy(candidate)
+    calls = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        summary = body["state"]["game_state"]
+        assert summary["inventory_counts"] == {}
+        assert "portal:minecraft:nether_portal" in summary["skill"]["capabilities"]
+        proposed = body["state"]["candidates"][0]
+        assert proposed["owned_supplies"] == candidate["owned_supplies"]
+        assert proposed["path_validated"] is False
+        contract = proposed["execution_contract"]
+        assert "Empty inventory is allowed" in contract["start_action"]
+        assert any(
+            "server-confirmed owned supplies" in guard for guard in contract["executor_guards"]
+        )
+        question = body["questions"]["skill"]
+        assert "not future phase prerequisites" in question["instructions"]
+        assert "unexecuted_skill_rejection" in question["instructions"]
+        assert "Zero obsidian/ignition" in question["criteria"][candidate["id"]]
+        assert "immediate hazard" in question["criteria"]["__replan__"]
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "skill": {
+                        "type": "choice",
+                        "choice": "__replan__" if veto else candidate["id"],
+                        "confidence": 0.74,
+                        "probabilities": {
+                            candidate["id"]: 0.13 if veto else 0.87,
+                            "__replan__": 0.87 if veto else 0.13,
+                        },
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        planner = StrategyProvider(settings, client)
+        if veto:
+            with pytest.raises(ReplanRequired):
+                await planner.choose(
+                    None, state, [candidate], {"decision_role": "fresh_state_validation"}, "jev"
+                )
+        else:
+            result = await planner.choose(
+                None, state, [candidate], {"decision_role": "fresh_state_validation"}, "jev"
+            )
+            assert result.candidate_id == candidate["id"]
+    assert len(calls) == 1
+    assert candidate == original
+
+
 async def test_holo_selects_only_ids_and_preserves_candidate_parameters(
     settings, state, candidates
 ):
@@ -396,6 +486,151 @@ async def test_jev_fresh_state_validation_is_an_actual_singleton_choice_with_rep
         )
     assert "Jev accepted" in result.rationale
     assert result.candidate_id == "mine_birch"
+
+
+@pytest.mark.parametrize("veto", [False, True])
+async def test_out_of_reach_empty_inventory_mining_contract_does_not_override_jev_veto(
+    settings, state, candidates, veto
+):
+    state["inventory"] = []
+    state["player"]["block_interaction_range"] = 4.5
+    state["skill"] = {
+        "baritone_available": True,
+        "active": False,
+        "capabilities": ["mine:minecraft:birch_log"],
+    }
+    candidate = {
+        **candidates[0],
+        "nearest_target": {"distance": 7.0},
+        "path_validated": False,
+        "risks": ["nearby_scan_truncated"],
+        "table_available": False,
+        "inventory_count": 0,
+    }
+    original = copy.deepcopy(candidate)
+
+    def handle(request):
+        body = json.loads(request.content)
+        proposed = body["state"]["candidates"][0]
+        assert (
+            proposed["nearest_target"]["distance"]
+            > body["state"]["game_state"]["player"]["block_interaction_range"]
+        )
+        assert proposed["path_validated"] is False
+        contract = proposed["execution_contract"]
+        assert "navigation/search" in contract["start_action"]
+        assert any("tool requirement: none" in value for value in contract["start_requirements"])
+        assert any("not guaranteed" in value for value in contract["executor_guards"])
+        assert any(
+            "not precomputed, not failed" in value for value in contract["not_start_requirements"]
+        )
+        assert (
+            "Distance beyond interaction reach"
+            in body["questions"]["skill"]["criteria"][candidate["id"]]
+        )
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "skill": {"type": "choice", "choice": "__replan__" if veto else candidate["id"]}
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        provider = StrategyProvider(settings, client)
+        if veto:
+            with pytest.raises(ReplanRequired):
+                await provider.choose(
+                    None,
+                    state,
+                    [candidate],
+                    {"decision_role": "fresh_state_validation"},
+                    provider="jev",
+                )
+        else:
+            result = await provider.choose(
+                None,
+                state,
+                [candidate],
+                {"decision_role": "fresh_state_validation"},
+                provider="jev",
+            )
+            assert result.candidate_id == candidate["id"]
+    assert candidate == original
+
+
+@pytest.mark.parametrize(
+    "item,required",
+    [
+        ("minecraft:raw_iron", "stone_pickaxe_or_better"),
+        ("minecraft:cobblestone", "suitable_pickaxe"),
+        ("minecraft:flint", "none"),
+    ],
+)
+def test_mining_contract_retains_actual_harvesting_tool_requirements(item, required):
+    from holospeed.strategy import _execution_contract
+
+    contract = _execution_contract({"skill": "mine", "item": item})
+    assert any(f"tool requirement: {required}" in value for value in contract["start_requirements"])
+    assert any("concrete danger" in value for value in contract["start_requirements"])
+
+
+@pytest.mark.parametrize("skill", ["smelt", "cast_portal"])
+def test_route_contracts_distinguish_initial_supplies_from_future_output(skill):
+    from holospeed.strategy import _choice_criterion, _execution_contract
+
+    candidate = {"skill": skill, "reason": "continue normal survival progression"}
+    contract = _execution_contract(candidate)
+    assert contract["start_requirements"] and contract["executor_guards"]
+    candidate["execution_contract"] = contract
+    criterion = _choice_criterion(candidate)
+    if skill == "smelt":
+        assert "Place a carried furnace" in contract["start_action"]
+        assert "Coal is optional" in criterion
+        assert any("fresh server inventory" in value for value in contract["executor_guards"])
+        assert any("no navigation to distant" in value for value in contract["start_requirements"])
+    else:
+        assert "empty bucket" in contract["start_action"]
+        assert "No initial obsidian" in criterion
+        assert any(
+            "nine combined dirt/cobblestone" in value for value in contract["start_requirements"]
+        )
+        assert any("ten exposed lava sources" in value for value in contract["executor_guards"])
+        assert any("actual Nether arrival" in value for value in contract["executor_guards"])
+
+
+async def test_crafting_contract_describes_table_placement_without_assuming_output(
+    settings, state, candidates
+):
+    candidate = {
+        **candidates[1],
+        "item": "minecraft:wooden_pickaxe",
+        "requires_table": True,
+        "table_carried": True,
+    }
+    state["inventory"] = [
+        {"slot": 0, "item": "minecraft:birch_planks", "count": 3},
+        {"slot": 1, "item": "minecraft:stick", "count": 2},
+        {"slot": 2, "item": "minecraft:crafting_table", "count": 1},
+    ]
+
+    def handle(request):
+        body = json.loads(request.content)
+        contract = body["state"]["candidates"][0]["execution_contract"]
+        assert any("actual owned ingredients" in value for value in contract["start_requirements"])
+        assert any("carried table" in value for value in contract["executor_guards"])
+        assert any("raycast" in value for value in contract["executor_guards"])
+        assert "minecraft:wooden_pickaxe" not in body["state"]["game_state"]["inventory_counts"]
+        return httpx.Response(
+            200, json={"answers": {"skill": {"type": "choice", "choice": candidate["id"]}}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result = await StrategyProvider(settings, client).choose(
+            None, state, [candidate], {}, provider="jev"
+        )
+    assert result.candidate_id == candidate["id"]
 
 
 async def test_cancellation_is_journaled_without_retry(settings, state, candidates):

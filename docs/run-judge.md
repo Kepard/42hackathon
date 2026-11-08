@@ -147,6 +147,87 @@ by repeated model vetoes before any skill executed.**
   contains only state, observation, and stop requests, plus the verified
   pre-start snapshot supplied by the launcher.
 
-The independent judge sent no gameplay or lifecycle controls. Full mining,
-crafting, smelting, ten-block casting, and living Nether arrival remain pending
-for this route.
+The independent judge sent no gameplay or lifecycle controls. At the end of
+this smoke, full mining, crafting, smelting, ten-block casting, and living
+Nether arrival were still pending for this route.
+
+## Full-route acceptance: 20261108T115915-30150c0a
+
+This run used merged main commit
+`1a4374300b1b6cbfd48555324daa81cd7d74620e`. The hosted launcher loaded fresh clone
+`holospeed-demo-3cd2d213bc3a4380a07fefca2bf75fde` from the same independently
+verified empty Survival template on seed `-7131204740862824481`.
+
+**Judgment: autonomous resource gathering, crafting, mining, smelting, and
+construction setup verified. Full portal construction and Nether arrival did
+not complete.**
+
+Initial state `28d9074e-b01c-4a1b-91f7-9fc48e2c60c8` at **160 ms** contains
+41 empty inventory slots, no verified steps, full health/hunger, and Overworld
+position `(-6.5,65,-6.5)`. The launch journal links this state to the unchanged
+template level hash recorded above. The operator reported no gameplay inputs
+after starting the run. The independent judge sent none.
+
+Recorded inventory and skill completions establish the following progression:
+
+| Completed operation | Elapsed time |
+| --- | ---: |
+| Gather three logs | 21.205 s |
+| Craft 12 planks, a table, and four sticks | 38.438 s |
+| Clear obstructing vegetation, place the owned table, craft wooden pickaxe | 40.790 s |
+| Mine stone and craft stone pickaxe | 99.785 s |
+| Gather remaining stone and craft furnace | 141.620 s |
+| Mine four raw iron | 169.443 s |
+| Mine gravel and collect actual flint | 202.743 s |
+| Smelt and collect four iron ingots | 246.228 s |
+| Craft bucket | 271.895 s |
+| Craft flint and steel | 275.290 s |
+| Verify natural lava and collect water | 281.882 s |
+
+The initial Holo4 selection was followed by an actual Jev approval using a newer
+state before mining began. Across the run, Holo4 made 14 calls with median
+latency **1.964 seconds**; Jev made 19 calls with median latency **213 ms**.
+Four unexecuted model vetoes caused replanning. Fourteen gameplay skills then
+completed before the casting skill encountered its first execution failure.
+
+The casting skill built its temporary mold, opened channels, and placed water.
+At **293.803 seconds**, its first lava-fetch phase failed with
+`navigation stopped before reaching natural fluid source`. Baritone's native
+log recorded 22 considered movements, an empty open set, and a one-node path
+map. The player remained alive in the Overworld at approximately
+`(-5.533,65,-17.137)`, standing in shallow flowing water. No obsidian frame block
+had been cast, and neither `portal_built` nor `nether` was recorded.
+
+All **835 compressed state assets** and **19 recorded screenshots** pass their
+journal SHA-256 checks. Player health remained 20 throughout. The command
+journal contains 15 bounded skill requests, state/observation requests, stop
+requests, and normal pause requests; it contains no teleport, item-spawn, or
+world-edit command.
+
+The controller released controls, froze its result/display timer at
+**293.869 seconds (4:53.869)**, and paused the actual singleplayer world. The
+Minecraft server log at 12:04:09 UTC confirms “Saving and pausing game”. A native
+screenshot corroborates the unobscured paused game view and frozen timer. The
+two-minute target was not achieved, and this duration is a failed attempt's
+duration, not a Nether-entry time.
+
+## Follow-up fixes awaiting live acceptance
+
+The subsequent changes batch stone-pickaxe and furnace materials into one
+mining visit, add bounded walking out of shallow water that Baritone rejects,
+and expose casting/navigation diagnostics. The parent reported **105 Java
+tests** for the follow-up build. These checks do not establish end-to-end
+gameplay success.
+
+The judge independently checked the new escape-route geometry against the
+recorded failed state. Its bounded search finds two safe waypoints from
+`(-6,65,-18)`: `(-6,65,-19)` then `(-6,66,-20)`. The complete local sample confirms
+solid floors, clear headroom, and a dry final cell with a water-free cardinal
+margin. This validates a route in the recorded terrain; it does not validate
+the live movement controller or the remaining ten-block casting sequence.
+
+The user subsequently requested publishing the work. Judge monitoring stopped
+without sending game controls. **The updated full casting route still needs a
+fresh live run proving ten newly cast frame blocks, ignition, and a living
+player in the actual Nether dimension.** Historical ruined-portal success must
+not be used as evidence that this construction route has passed.

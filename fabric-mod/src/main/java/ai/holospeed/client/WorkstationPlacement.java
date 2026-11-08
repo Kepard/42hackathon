@@ -38,6 +38,9 @@ final class WorkstationPlacement {
     static boolean mayClear(int removed, boolean placementSupport, boolean occupiedSupport) {
         return removed >= 0 && removed < MAX_CLEARED && !placementSupport && !occupiedSupport;
     }
+    static boolean preferSupport(boolean leaves, double distance, boolean previousLeaves, double previousDistance) {
+        return leaves != previousLeaves ? !leaves : distance < previousDistance;
+    }
     private boolean clearable(BlockPos cell) {
         if (!loaded(cell)) return false;
         BlockState state = client.world.getBlockState(cell);
@@ -68,7 +71,9 @@ final class WorkstationPlacement {
     Candidate find() {
         BlockPos center = client.player.getBlockPos();
         Vec3d eye = client.player.getEyePos();
-        double nearest = Math.pow(client.player.getBlockInteractionRange(), 2);
+        double reachSquared = Math.pow(client.player.getBlockInteractionRange(), 2);
+        double nearest = Double.POSITIVE_INFINITY;
+        boolean chosenLeaves = true;
         Candidate best = null;
         for (BlockPos candidate : BlockPos.iterate(center.add(-3, -2, -3), center.add(3, 1, 3))) {
             BlockPos target = candidate.toImmutable(), floor = target.down();
@@ -79,7 +84,8 @@ final class WorkstationPlacement {
                 || base.hasBlockEntity() || base.isOf(Blocks.CRAFTING_TABLE) || !surroundingsSafe(target) || !entityFree(target)) continue;
             Vec3d top = new Vec3d(floor.getX() + .5, floor.getY() + .999, floor.getZ() + .5);
             double distance = eye.squaredDistanceTo(top);
-            if (distance > nearest) continue;
+            boolean leaves = base.isIn(BlockTags.LEAVES);
+            if (distance > reachSquared || best != null && !preferSupport(leaves, distance, chosenLeaves, nearest)) continue;
             BlockHitResult hit = ray(top);
             if (hit.getType() != HitResult.Type.BLOCK) continue;
             BlockPos obstruction = hit.getBlockPos().toImmutable();
@@ -87,6 +93,7 @@ final class WorkstationPlacement {
             if (!direct && (!clearable(obstruction) || !surroundingsSafe(obstruction)
                 || !mayClear(cleared, obstruction.equals(floor), !entityFree(obstruction.up())))) continue;
             nearest = distance;
+            chosenLeaves = leaves;
             best = new Candidate(hit, target, direct ? null : obstruction);
         }
         return best;

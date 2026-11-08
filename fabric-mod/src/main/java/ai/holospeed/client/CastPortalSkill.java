@@ -1,5 +1,7 @@
 package ai.holospeed.client;
 
+import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -42,7 +44,13 @@ final class CastPortalSkill {
     private int jumpStarted = -1, stepStarted, bucketCountBefore;
     private boolean jumpHeld, forwardHeld, breaking;
     private CastPortalPlan plan;
-    private BlockPos selectedSource, pendingBlock;
+    private BlockPos selectedSource, pendingBlock, navigationGoal;
+    private String navigationMode = "idle";
+    private int navigationStarted, navigationAttempts, settledTicks, localStarted, localProgressAt, localIndex;
+    private double localBestDistance;
+    private boolean localReachesGoal;
+    private List<CastPortalPlan.Point> localRoute = List.of();
+    private final Set<BlockPos> rejectedFluidStands = new HashSet<>();
     private Item pendingMaterial;
     private final List<BlockPos> lava = new ArrayList<>(), water = new ArrayList<>();
     private final Set<BlockPos> collectedLava = new HashSet<>(), placedMold = new HashSet<>(), castBlocks = new HashSet<>();
@@ -74,6 +82,8 @@ final class CastPortalSkill {
         originalSlot = client.player.getInventory().selectedSlot;
         maxTicks = ticks; deadline = System.nanoTime() + (ticks * 50L + 2000) * 1_000_000;
         elapsed = 0; transitionAt = 0; moldIndex = frameIndex = removalIndex = enterAttempts = 0;
+        plan = null; navigationGoal = selectedSource = null; navigationMode = "idle"; localRoute = List.of();
+        rejectedFluidStands.clear();
         lava.clear(); water.clear(); collectedLava.clear(); placedMold.clear(); castBlocks.clear(); verified.clear();
         discoverSources(landmark);
         if (lava.size() < 10) throw new IllegalStateException("ten exposed natural lava sources were not observed near the landmark");
@@ -206,6 +216,7 @@ final class CastPortalSkill {
             if (!ready() || client.world != originWorld || client.player != originPlayer) { finish("cancelled", "world, player, focus or pause changed"); return; }
             requireClosed();
             if (jumpHeld && elapsed - jumpStarted >= 10) releaseJump();
+            if (tickNavigation()) return;
             switch (phase) {
                 case "seek_water" -> seekFluid(false);
                 case "seek_lava" -> seekFluid(true);
@@ -235,6 +246,11 @@ final class CastPortalSkill {
     }
 
     private void beginFluid(boolean lavaSource) throws ReflectiveOperationException {
+        rejectedFluidStands.clear();
+        chooseFluid(lavaSource);
+    }
+
+    private void chooseFluid(boolean lavaSource) throws ReflectiveOperationException {
         releaseInputs();
         List<BlockPos> sources = lavaSource ? lava : water;
         sources.sort(Comparator.comparingDouble(p -> client.player.getPos().squaredDistanceTo(Vec3d.ofCenter(p))));
@@ -253,7 +269,7 @@ final class CastPortalSkill {
         List<BlockPos> positions = new ArrayList<>();
         for (int x = -3; x <= 3; x++) for (int z = -3; z <= 3; z++) for (int y = 0; y <= 3; y++) {
             BlockPos feet = source.add(x, y, z), floor = feet.down();
-            if (!loaded(feet) || !client.world.getBlockState(floor).isFullCube(client.world, floor)
+            if (rejectedFluidStands.contains(feet) || !loaded(feet) || !client.world.getBlockState(floor).isFullCube(client.world, floor)
                 || !client.world.getBlockState(feet).isAir() || !client.world.getBlockState(feet.up()).isAir()) continue;
             Vec3d eye = Vec3d.ofBottomCenter(feet).add(0, client.player.getStandingEyeHeight(), 0);
             if (eye.squaredDistanceTo(target) > Math.pow(client.player.getBlockInteractionRange() - 0.15, 2)) continue;
@@ -556,11 +572,130 @@ final class CastPortalSkill {
         if (!client.player.getMainHandStack().isOf(item)) throw new IllegalStateException("item did not reach the selected hand");
     }
     private void goTo(BlockPos goal) throws ReflectiveOperationException {
-        stopNavigation(); navigation.reserveItems(MATERIAL_IDS); navigation.navigateExact(goal);
+        stopNavigation(); releaseInputs(); navigationGoal = goal.toImmutable();
+        navigationAttempts = settledTicks = 0; navigationStarted = elapsed; navigationMode = "settling";
     }
+
+    /** Baritone rejects flowing-water cells. Only this bounded, validated local walk crosses runoff. */
+    private boolean tickNavigation() throws ReflectiveOperationException {
+        if (navigationMode.equals("idle")) return false;
+        if (navigationMode.equals("local_walk")) { walkLocalRoute(); return true; }
+        if (navigationMode.equals("settling")) {
+            if (client.player.isOnGround() && Math.abs(client.player.getVelocity().y) < 0.08) settledTicks++;
+            else settledTicks = 0;
+            if (settledTicks >= 2) {
+                if (feetInWater() && startLocalRoute()) return true;
+                startBaritone();
+            } else if (elapsed - navigationStarted > 40) throw new IllegalStateException("could not settle on solid ground before casting navigation");
+            return true;
+        }
+        if (navigation.navigationActive() || elapsed - navigationStarted < 20) return false;
+        // A goal can finish at a block edge, or water can invalidate the next path.
+        if (atNavigationGoal()) { navigationMode = "idle"; return false; }
+        if (startLocalRoute()) return true;
+        if (navigationAttempts < 3) {
+            stopNavigation(); releaseInputs(); navigationMode = "settling";
+            navigationStarted = elapsed; settledTicks = 0; return true;
+        }
+        if ((phase.equals("seek_lava") || phase.equals("seek_water")) && rejectedFluidStands.size() < 3) {
+            rejectedFluidStands.add(navigationGoal);
+            chooseFluid(phase.equals("seek_lava")); return true;
+        }
+        throw new IllegalStateException("no bounded route to " + navigationGoal + " from " + client.player.getBlockPos());
+    }
+
+    private void startBaritone() throws ReflectiveOperationException {
+        stopNavigation(); releaseInputs(); navigation.reserveItems(MATERIAL_IDS); navigation.navigateExact(navigationGoal);
+        navigationAttempts++; navigationStarted = elapsed; navigationMode = "baritone";
+    }
+
+    private boolean atNavigationGoal() {
+        return client.player.isOnGround() && client.player.getPos().squaredDistanceTo(Vec3d.ofBottomCenter(navigationGoal)) < 0.12;
+    }
+
+    private boolean feetInWater() {
+        return client.world.getFluidState(client.player.getBlockPos()).isIn(FluidTags.WATER);
+    }
+
+    private boolean startLocalRoute() {
+        if (navigationAttempts >= 4 || !client.player.isOnGround()) return false;
+        CastPortalPlan.Point start = point(client.player.getBlockPos()), goal = point(navigationGoal);
+        List<CastPortalPlan.Point> route = CastEscapeRoute.findTo(start, goal, this::navigationCell);
+        boolean reachesGoal = !route.isEmpty();
+        if (route.isEmpty() && start.equals(goal) && CastEscapeRoute.standable(goal, this::navigationCell) && !atNavigationGoal()) {
+            route = List.of(goal); reachesGoal = true;
+        }
+        if (route.isEmpty() && feetInWater()) route = CastEscapeRoute.find(start, this::navigationCell);
+        if (route.isEmpty()) return false;
+        stopNavigation(); releaseInputs(); navigationAttempts++;
+        localRoute = route; localIndex = 0; localStarted = localProgressAt = elapsed;
+        localBestDistance = Double.POSITIVE_INFINITY; localReachesGoal = reachesGoal; navigationMode = "local_walk";
+        return true;
+    }
+
+    private CastEscapeRoute.Cell navigationCell(CastPortalPlan.Point point) {
+        BlockPos cell = pos(point);
+        if (!loaded(cell)) return CastEscapeRoute.Cell.BLOCKED;
+        var state = client.world.getBlockState(cell);
+        if (state.isOf(Blocks.MAGMA_BLOCK) || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE)
+            || state.isOf(Blocks.CACTUS) || state.isOf(Blocks.SWEET_BERRY_BUSH) || state.isOf(Blocks.POWDER_SNOW)
+            || state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE) || state.getFluidState().isIn(FluidTags.LAVA))
+            return CastEscapeRoute.Cell.BLOCKED;
+        if (state.isOf(Blocks.WATER) && state.getCollisionShape(client.world, cell).isEmpty()) return CastEscapeRoute.Cell.WATER;
+        if (!state.getFluidState().isEmpty()) return CastEscapeRoute.Cell.BLOCKED;
+        if (state.isAir() || softPlant(cell, state)) return CastEscapeRoute.Cell.OPEN;
+        return state.isFullCube(client.world, cell) ? CastEscapeRoute.Cell.SOLID : CastEscapeRoute.Cell.BLOCKED;
+    }
+
+    private void walkLocalRoute() throws ReflectiveOperationException {
+        if (elapsed - localStarted >= 240) throw new IllegalStateException("bounded walk through casting runoff timed out");
+        CastPortalPlan.Point waypoint = localRoute.get(localIndex);
+        if (!CastEscapeRoute.standable(waypoint, this::navigationCell))
+            throw new IllegalStateException("casting runoff route changed or became unsafe");
+        Vec3d target = Vec3d.ofBottomCenter(pos(waypoint));
+        double distance = client.player.getPos().squaredDistanceTo(target);
+        if (distance < 0.10 && client.player.isOnGround()) {
+            releaseInputs(); localIndex++; localProgressAt = elapsed; localBestDistance = Double.POSITIVE_INFINITY;
+            if (localIndex == localRoute.size()) {
+                localRoute = List.of();
+                if (localReachesGoal) navigationMode = "idle";
+                else { navigationMode = "settling"; navigationStarted = elapsed; settledTicks = 0; }
+            }
+            return;
+        }
+        if (distance + 0.02 < localBestDistance) { localBestDistance = distance; localProgressAt = elapsed; }
+        if (elapsed - localProgressAt > 50 || distance > 4.5)
+            throw new IllegalStateException("normal walking made no progress through casting runoff");
+        // Revalidate the cardinal transition and body clearance before every pressed tick.
+        CastPortalPlan.Point current = point(client.player.getBlockPos());
+        if (client.player.isOnGround() && !current.equals(waypoint)) {
+            List<CastPortalPlan.Point> checked = CastEscapeRoute.findTo(current, waypoint, this::navigationCell);
+            if (checked.isEmpty()) throw new IllegalStateException("casting runoff waypoint is no longer reachable on verified terrain");
+            if (checked.size() > 1) {
+                // A valid detour does not authorize walking straight through its obstacle.
+                List<CastPortalPlan.Point> repaired = new ArrayList<>(checked);
+                repaired.addAll(localRoute.subList(localIndex + 1, localRoute.size()));
+                localRoute = List.copyOf(repaired); localIndex = 0;
+                localBestDistance = Double.POSITIVE_INFINITY; releaseInputs(); return;
+            }
+        }
+        Vec3d direction = target.subtract(client.player.getPos());
+        client.player.setYaw((float) Math.toDegrees(Math.atan2(-direction.x, direction.z)));
+        client.options.forwardKey.setPressed(true); forwardHeld = true;
+        if (target.y > client.player.getY() + 0.2 && (client.player.isOnGround() || feetInWater()) && !jumpHeld) {
+            client.options.jumpKey.setPressed(true); jumpHeld = true; jumpStarted = elapsed;
+        } else if (target.y <= client.player.getY() + 0.2 && jumpHeld) releaseJump();
+    }
+
+    private static CastPortalPlan.Point point(BlockPos point) { return new CastPortalPlan.Point(point.getX(), point.getY(), point.getZ()); }
     private void requireNavigation(String goal) {
         try {
-            if (elapsed - phaseAt > 40 && !navigation.navigationActive()) throw new IllegalStateException("navigation stopped before reaching " + goal);
+            if (navigationMode.equals("idle") && !navigation.navigationActive()) {
+                if ((phase.equals("seek_lava") || phase.equals("seek_water")) && rejectedFluidStands.size() < 3) {
+                    rejectedFluidStands.add(navigationGoal); chooseFluid(phase.equals("seek_lava")); return;
+                }
+                throw new IllegalStateException("navigation reached its checked stance but could not interact with " + goal);
+            }
         } catch (ReflectiveOperationException error) { throw new IllegalStateException("navigation status unavailable"); }
     }
     private void seekReach(String action) {
@@ -571,7 +706,10 @@ final class CastPortalSkill {
     private void checkPhaseDeadline(int ticks, String detail) { if (elapsed - phaseAt >= ticks) throw new IllegalStateException(detail); }
     private void setPhase(String value) { phase = value; phaseAt = elapsed; }
     private void setPhaseOnce(String value) { if (!phase.equals(value)) setPhase(value); }
-    private void stopNavigation() { if (navigation != null && !navigation.cancel()) throw new IllegalStateException("could not release casting navigation controls"); }
+    private void stopNavigation() {
+        if (navigation != null && !navigation.cancel()) throw new IllegalStateException("could not release casting navigation controls");
+        navigationMode = "idle";
+    }
     private void requireClosed() {
         if (client.currentScreen != null || client.player.currentScreenHandler != client.player.playerScreenHandler
             || !client.player.currentScreenHandler.getCursorStack().isEmpty()) throw new IllegalStateException("unexpected screen or cursor during casting");
@@ -595,7 +733,25 @@ final class CastPortalSkill {
     private void finish(String result, String detail) {
         pendingResult = result; pendingReason = detail; releaseInputs();
         if (navigation != null && !navigation.cancel()) { phase = "cancellation_pending"; reason = "casting cancellation pending; control ownership retained"; return; }
-        restoreSlot(); status = result; phase = result;
+        restoreSlot(); navigationMode = "idle"; status = result; phase = result;
         reason = detail == null ? "" : detail.substring(0, Math.min(300, detail.length()));
+    }
+
+    JsonObject diagnostics() {
+        JsonObject result = new JsonObject();
+        result.add("origin", plan == null ? JsonNull.INSTANCE : positionJson(pos(plan.origin)));
+        if (plan == null) result.add("rotation", JsonNull.INSTANCE); else result.addProperty("rotation", plan.rotation);
+        result.add("selected_source", positionJson(selectedSource));
+        result.add("navigation_goal", positionJson(navigationGoal));
+        result.addProperty("frame_index", frameIndex); result.addProperty("cast_blocks", castBlocks.size());
+        result.addProperty("lava_sources_collected", collectedLava.size()); result.addProperty("navigation_mode", navigationMode);
+        return result;
+    }
+
+    private static com.google.gson.JsonElement positionJson(BlockPos point) {
+        if (point == null) return JsonNull.INSTANCE;
+        JsonObject result = new JsonObject();
+        result.addProperty("x", point.getX()); result.addProperty("y", point.getY()); result.addProperty("z", point.getZ());
+        return result;
     }
 }

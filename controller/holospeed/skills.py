@@ -677,18 +677,38 @@ class _NetherPlanner(_Planner):
             ]
         if need_wood_pick:
             return self.craft(
-                WOOD_PICK, "Craft a wooden pickaxe to mine the first three cobblestone."
+                WOOD_PICK,
+                "Craft a wooden pickaxe to gather the remaining stone recipe materials.",
             )
         if need_stone_pick:
-            if stone_count < 3:
+            batch_furnace = need_furnace and self.supports("craft", FURNACE)
+            stone_required = 3 + 8 * int(batch_furnace)
+            # Gather both recipes before returning to the table. If enough
+            # stone was acquired without a pickaxe, craft that pickaxe first
+            # instead of proposing mining that cannot collect its drops.
+            can_mine_stone = any(counts.get(item, 0) for item in PICKAXE_ITEMS)
+            partial_mining_failure = bool(
+                stone_count >= 3
+                and self.state.skill
+                and self.state.skill.kind == "mine"
+                and self.state.skill.item in STONE_MATERIALS
+                and self.state.skill.status == "failed"
+            )
+            if (
+                stone_count < stone_required
+                and (can_mine_stone or stone_count < 3)
+                and not partial_mining_failure
+            ):
                 return self.mine(
                     ("minecraft:cobblestone", "minecraft:cobbled_deepslate"),
-                    3 - stone_count,
-                    "Mine three stone materials, then upgrade immediately before mining the furnace supply.",
+                    stone_required - stone_count,
+                    "Gather the missing stone pickaxe and furnace recipe materials in one mining visit before returning to the table."
+                    if batch_furnace
+                    else "Gather only the missing stone-pickaxe materials for this executable recipe.",
                 )
             return self.craft(
                 STONE_PICK,
-                "Craft a stone pickaxe for iron and faster furnace-material mining; no axe is required.",
+                "Craft the stone pickaxe for iron; preserve remaining recipe materials and skip the optional axe.",
             )
         if need_furnace:
             if stone_count < 8:

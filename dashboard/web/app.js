@@ -201,8 +201,8 @@
     }
     return valid(token) ? token : "";
   }
-  function controlAvailability(state, fresh, unlocked, pending) {
-    const preparing = state?.launch?.status === "preparing";
+  function controlAvailability(state, fresh, unlocked, pending, awaitingLaunch = false) {
+    const preparing = awaitingLaunch || state?.launch?.status === "preparing";
     const ready = Boolean(unlocked && fresh && !pending && (preparing || state?.status !== "unavailable"));
     return {
       start_new: ready && !preparing && Object.hasOwn(state || {}, "launch") && state?.connected === true,
@@ -291,6 +291,10 @@
   try { storage = typeof sessionStorage !== "undefined" ? sessionStorage : null; } catch { /* Private browsing may deny storage. */ }
   let operatorToken = operatorCredential(typeof location !== "undefined" ? location : null, typeof history !== "undefined" ? history : null, storage);
   let operatorCommand = null;
+  // The command acknowledgment can arrive before its public state snapshot.
+  // Keep this identity separate: a later Pause/Stop command must not expose
+  // the previous launch's failure or recording during that publication gap.
+  let requestedLaunch = null;
   let commandBusy = false;
   let commandChecking = false;
   let commandLastChecked = 0;
@@ -462,16 +466,16 @@
   }
   function renderState() {
     const recordedState = envelope?.state || {};
-    const launch = launchProgress(recordedState.launch);
+    const launch = launchForDisplay(recordedState);
     // Preparation is not a new gameplay recording. Keep its predecessor in
     // the journal instead of presenting old progress as the freshly loaded run.
-    const state = launch?.active ? {...recordedState, run_id: null, status: "preparing", action: null, keys: [], metrics: {}, milestones: [], events: [], holo_latency_ms: null, jev_latency_ms: null, objective: "Preparing a fresh Minecraft world.", strategy: launch.detail || "Copy the clean template, load it, and verify the starting state.", expected_effect: "Autonomous gameplay starts after the world is verified."} : recordedState;
+    const state = launch?.active ? {...recordedState, run_id: null, status: "preparing", action: null, keys: [], metrics: {}, milestones: [], events: [], holo_latency_ms: null, jev_latency_ms: null, objective: launch.awaiting ? "Waiting for a fresh-world launch." : "Preparing a fresh Minecraft world.", strategy: launch.detail || "Copy the clean template, load it, and verify the starting state.", expected_effect: "Autonomous gameplay starts after the world is verified."} : recordedState;
     const mode = state.mode;
     const telemetry = telemetryState(envelope, Date.now(), reachable);
     renderControls(recordedState, telemetry);
-    const label = !telemetry.fresh ? telemetry.label : ({running: "Agent running", preparing: "Preparing new run", paused: "Agent paused", error: "Needs attention", idle: "Agent standing by", finished: "Run finished", completed: "Run complete"})[state.status] || "Waiting for agent";
+    const label = !telemetry.fresh ? telemetry.label : launch?.awaiting ? launch.accepted ? "Awaiting launch status" : "Requesting new run" : ({running: "Agent running", preparing: "Preparing new run", paused: "Agent paused", error: "Needs attention", idle: "Agent standing by", finished: "Run finished", completed: "Run complete"})[state.status] || "Waiting for agent";
     setStatus($("agent-status"), label, telemetry.fresh ? state.status || "neutral" : "neutral");
-    text("run-context", launch?.active ? "Fresh world preparation · gameplay has not started" : state.run_id ? `${mode === "demo" ? "SIMULATION · " : ""}${state.run_id}` : "No run connected");
+    text("run-context", launch?.active ? `${launch.awaiting ? "Fresh run requested" : "Fresh world preparation"} · gameplay has not started` : state.run_id ? `${mode === "demo" ? "SIMULATION · " : ""}${state.run_id}` : "No run connected");
     text("objective", state.objective || "Ready when the agent is.");
     text("strategy", state.strategy || "The current plan will appear once a run begins.");
     text("expected-effect", state.expected_effect || "Waiting for a decision.");
@@ -549,7 +553,8 @@
   function renderControls(state = envelope?.state || {}, telemetry = telemetryState(envelope, Date.now(), reachable)) {
     const pending = commandBusy || operatorCommand?.status === "pending";
     const launchSupported = Object.hasOwn(state, "launch");
-    const availability = controlAvailability(state, telemetry.fresh, Boolean(operatorToken), pending);
+    const launch = launchForDisplay(state);
+    const availability = controlAvailability(state, telemetry.fresh, Boolean(operatorToken), pending, launch?.awaiting);
     for (const action of ["start_new", "resume", "pause", "stop"]) $(`control-${action}`).disabled = !availability[action];
     text("operator-status", operatorToken ? "Operator access" : "View only");
     $("operator-status").classList.toggle("unlocked", Boolean(operatorToken));
@@ -557,19 +562,32 @@
     $("operator-unlock-link").hidden = Boolean(operatorToken);
     renderLogin();
     renderVoice();
-    renderLaunch(state, telemetry);
-    text("operator-world-note", !launchSupported ? "Launcher not connected" : state.connected !== true && state.launch?.status !== "preparing" ? "Waiting for Minecraft" : "Fresh world · Automatic start");
+    renderLaunch(state, telemetry, launch);
+    text("operator-world-note", !launchSupported ? "Launcher not connected" : launch?.awaiting ? "Waiting for launch status" : state.connected !== true && !launch?.active ? "Waiting for Minecraft" : "Fresh world · Automatic start");
     $("control-start_new").title = launchSupported ? "Fresh world · Automatic start" : "Launcher not connected";
     let feedback = commandMessage;
     if (operatorCommand?.status === "pending" && operatorCommand.expires_at) {
       const remaining = Math.max(0, Math.ceil((Date.parse(operatorCommand.expires_at) - Date.now()) / 1000));
       feedback = remaining ? `Command accepted · waiting for the local agent (${remaining}s remaining).` : "Waiting for the final command result…";
     }
-    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : state.launch?.status === "preparing" ? "Preparing a clean world. Pause or End run cancels this launch." : "New run loads a clean world copy and starts the agent. Previous runs stay in the journal."));
+    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : launch?.awaiting ? launch.detail : launch?.active ? "Preparing a clean world. Pause or End run cancels this launch." : "New run loads a clean world copy and starts the agent. Previous runs stay in the journal."));
     if (operatorToken && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
   }
-  function renderLaunch(state, telemetry) {
-    const launch = launchProgress(state.launch);
+  function launchForDisplay(state) {
+    if (requestedLaunch && state.launch?.id === requestedLaunch.id) requestedLaunch = null;
+    if (!requestedLaunch) return launchProgress(state.launch);
+    const accepted = requestedLaunch.accepted;
+    return {active: true, awaiting: true, accepted, status: accepted ? "accepted" : "requested", stage: null,
+      label: accepted ? "Fresh run accepted" : "Requesting a fresh run",
+      detail: accepted ? "Waiting for this launch's preparation status. Gameplay has not started." : "Waiting for confirmation of this request. It will not be sent again automatically.",
+      world: "", runId: null};
+  }
+  function handleLaunchCommand(command) {
+    if (requestedLaunch?.id !== command?.id) return;
+    if (command.status === "completed") requestedLaunch.accepted = true;
+    else if (["failed", "expired"].includes(command.status)) requestedLaunch = null;
+  }
+  function renderLaunch(state, telemetry, launch = launchForDisplay(state)) {
     $("run-launch").hidden = !launch;
     $("control-pause").title = launch?.active ? "Cancel fresh-world preparation" : "Pause gameplay";
     $("control-stop").title = launch?.active ? "Cancel this launch and preserve its world" : "Stop and archive the current run";
@@ -577,16 +595,16 @@
     $("control-stop").setAttribute("aria-label", $("control-stop").title);
     if (!launch) return;
     $("run-launch").dataset.status = launch.status;
-    $("run-launch").classList.toggle("active", launch.active && telemetry.fresh);
+    $("run-launch").classList.toggle("active", launch.active && !launch.awaiting && telemetry.fresh);
     text("launch-heading", launch.label);
-    text("launch-state", !telemetry.fresh ? "LAST RECORDED" : launch.active ? "PREPARING" : launch.status.toUpperCase());
+    text("launch-state", !telemetry.fresh ? "LAST RECORDED" : launch.active && !launch.awaiting ? "PREPARING" : launch.status.toUpperCase());
     text("launch-detail", launch.detail || (launch.active ? "Preparing the next world. Gameplay has not started." : "This launch attempt has ended."));
     $("launch-world").hidden = !launch.world;
     text("launch-world", launch.world);
     $("launch-run").hidden = !launch.runId;
     text("launch-run", launch.runId ? `Recording ${launch.runId}` : "");
-    $("launch-stages").hidden = !launch.active;
-    $("launch-cancel-note").hidden = !launch.active;
+    $("launch-stages").hidden = !launch.active || Boolean(launch.awaiting);
+    $("launch-cancel-note").hidden = !launch.active || Boolean(launch.awaiting && !launch.accepted);
     document.querySelectorAll("[data-launch-stage]").forEach((element) => {
       const current = element.dataset.launchStage === launch.stage;
       element.classList.toggle("current", current);
@@ -595,6 +613,8 @@
   }
   function lockControls(message = "Controls locked. Public viewing remains available.") {
     operatorToken = "";
+    const changesLaunch = Boolean(requestedLaunch);
+    requestedLaunch = null;
     voiceSession?.cancel();
     voiceQueue.length = 0;
     voicePartial = "";
@@ -608,7 +628,7 @@
     operatorCommand = null;
     engineeringPreview = null;
     $("devin-confirm").checked = false;
-    renderControls();
+    if (changesLaunch) renderState(); else renderControls();
     renderEngineering();
   }
   function renderLogin() {
@@ -678,44 +698,50 @@
     if (!operatorToken || commandBusy) return;
     const id = crypto.randomUUID();
     operatorCommand = {id, action, status: "pending", submitted_at: Date.now()};
+    if (action === "start_new") requestedLaunch = {id, accepted: false};
     try { storage?.setItem("holospeed.command", JSON.stringify({id, submitted_at: operatorCommand.submitted_at})); } catch { /* Still track within this page. */ }
     commandBusy = true; commandMessage = "Sending command…";
     if (engineering) { engineeringMessage = action === "prepare_investigation" ? "Preparing the exact redacted brief…" : "Requesting one capped Devin investigation…"; renderEngineering(); }
-    renderControls();
+    if (action === "start_new") renderState(); else renderControls();
     const submittedAt = operatorCommand.submitted_at;
     const submittedToken = operatorToken;
     try {
       const result = await commandRequest("/api/commands", {id, action, ...(engineering ? payload : {})});
       if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
       operatorCommand = {...result, action: result.action || action, submitted_at: submittedAt};
+      handleLaunchCommand(operatorCommand);
       commandMessage = operatorCommand.status === "pending" ? "Command accepted; waiting for the local agent." : operatorCommand.detail || `Command ${operatorCommand.status}.`;
       handleEngineeringCommand(operatorCommand);
       handleVoiceCommand(operatorCommand);
     } catch (error) {
       if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
+      if (requestedLaunch?.id === id && error.status && (error.status < 500 || error.status === 503)) requestedLaunch = null;
       if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status && error.status < 500) { operatorCommand = null; commandMessage = error.message; }
       else commandMessage = "Acceptance is unconfirmed. Checking this command ID; it will not be resubmitted.";
       if (engineering) engineeringMessage = commandMessage;
-    } finally { commandBusy = false; renderControls(); renderEngineering(); }
+    } finally { commandBusy = false; if (action === "start_new") renderState(); else renderControls(); renderEngineering(); }
   }
   async function refreshCommand() {
     if (!operatorCommand || !operatorToken || commandChecking) return;
     const id = operatorCommand.id;
+    const changesLaunch = requestedLaunch?.id === id;
     commandChecking = true; commandLastChecked = Date.now();
     try {
       const result = await commandRequest(`/api/commands/${encodeURIComponent(id)}`);
       if (operatorCommand?.id !== id) return;
       operatorCommand = {...result, submitted_at: operatorCommand.submitted_at};
+      handleLaunchCommand(operatorCommand);
       commandMessage = result.status === "completed" ? result.detail || "Command completed." : result.status === "failed" ? `Command failed · ${result.detail || "Inspect the agent status."}` : result.status === "expired" ? "Command expired without a confirmed result. Check the current agent state." : "Command accepted; waiting for the local agent.";
       handleEngineeringCommand(operatorCommand);
       handleVoiceCommand(operatorCommand);
     } catch (error) {
       if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status === 404 && operatorCommand?.id === id && Date.now() - n(operatorCommand.submitted_at) > 45000) {
+        if (requestedLaunch?.id === id) requestedLaunch = null;
         operatorCommand = null; commandMessage = "No command acceptance was confirmed. Check the current agent state before retrying.";
       } else commandMessage = "Command result is unavailable; checking again automatically.";
-    } finally { commandChecking = false; renderControls(); renderEngineering(); }
+    } finally { commandChecking = false; if (changesLaunch) renderState(); else renderControls(); renderEngineering(); }
   }
   function voiceAvailable() {
     return Boolean(operatorToken && telemetryState(envelope, Date.now(), reachable).fresh);

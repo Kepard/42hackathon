@@ -1,6 +1,7 @@
 """Validate the Fabric state boundary and geometry without a game or model API."""
 
 import copy
+import json
 import math
 
 import pytest
@@ -455,3 +456,109 @@ def test_from_scratch_skill_state_preserves_owned_furnace_and_verified_cast_step
     payload["skill"]["known_furnace"]["x"] = "2"
     with pytest.raises(ValidationError):
         GameState.model_validate(payload)
+
+
+def cast_snapshot():
+    payload = sample()
+    payload["skill"] = {
+        "baritone_available": True,
+        "active": True,
+        "kind": "cast_portal",
+        "target_count": 1,
+        "inventory_count": 0,
+        "status": "running",
+        "phase": "collect_lava",
+        "elapsed_ticks": 120,
+        "max_ticks": 1800,
+        "cast": {
+            "origin": {"x": 4, "y": 64, "z": -9},
+            "rotation": 3,
+            "selected_source": {"x": 8, "y": 63, "z": -7},
+            "navigation_goal": {"x": 7, "y": 64, "z": -6},
+            "frame_index": 4,
+            "cast_blocks": 4,
+            "lava_sources_collected": 5,
+            "navigation_mode": "baritone",
+        },
+    }
+    return payload
+
+
+@pytest.mark.parametrize("navigation_mode", ["idle", "settling", "baritone", "local_walk"])
+def test_cast_diagnostics_round_trip_without_creating_completion_evidence(navigation_mode):
+    payload = cast_snapshot()
+    payload["skill"]["cast"]["navigation_mode"] = navigation_mode
+    state = GameState.model_validate_json(json.dumps(payload))
+    assert state.skill.cast.model_dump() == payload["skill"]["cast"]
+    assert state.skill.cast.origin == BlockPos(x=4, y=64, z=-9)
+    assert state.skill.verified_steps == []
+    assert state.skill.status == "running"
+    assert state.tick == payload["tick"]
+    assert state.sampled_at_ms == payload["sampled_at_ms"]
+    assert not state.is_fresh(102_000)
+    assert GameState.model_validate_json(state.model_dump_json()) == state
+
+
+def test_cast_diagnostics_accept_unplanned_and_terminal_states_and_older_clients():
+    payload = cast_snapshot()
+    for key in ("origin", "rotation", "selected_source", "navigation_goal"):
+        payload["skill"]["cast"][key] = None
+    for key in ("frame_index", "cast_blocks", "lava_sources_collected"):
+        payload["skill"]["cast"][key] = 0
+    assert GameState.model_validate(payload).skill.cast.origin is None
+    payload["skill"].update(active=False, status="failed", phase="failed")
+    assert GameState.model_validate(payload).skill.cast.frame_index == 0
+    for key in ("frame_index", "cast_blocks", "lava_sources_collected"):
+        payload["skill"]["cast"][key] = 10
+    assert GameState.model_validate(payload).skill.cast.cast_blocks == 10
+    payload["skill"]["cast"] = None
+    assert GameState.model_validate(payload).skill.cast is None
+    del payload["skill"]["cast"]
+    assert GameState.model_validate(payload).skill.cast is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("rotation", -1),
+        ("rotation", 4),
+        ("rotation", True),
+        ("rotation", "1"),
+        ("frame_index", -1),
+        ("frame_index", 11),
+        ("cast_blocks", -1),
+        ("cast_blocks", 11),
+        ("cast_blocks", True),
+        ("lava_sources_collected", -1),
+        ("lava_sources_collected", 11),
+        ("lava_sources_collected", 1.5),
+        ("navigation_mode", "teleport"),
+        ("navigation_mode", None),
+        ("origin", {"x": 30_000_000, "y": 64, "z": 0}),
+        ("selected_source", {"x": "2", "y": 64, "z": 0}),
+        ("navigation_goal", {"x": 2.5, "y": 64, "z": 0}),
+        ("navigation_goal", {"x": 2, "y": 64, "z": 0, "dimension": "minecraft:nether"}),
+    ],
+)
+def test_cast_diagnostics_reject_invalid_counts_positions_and_navigation(field, value):
+    payload = cast_snapshot()
+    payload["skill"]["cast"][field] = value
+    with pytest.raises(ValidationError):
+        GameState.model_validate(payload)
+
+
+def test_cast_diagnostics_reject_incomplete_unknown_or_cross_skill_data():
+    payload = cast_snapshot()
+    for key in tuple(payload["skill"]["cast"]):
+        incomplete = copy.deepcopy(payload)
+        del incomplete["skill"]["cast"][key]
+        with pytest.raises(ValidationError):
+            GameState.model_validate(incomplete)
+    payload["skill"]["cast"]["command"] = "setblock"
+    with pytest.raises(ValidationError):
+        GameState.model_validate(payload)
+    del payload["skill"]["cast"]["command"]
+    for kind in ("mine", "craft", "smelt", "portal", None):
+        payload["skill"]["kind"] = kind
+        with pytest.raises(ValidationError):
+            GameState.model_validate(payload)

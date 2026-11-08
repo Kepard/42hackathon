@@ -43,4 +43,14 @@ class WorkstationPlacementTest {
         for (float hardness : new float[]{-.1f, .3f, Float.NaN, Float.POSITIVE_INFINITY})
             assertFalse(WorkstationPlacement.clearable(true, false, false, true, false, hardness));
     }
+
+    @Test void reachableGroundBeatsANearerLeafPlatformButKeepsDistanceOrderingWithinEachKind() {
+        // The successful115915 run chose a1.51-block leaf-supported face;
+        // the recorded grass-supported alternative was only1.85 blocks away.
+        assertTrue(WorkstationPlacement.preferSupport(false, 1.85 * 1.85, true, 1.51 * 1.51));
+        assertFalse(WorkstationPlacement.preferSupport(true, 1.51 * 1.51, false, 1.85 * 1.85));
+        assertTrue(WorkstationPlacement.preferSupport(false, 3, false, 4));
+        assertFalse(WorkstationPlacement.preferSupport(false, 4, false, 3));
+        assertTrue(WorkstationPlacement.preferSupport(true, 3, true, 4));
+    }
 }

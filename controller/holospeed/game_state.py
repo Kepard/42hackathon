@@ -189,6 +189,24 @@ class LocalBounds(StateModel):
         )
 
 
+class CastDiagnostics(StateModel):
+    """Observed local cast plan/progress; never a control request or completion proof.
+
+    Positions and counters stay bounded independently: an interrupted placement
+    can leave its selected source or next frame index ahead of confirmed blocks.
+    The full recorded game-state snapshot supplies the surrounding world evidence.
+    """
+
+    origin: BlockPos | None
+    rotation: int | None = Field(ge=0, le=3)
+    selected_source: BlockPos | None
+    navigation_goal: BlockPos | None
+    frame_index: int = Field(ge=0, le=10)
+    cast_blocks: int = Field(ge=0, le=10)
+    lava_sources_collected: int = Field(ge=0, le=10)
+    navigation_mode: Literal["idle", "settling", "baritone", "local_walk"]
+
+
 class SkillState(StateModel):
     """Uncached status of a bounded, normal-mechanics client skill."""
 
@@ -206,6 +224,7 @@ class SkillState(StateModel):
     max_ticks: int = Field(ge=0, le=1800)
     known_table: BlockPos | None = None
     known_furnace: BlockPos | None = None
+    cast: CastDiagnostics | None = None
     capabilities: list[Capability] = Field(default_factory=list, max_length=64)
     verified_steps: list[PortalStep] = Field(default_factory=list, max_length=len(PORTAL_STEPS))
     keys: (
@@ -223,6 +242,8 @@ class SkillState(StateModel):
             raise ValueError("Duplicate skill capabilities")
         if len(self.verified_steps) != len(set(self.verified_steps)):
             raise ValueError("Duplicate verified portal steps")
+        if self.cast is not None and self.kind != "cast_portal":
+            raise ValueError("Cast diagnostics require a cast_portal skill")
         return self
 
 

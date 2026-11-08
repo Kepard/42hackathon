@@ -206,6 +206,25 @@ each lava source must additionally have a fresh server-confirmed non-source
 state. The nine-slot tracker does not weaken the full-container synchronization
 used for furnace completion.
 
+Navigation waits for grounded, settled footing after placement jumps. Baritone
+does not traverse flowing-water cells, so casting has a bounded normal walking
+fallback for runoff: cardinal steps on loaded full-block floors, clear heads,
+shallow water or open feet, and at most one-block ascents/descents. The route
+search stays within twelve horizontal blocks, two vertical blocks and 2,048
+visited cells. It rejects unknown terrain, lava, damaging blocks, deep water,
+partial floors and obstructed bodies. It can walk to a dry margin or back to the
+raised casting pad, using ordinary forward/jump inputs. Each walk has a
+240-tick cap and a 50-tick no-progress guard within the original skill deadline;
+changed routes are revalidated, and controls release on every exit. Baritone
+resumes after reaching dry ground. Failed fluid approaches try at most three
+alternative observed stances.
+
+Cast snapshots include observational `skill.cast` diagnostics: nullable
+`origin`, `rotation`, `selected_source`, and `navigation_goal`, plus bounded
+`frame_index`, `cast_blocks`, `lava_sources_collected`, and `navigation_mode`
+(`idle`, `settling`, `baritone`, or `local_walk`). These fields describe actual
+executor state and do not add milestones or authorize actions.
+
 `skill.verified_steps` records `lava_located`, `water_collected`, `portal_built`,
 and `portal_lit` only from observed sources, owned water, ten individually
 verified casts, and all six actual portal interior blocks. Construction is not
@@ -265,3 +284,8 @@ all guards are recomputed after clearing. Item drops do not block placement,
 while vanilla entity intersection still rejects living entities. No stone,
 logs, containers, fluids, or general terrain excavation is authorized by this
 recovery.
+
+Among eligible workstation placements, non-leaf solid supports are preferred
+before eye distance. Leaf-supported placements remain a fallback when no
+eligible non-leaf support exists; every candidate still has to pass the same
+normal reach, raycast, entity, hazard, and clearance checks.

@@ -22,8 +22,6 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.RaycastContext;
@@ -144,6 +142,7 @@ public final class SkillController {
     private CastPortalSkill portal;
     private final FurnaceController furnace;
     private final FlintSkill flint;
+    private final WorkstationPlacement tablePlacementHelper;
     private boolean cancellationPending;
     private ProgressWatch progress;
     private AbstractRecipeScreenHandler<?, ?> craftHandler;
@@ -162,6 +161,7 @@ public final class SkillController {
         this.baritoneAvailable = BaritoneAccess.available();
         this.furnace = new FurnaceController(client);
         this.flint = new FlintSkill(client);
+        this.tablePlacementHelper = new WorkstationPlacement(client);
     }
 
     public boolean active() { return status.equals("running") || cancellationPending || portal != null && portal.active() || furnace.active() || flint.active(); }
@@ -405,6 +405,7 @@ public final class SkillController {
     }
 
     private void prepareTablePlacement() {
+        tablePlacementHelper.reset();
         if (tablePlacement() == null) throw new IllegalArgumentException("no reachable safe table placement space; move to a clear solid floor");
         var inventory = client.player.getInventory();
         int tableSlot = -1;
@@ -435,60 +436,28 @@ public final class SkillController {
         client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(hotbar));
     }
 
-    private record TablePlacement(BlockHitResult hit, BlockPos position) {}
-
-    private TablePlacement tablePlacement() {
-        BlockPos center = client.player.getBlockPos();
-        Vec3d eye = client.player.getEyePos();
-        double nearest = client.player.getBlockInteractionRange() * client.player.getBlockInteractionRange();
-        TablePlacement selected = null;
-        for (BlockPos candidate : BlockPos.iterate(center.add(-3, -2, -3), center.add(3, 1, 3))) {
-            BlockPos target = candidate.toImmutable();
-            BlockPos floor = target.down();
-            if (!client.world.isChunkLoaded(target.getX() >> 4, target.getZ() >> 4)) continue;
-            var floorState = client.world.getBlockState(floor);
-            if (!client.world.getBlockState(target).isAir() || !floorState.isFullCube(client.world, floor)
-                || !floorState.isSideSolidFullSquare(client.world, floor, Direction.UP)
-                || floorState.hasBlockEntity() || floorState.isOf(Blocks.CRAFTING_TABLE)
-                || hazardous(floor) || hazardous(target)) continue;
-            Box volume = new Box(target);
-            if (client.player.getBoundingBox().intersects(volume) || !client.world.getOtherEntities(client.player, volume).isEmpty()) continue;
-            boolean unsafe = false;
-            for (Direction direction : Direction.values()) if (hazardous(target.offset(direction))) { unsafe = true; break; }
-            if (unsafe) continue;
-            Vec3d top = new Vec3d(floor.getX() + 0.5, floor.getY() + 0.999, floor.getZ() + 0.5);
-            if (eye.squaredDistanceTo(top) > nearest) continue;
-            BlockHitResult hit = client.world.raycast(new RaycastContext(eye, top, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
-            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(floor) && hit.getSide() == Direction.UP) {
-                nearest = eye.squaredDistanceTo(top);
-                selected = new TablePlacement(hit, target);
-            }
-        }
-        return selected;
-    }
-
-    private boolean hazardous(BlockPos position) {
-        if (!client.world.isChunkLoaded(position.getX() >> 4, position.getZ() >> 4)) return true;
-        var block = client.world.getBlockState(position);
-        return !block.getFluidState().isEmpty() || block.isOf(Blocks.FIRE) || block.isOf(Blocks.SOUL_FIRE)
-            || block.isOf(Blocks.MAGMA_BLOCK) || block.isOf(Blocks.CAMPFIRE) || block.isOf(Blocks.SOUL_CAMPFIRE)
-            || block.isOf(Blocks.CACTUS) || block.isOf(Blocks.SWEET_BERRY_BUSH) || block.isOf(Blocks.POWDER_SNOW);
-    }
+    private WorkstationPlacement.Candidate tablePlacement() { return tablePlacementHelper.find(); }
 
     private boolean tickTablePlacement() {
-        if ((phase.equals("await_table_item") || phase.equals("await_table_placement"))
+        if ((phase.equals("await_table_item") || phase.equals("clearing_table_space") || phase.equals("await_table_placement"))
             && (client.currentScreen != null || client.player.currentScreenHandler != client.player.playerScreenHandler
                 || !client.player.currentScreenHandler.getCursorStack().isEmpty())) {
             throw new IllegalStateException("screen or cursor changed during table placement");
         }
-        if (phase.equals("await_table_item")) {
-            if (elapsed - phaseAt < 5) return true;
+        if (phase.equals("await_table_item") || phase.equals("clearing_table_space")) {
+            if (phase.equals("await_table_item") && elapsed - phaseAt < 5) return true;
+            if (tablePlacementHelper.pending() && !tablePlacementHelper.tickClear(elapsed)) return true;
             if (!client.player.getStackInHand(tableHand).isOf(Items.CRAFTING_TABLE)) {
                 if (elapsed - phaseAt < 40) return true;
                 throw new IllegalStateException("crafting table did not reach the selected hand");
             }
-            TablePlacement placement = tablePlacement();
+            WorkstationPlacement.Candidate placement = tablePlacement();
             if (placement == null) throw new IllegalStateException("safe table placement space changed");
+            if (placement.clear() != null) {
+                tablePlacementHelper.beginClear(placement, elapsed);
+                setPhase("clearing_table_space");
+                return true;
+            }
             if (!client.interactionManager.interactBlock(client.player, tableHand, placement.hit()).isAccepted()) throw new IllegalStateException("table placement interaction was rejected");
             placedTable = placement.position();
             setPhase("await_table_placement");
@@ -648,6 +617,7 @@ public final class SkillController {
     }
 
     private void finish(String result, String detail) {
+        tablePlacementHelper.cancel();
         miningPreparation.cancel();
         if (portal != null) portal.cancel(detail);
         furnace.cancel(detail); flint.cancel(detail);

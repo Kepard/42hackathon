@@ -253,3 +253,15 @@ quarantine; unexpected vanilla backup/recovery prompts are never approved
 automatically. Restart/manual resolution may be required if vanilla never
 finishes or invokes its abort callback. These operator operations are separate
 from timed speedrun gameplay and contain no world editing or item injection.
+
+Workstation placement includes bounded vegetation recovery. A carried table or
+furnace may clear up to eight leaf/soft-plant obstructions using normal block
+breaking, provided the intended placement still has a reachable solid floor,
+no adjacent listed hazard, and no blocking entity. The candidate support and
+any occupied support block are protected. Each removal has a sixty-tick limit
+inside the original skill deadline and requires a fresh server AIR update;
+client-predicted disappearance alone is insufficient. The placement ray and
+all guards are recomputed after clearing. Item drops do not block placement,
+while vanilla entity intersection still rejects living entities. No stone,
+logs, containers, fluids, or general terrain excavation is authorized by this
+recovery.

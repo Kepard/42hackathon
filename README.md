@@ -195,7 +195,10 @@ runs/<run-id>/
 The public dashboard receives sanitized, bounded copies. Local archives retain
 full requests and responses, screenshots, state snapshots, and timing for replay
 and comparison. Milestones link to observed evidence; the timer measures session
-wall time, including pauses.
+wall time, including pauses. The displayed timer and recorded result duration
+freeze at goal completion, terminal failure, or the run budget. Later diagnostic
+events retain their full wall timestamps. Explicit resume includes the paused
+interval and starts the timer moving again.
 
 **Current validation:** real trials have acquired stone tools. The new complete
 portal-construction route and fresh-world launcher are implemented; their combined

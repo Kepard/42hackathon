@@ -72,6 +72,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
     private Object skillWorld;
     private long skillDeadline;
     private String pendingArm;
+    private String operatorArmId;
     private long armDeadline;
     private Object armWorld;
     private Object armPlayer;
@@ -163,10 +164,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
                 self.event("emergency_stop", "world loading must finish before starting controls");
                 return;
             }
-            self.enabled = true;
-            self.cancel("F9 start requested");
-            self.frameId = null;
-            self.event("start_requested", "F9 pressed");
+            // Resume only after the same focused, healthy-world checks used by
+            // dashboard Start, including the render pass that clears isPaused.
+            JsonObject request = new JsonObject();
+            self.operatorArmId = "keyboard-" + UUID.randomUUID();
+            request.addProperty("id", self.operatorArmId);
+            self.arm(request);
         }
     }
 
@@ -217,8 +220,9 @@ public final class HoloSpeedClient implements ClientModInitializer {
                     JsonObject response = new JsonObject();
                     response.addProperty("type", "pause_game_ack");
                     response.addProperty("id", GameStateCache.requestId(message));
-                    boolean local = client.isInSingleplayer() && client.player != null && client.world != null;
-                    if (local) client.openGameMenu(false);
+                    boolean local = client.isInSingleplayer() && client.getServer() != null
+                        && !client.getServer().isRemote() && client.player != null && client.world != null;
+                    if (local) client.setScreen(new HoloPauseScreen());
                     gameState.invalidate();
                     response.addProperty("status", local ? "paused" : "unavailable");
                     bridge.send(response);
@@ -408,6 +412,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
     }
 
     private void armAck(String id, String result, String reason) {
+        if (id.equals(operatorArmId)) {
+            operatorArmId = null;
+            if (result.equals("ready")) event("start_requested", "F9 pressed; controls ready");
+            else event("start_rejected", reason == null ? "controls could not resume" : reason);
+            return;
+        }
         JsonObject response = new JsonObject();
         response.addProperty("type", "arm_ack");
         response.addProperty("id", id);

@@ -303,8 +303,7 @@ final class CastPortalSkill {
         } else if (breaking && !breakCell(target, false)) return;
         BlockHitResult hit = placementHit(target);
         if (hit == null) { seekReach("mold placement"); return; }
-        if (client.player.getBoundingBox().intersects(new Box(target))
-            || client.world.getOtherEntities(client.player, new Box(target)).stream().anyMatch(net.minecraft.entity.Entity::isCollidable))
+        if (!client.world.doesNotIntersectEntities(null, net.minecraft.util.shape.VoxelShapes.cuboid(new Box(target))))
             throw new IllegalStateException("mold placement would intersect an entity");
         pendingMaterial = count(Items.DIRT) > 0 ? Items.DIRT : Items.COBBLESTONE;
         equip(pendingMaterial); look(hit.getPos());

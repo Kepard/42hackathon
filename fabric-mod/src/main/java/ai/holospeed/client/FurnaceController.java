@@ -16,8 +16,6 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.RaycastContext;
@@ -77,6 +75,7 @@ public final class FurnaceController {
     }
 
     private final MinecraftClient client;
+    private final WorkstationPlacement placementHelper;
     private String status = "idle", phase = "idle", reason;
     private int target, maxTicks, elapsed, phaseAt, inventoryCount;
     private int lastClickAt, lastProgressAt, previousTotal, stableCount, stableSince;
@@ -95,7 +94,9 @@ public final class FurnaceController {
     private int transferSource = -1, transferBefore;
     private Item transferItem;
 
-    public FurnaceController(MinecraftClient client) { this.client = client; }
+    public FurnaceController(MinecraftClient client) {
+        this.client = client; this.placementHelper = new WorkstationPlacement(client);
+    }
 
     public boolean active() { return status.equals("running"); }
     public String status() { return status; }
@@ -345,6 +346,7 @@ public final class FurnaceController {
     }
 
     private void preparePlacement() {
+        placementHelper.reset();
         if (placement() == null) throw new IllegalStateException("no reachable safe furnace placement space");
         var inventory = client.player.getInventory();
         int slot = -1;
@@ -367,42 +369,9 @@ public final class FurnaceController {
         setPhase("await_furnace_item");
     }
 
-    private record Placement(BlockHitResult hit, BlockPos position) {}
-
-    private Placement placement() {
-        BlockPos center = client.player.getBlockPos(); Vec3d eye = client.player.getEyePos();
-        double nearest = Math.pow(client.player.getBlockInteractionRange(), 2);
-        Placement chosen = null;
-        for (BlockPos candidate : BlockPos.iterate(center.add(-3, -2, -3), center.add(3, 1, 3))) {
-            BlockPos target = candidate.toImmutable(), floor = target.down();
-            if (!loaded(target) || !loaded(floor)) continue;
-            var state = client.world.getBlockState(floor);
-            if (!client.world.getBlockState(target).isAir() || !state.isFullCube(client.world, floor)
-                || !state.isSideSolidFullSquare(client.world, floor, Direction.UP) || state.hasBlockEntity()
-                || state.isOf(Blocks.CRAFTING_TABLE) || hazardous(floor) || hazardous(target)) continue;
-            Box volume = new Box(target);
-            if (client.player.getBoundingBox().intersects(volume) || !client.world.getOtherEntities(client.player, volume).isEmpty()) continue;
-            boolean unsafe = false;
-            for (Direction direction : Direction.values()) if (hazardous(target.offset(direction))) { unsafe = true; break; }
-            if (unsafe) continue;
-            Vec3d top = new Vec3d(floor.getX() + .5, floor.getY() + .999, floor.getZ() + .5);
-            if (eye.squaredDistanceTo(top) > nearest) continue;
-            BlockHitResult hit = raycast(eye, top);
-            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(floor) && hit.getSide() == Direction.UP) {
-                nearest = eye.squaredDistanceTo(top); chosen = new Placement(hit, target);
-            }
-        }
-        return chosen;
-    }
+    private WorkstationPlacement.Candidate placement() { return placementHelper.find(); }
 
     private boolean loaded(BlockPos position) { return client.world.isChunkLoaded(position.getX() >> 4, position.getZ() >> 4); }
-    private boolean hazardous(BlockPos position) {
-        if (!loaded(position)) return true;
-        var block = client.world.getBlockState(position);
-        return !block.getFluidState().isEmpty() || block.isOf(Blocks.FIRE) || block.isOf(Blocks.SOUL_FIRE)
-            || block.isOf(Blocks.MAGMA_BLOCK) || block.isOf(Blocks.CAMPFIRE) || block.isOf(Blocks.SOUL_CAMPFIRE)
-            || block.isOf(Blocks.CACTUS) || block.isOf(Blocks.SWEET_BERRY_BUSH) || block.isOf(Blocks.POWDER_SNOW);
-    }
     private BlockHitResult raycast(Vec3d eye, Vec3d target) {
         return client.world.raycast(new RaycastContext(eye, target, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
     }
@@ -416,16 +385,22 @@ public final class FurnaceController {
     }
 
     private boolean tickPlacement() {
-        if (!phase.equals("await_furnace_item") && !phase.equals("await_furnace_placement")) return false;
+        if (!phase.equals("await_furnace_item") && !phase.equals("clearing_furnace_space") && !phase.equals("await_furnace_placement")) return false;
         if (client.currentScreen != null || client.player.currentScreenHandler != client.player.playerScreenHandler) throw new IllegalStateException("screen changed during furnace placement");
-        if (elapsed - phaseAt < 5) return true;
-        if (phase.equals("await_furnace_item")) {
+        if (!phase.equals("clearing_furnace_space") && elapsed - phaseAt < 5) return true;
+        if (phase.equals("await_furnace_item") || phase.equals("clearing_furnace_space")) {
+            if (placementHelper.pending() && !placementHelper.tickClear(elapsed)) return true;
             if (!client.player.getStackInHand(furnaceHand).isOf(Items.FURNACE)) {
                 if (elapsed - phaseAt < 40) return true;
                 throw new IllegalStateException("furnace did not reach the selected hand");
             }
-            Placement target = placement();
+            WorkstationPlacement.Candidate target = placement();
             if (target == null) throw new IllegalStateException("safe furnace placement space changed");
+            if (target.clear() != null) {
+                placementHelper.beginClear(target, elapsed);
+                setPhase("clearing_furnace_space");
+                return true;
+            }
             if (!client.interactionManager.interactBlock(client.player, furnaceHand, target.hit()).isAccepted()) throw new IllegalStateException("furnace placement was rejected");
             placedFurnace = target.position(); setPhase("await_furnace_placement"); return true;
         }
@@ -443,6 +418,7 @@ public final class FurnaceController {
     public void cancel(String detail) { if (active()) finish("cancelled", detail); }
 
     private void finish(String result, String detail) {
+        placementHelper.cancel();
         status = result; phase = result;
         reason = detail == null ? result : detail.substring(0, Math.min(300, detail.length()));
         restoreSelectedSlot();

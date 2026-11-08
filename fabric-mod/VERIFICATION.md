@@ -133,3 +133,20 @@ cancellation, late arrivals, timeout quarantine, stale callbacks, and path
 validation. Independent lifecycle review found no blocker. Live template-clone
 loading remains pending the next client restart; no launcher gameplay was
 performed during implementation.
+
+## Workstation vegetation recovery
+
+Live run `20261108T114834-a16d6d05` completed logs, planks, a table, and sticks,
+then rejected wooden-pickaxe crafting because acacia leaves blocked every safe
+placement ray. The saved complete local cube shows that clearing the leaf at
+`(-12,65,-4)` exposes a grass-floor face only1.85 blocks from the eye, without
+recorded entity intersection or an adjacent fluid hazard. The new shared
+placement helper supports that normal bounded clearance for tables/furnaces;
+a recorded-coordinate regression checks the geometry. Independent source
+review found no remaining blocker. Live recovery remains to be confirmed after
+the next combined client restart.
+
+The combined workstation-recovery and transparent-pause artifact builds and
+remaps with **95 Java tests passing**, zero failures/errors. F9 now waits for
+the same arm readiness checks as dashboard Start before emitting its start
+event; the transparent screen retains vanilla integrated-server pause behavior.

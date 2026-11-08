@@ -46,6 +46,7 @@ class RunRecorder:
         self.started = time.monotonic()
         self.sequence = 0
         self.closed = False
+        self._terminal_elapsed_ms: int | None = None
         self.stream = (self.path / "events.jsonl").open("a", encoding="utf-8")
         self.summary = {
             "id": self.id,
@@ -67,6 +68,38 @@ class RunRecorder:
             self.summary["duration_ms"]
             if self.closed
             else round((time.monotonic() - self.started) * 1000)
+        )
+
+    @property
+    def duration_ms(self) -> int:
+        """Result/display time; post-terminal diagnostic logging keeps its wall clock."""
+        return self.elapsed_ms if self._terminal_elapsed_ms is None else self._terminal_elapsed_ms
+
+    def freeze_duration(self, reason: str) -> None:
+        if self.closed or self._terminal_elapsed_ms is not None:
+            return
+        self._terminal_elapsed_ms = self.elapsed_ms
+        self.log(
+            "event",
+            {
+                "name": "run_timer_frozen",
+                "reason": reason,
+                "duration_ms": self._terminal_elapsed_ms,
+            },
+        )
+
+    def resume_duration(self) -> None:
+        if self.closed or self._terminal_elapsed_ms is None:
+            return
+        previous = self._terminal_elapsed_ms
+        self._terminal_elapsed_ms = None
+        self.log(
+            "event",
+            {
+                "name": "run_timer_resumed",
+                "previous_duration_ms": previous,
+                "detail": "Session wall time includes the paused interval.",
+            },
         )
 
     def log(self, kind: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -137,7 +170,7 @@ class RunRecorder:
 
     def checkpoint(self, **updates: Any) -> None:
         self.summary.update(redact(updates))
-        self.summary["duration_ms"] = self.elapsed_ms
+        self.summary["duration_ms"] = self.duration_ms
         temp = self.path / "summary.json.tmp"
         with temp.open("w", encoding="utf-8") as stream:
             json.dump(self.summary, stream, indent=2, allow_nan=False)
@@ -148,6 +181,7 @@ class RunRecorder:
     def finish(self, status: str, **updates: Any) -> None:
         if self.closed:
             return
+        self.freeze_duration(status)
         self.log("run_finished", {"status": status})
         self.checkpoint(status=status, **updates)
         self.closed = True

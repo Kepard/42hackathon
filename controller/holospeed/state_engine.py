@@ -416,6 +416,7 @@ async def run_state_agent(engine) -> None:
                     raise RuntimeError(
                         "Nether present without verified full-frame construction in this recording"
                     )
+                engine.freeze_timer("goal_reached")
                 await capture(engine)
                 engine.state.update(
                     status="paused",
@@ -628,6 +629,7 @@ async def run_state_agent(engine) -> None:
             engine.broadcast()
     except RunBudgetReached as error:
         terminal_reason = "run_budget_reached"
+        engine.freeze_timer(terminal_reason)
         engine.state.update(
             status="paused", expected_effect="Run budget reached; controls released."
         )
@@ -637,6 +639,7 @@ async def run_state_agent(engine) -> None:
         raise
     except Exception as error:  # noqa: BLE001 - always release controls on failure.
         terminal_reason = "error"
+        engine.freeze_timer(terminal_reason)
         engine.state.update(
             status="error", expected_effect="Inputs released; inspect the failure event."
         )

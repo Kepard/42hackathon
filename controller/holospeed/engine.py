@@ -90,7 +90,7 @@ class AgentEngine:
     def snapshot(self) -> dict:
         self.state["connected"] = self.bridge.connected
         if self.recorder:
-            self.state["elapsed_ms"] = self.recorder.elapsed_ms
+            self.state["elapsed_ms"] = self.recorder.duration_ms
         self.state["events"] = list(self.events)
         return json.loads(json.dumps(self.state))
 
@@ -100,6 +100,13 @@ class AgentEngine:
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(state)
+
+    def freeze_timer(self, reason: str) -> None:
+        if self.recorder and not self.recorder.closed:
+            # A full disk must not prevent the subsequent control release.
+            with contextlib.suppress(OSError):
+                self.recorder.freeze_duration(reason)
+            self.state["elapsed_ms"] = self.recorder.duration_ms
 
     def log(self, kind: str, data: dict) -> dict | None:
         if self.recorder and not self.recorder.closed:
@@ -175,6 +182,7 @@ class AgentEngine:
                     },
                 )
                 self.state["run_id"] = self.recorder.id
+            self.recorder.resume_duration()
             self.previous = None  # Resume always replans from a fresh observation.
             self.generation += 1
             self.state["status"] = "running"
@@ -238,6 +246,7 @@ class AgentEngine:
             self.launcher.interrupt("Run ended by operator", launch_id=launch_id)
         async with self.lock:
             self._require_run(expected_run_id)
+            self.freeze_timer("operator_finished")
             await self._pause_locked("Run ended by operator")
             if self.recorder and not self.recorder.closed:
                 self.recorder.finish(
@@ -737,6 +746,7 @@ class AgentEngine:
                     m["id"] == "stone_tools" for m in self.state["milestones"]
                 ):
                     self.state["status"] = "paused"
+                    self.freeze_timer("goal_reached")
                     self.log(
                         "event",
                         {
@@ -804,6 +814,7 @@ class AgentEngine:
                 self.broadcast()
                 if any(m["id"] == "stone_tools" for m in self.state["milestones"]):
                     self.state["status"] = "paused"
+                    self.freeze_timer("goal_reached")
                     self.log(
                         "event",
                         {
@@ -818,6 +829,7 @@ class AgentEngine:
             self.state.update(
                 status="paused", expected_effect="Run time budget reached; inputs released."
             )
+            self.freeze_timer("run_budget_reached")
             self.log("event", {"name": "run_budget_reached", "detail": str(error)})
             self.checkpoint()
         except asyncio.CancelledError:
@@ -828,6 +840,7 @@ class AgentEngine:
             raise
         except Exception as error:  # noqa: BLE001 - every unexpected failure must release game inputs.
             self.state["status"] = "error"
+            self.freeze_timer("error")
             self.state["expected_effect"] = (
                 "Inputs released. Review the failure event before resuming."
             )
@@ -842,6 +855,7 @@ class AgentEngine:
 
     async def close(self) -> None:
         terminal_status = "error" if self.state["status"] == "error" else "interrupted"
+        self.freeze_timer(terminal_status)
         await self.pause("Controller shutting down")
         if self.recorder and not self.recorder.closed:
             self.recorder.finish(

@@ -6,7 +6,7 @@ import math
 import time
 
 from .session import KEYS, keycode
-from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change
+from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls
 
 
 class InvalidToolArgs(ValueError):
@@ -63,6 +63,7 @@ SKILLS = {
     "update_notes": ("Replace your own scratchpad (rung, visible inventory, landmarks, lessons). Injected every turn; empty text clears it. No game-state lookup.", {"text": {"type": "string", "maxLength": 4000}}),
     "click_at": RAW["click_at"],
     "shift_click_at": ("Shift-click a GUI slot at normalized screenshot coordinates.", XY),
+    "search_recipe": ("FIRST open inventory/table AND its recipe book, then call this before selecting ANY recipe. Pixel-locates vanilla search/filter, ensures GREEN craftable-only, focuses search, Ctrl+A, types query atomically. Use English item names ('oak planks', 'crafting table', 'stick'), not IDs/underscores. Then inspect filtered results; blank means check ingredients/name/grid. No game-state lookup.", {"query":{"type":"string","minLength":1,"maxLength":80}}),
     "type_text": RAW["type_text"],
     "wait": ("Let game ticks run for seconds.", {"seconds": number(0, 10)}),
 }
@@ -507,7 +508,7 @@ class ToolExecutor:
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
-        after = self.current_frame if call["name"] in ("seek", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "mine", "collect") else await self.observe()
+        after = self.current_frame if call["name"] in ("search_recipe", "seek", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "mine", "collect") else await self.observe()
         delta = changes(before, after)
         moving = call["name"] in ("move", "reposition")
         if moving:
@@ -532,6 +533,8 @@ class ToolExecutor:
             result["mining_probes"] = self.mining_probes[probe_start:]
         if outcome in ("not_in_reach", "not_close"):
             result["next_action"] = "call seek(<target>) first"
+        if outcome == "search_recipe_first":
+            result["next_action"] = "call search_recipe(query='<English item name>') first; do not click unsearched/unavailable recipe icons"
         if self.close_checks:
             result["close_checks"] = list(self.close_checks)
         if self.jev is not None and call["name"] == "attack_until_broken" and outcome in ("scene_changed", "no_change") and self.failed_mining_frame is not None:
@@ -552,6 +555,15 @@ class ToolExecutor:
 
     async def execute_inputs(self, call, tier):
         name, args = call["name"], call["arguments"]
+        if name == "search_recipe":
+            return await self.search_recipe(args["query"])
+        if tier == "skills" and name in ("click_at", "shift_click_at") and self.current_frame:
+            controls = recipe_book_controls(self.current_frame)
+            if controls:
+                left,top,right,bottom = controls["results"]
+                x,y = args["x"]*(self.width-1)/1000, args["y"]*(self.height-1)/1000
+                if left <= x < right and top <= y < bottom and not (controls["craftable_only"] and controls["query_present"]):
+                    return "search_recipe_first"
         if name == "reposition":
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)
         if name == "seek":
@@ -640,3 +652,23 @@ class ToolExecutor:
             await self.tap("e" if name == "open_inventory" else "esc")
         elif name == "wait":
             await self.primitive("wait", ms=args["ms"] if tier == "raw" else args["seconds"] * 1000)
+
+    async def search_recipe(self, query):
+        controls = recipe_book_controls(self.current_frame or await self.observe())
+        if controls is None:
+            return "recipe_book_not_visible: open the inventory/table recipe book first"
+        async def click_point(point):
+            await self.primitive("mouse", x=point[0], y=point[1])
+            await self.click()
+        if not controls["craftable_only"]:
+            await click_point(controls["filter"])
+            await self.observe()
+            controls = recipe_book_controls(self.current_frame)
+            if controls is None or not controls["craftable_only"]:
+                return "recipe_filter_unconfirmed"
+        await click_point(controls["search"])
+        await self.execute_inputs({"name":"key_press","arguments":{"key":"a","ms":100,"ctrl":True}},"skills")
+        await self.primitive("type", text=query)
+        await self.observe()
+        controls = recipe_book_controls(self.current_frame)
+        return "recipe_search_ready" if controls and controls["craftable_only"] and controls["query_present"] else "recipe_search_unconfirmed"

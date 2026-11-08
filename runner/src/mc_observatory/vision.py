@@ -49,6 +49,47 @@ def hotbar_rows_crop(png):
     return out.getvalue()
 
 
+def recipe_book_controls(png):
+    im = image(png)
+    pixels = im.load()
+    for y in range(1, im.height // 2):
+        x = 1
+        while x < im.width // 2:
+            border = pixels[x - 1, y]
+            if pixels[x, y] != (0, 0, 0) or border not in ((160,160,160),(255,255,255)) or pixels[x,y-1] != border:
+                x += 1
+                continue
+            right = x
+            while right < im.width and pixels[right,y] == (0,0,0): right += 1
+            width = right - x
+            scale = max(1, round(width / 79))
+            if abs(width - 79 * scale) > scale or not all(pixels[z,y-1] == border for z in range(x,right)):
+                x = right
+                continue
+            bottom = y + 1
+            while bottom < min(im.height, y + 16 * scale):
+                if pixels[x-1,bottom] != border or right >= im.width or pixels[right,bottom] != border: break
+                if all(pixels[z,bottom] == border for z in range(x,right)): break
+                bottom += 1
+            if abs(bottom - y - 12 * scale) > scale:
+                x = right
+                continue
+            red = green = 0
+            for z in range(right+5*scale,min(im.width,right+18*scale)):
+                for t in range(y,bottom):
+                    r,g,b = pixels[z,t]
+                    red += r > 1.5*g and r > 1.5*b
+                    green += g > 1.2*r and g > 1.5*b
+            if abs(red - green) < 4 * scale * scale:
+                x = right
+                continue
+            white = sum(min(pixels[z,t]) >= 240 for z in range(x,right) for t in range(y,bottom))
+            return {"search": (x + width//2, (y+bottom)//2), "filter": (right+10*scale, (y+bottom)//2),
+                    "results": (x-15*scale,y+18*scale,x+110*scale,y+143*scale),
+                    "craftable_only": green > red, "query_present": white > 16*scale*scale}
+    return None
+
+
 def changes(before, after):
     a, b = image(before), image(after)
     if a.size != b.size:

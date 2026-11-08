@@ -235,7 +235,7 @@ reflex moves, or moves >0.5s: later calls are discarded, not queued. Observe bef
 
 ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
 1 log: log icon/count. Full ladder: convert ALL4 logs to16 planks BEFORE table (4 planks), sticks and pickaxe; logs cannot substitute for planks.
-Craft: ensure craftable-only filter (GREEN check, not red X); blank results mean check item name/grid or missing ingredients. Click recipe-book search, Ctrl+A, type the item name FIRST; observe filtered results, then click the matching result. Never use unsearched icon positions.
+Craft: use search_recipe(query) to ensure craftable-only filter (GREEN check, not red X) and type the item name FIRST. Blank results mean check item name/grid or missing ingredients. Then click the matching filtered result; unsearched recipe clicks are blocked.
 Observe the output slot: shift-click ONLY if visibly nonempty AND NOT a red-tinted ghost. Red ghost ingredients/output are NOT owned/craftable items. If empty/red, obtain missing ingredients first; never repeat empty-output clicks.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
 4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.

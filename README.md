@@ -63,13 +63,14 @@ unauthenticated deployment.
 
 ```sh
 cd ~/repos/mc-observatory/mod
-DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 ./gradlew runClient
+DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 ALSOFT_DRIVERS=null ./gradlew runClient
 ```
 
 The first vanilla launch may show an accessibility welcome screen: click **Continue** once.
 After the title screen, the mod automatically creates `observatory-spike` in Survival,
 normal difficulty, no cheats/bonus chest, fixed seed **12345**, or loads that save on later launches.
 Loom supplies the offline development player `Observatory`; no Microsoft login is used.
+The OpenAL null backend avoids PulseAudio dependencies; in-game sound-event subtitles remain enabled.
 The mod sets render distance 4, simulation distance 5 (the vanilla minimum), GUI scale 2,
 vsync off, max FPS 260 and pause-on-lost-focus off.
 Window/framebuffer size is requested as 640x480 through the Loom arguments.
@@ -367,7 +368,7 @@ Three processes, each in its own terminal (keep the API key and optional `OBS_TO
 ```sh
 # 1. Minecraft Java (Java 17 / software renderer)
 cd ~/repos/mc-observatory/mod
-DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 ./gradlew runClient
+DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 ALSOFT_DRIVERS=null ./gradlew runClient
 
 # 2. FastAPI backend, Python 3.12, one process/worker only
 cd ~/repos/mc-observatory

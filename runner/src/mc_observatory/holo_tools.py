@@ -149,6 +149,7 @@ class ToolExecutor:
         self.close_checks = []
         self.seek_target = "block face under the crosshair"
         self.current_frame = None
+        self.cursor_position = None
         self.notes = ""
         self.unchanged_moves = 0
         self.failed_mining_frame = None
@@ -415,6 +416,8 @@ class ToolExecutor:
             await self.client.key(keycode(args["key"]), pressed=args["pressed"])
         elif kind == "mouse":
             await self.client.mouse(**args)
+            if "x" in args and "y" in args:
+                self.cursor_position = (args["x"],args["y"])
         elif kind == "type":
             await self.client.type_text(args["text"])
 
@@ -535,6 +538,8 @@ class ToolExecutor:
             result["next_action"] = "call seek(<target>) first"
         if outcome == "search_recipe_first":
             result["next_action"] = "call search_recipe(query='<English item name>') first; do not click unsearched/unavailable recipe icons"
+        if outcome == "position_cursor_first":
+            result["next_action"] = "position the GUI cursor with mouse_move_to or use click_at(x,y)"
         if self.close_checks:
             result["close_checks"] = list(self.close_checks)
         if self.jev is not None and call["name"] == "attack_until_broken" and outcome in ("scene_changed", "no_change") and self.failed_mining_frame is not None:
@@ -557,12 +562,15 @@ class ToolExecutor:
         name, args = call["name"], call["arguments"]
         if name == "search_recipe":
             return await self.search_recipe(args["query"])
-        if tier == "skills" and name in ("click_at", "shift_click_at") and self.current_frame:
+        if tier == "skills" and name in ("click_at", "shift_click_at", "mouse_click", "mouse_down", "attack", "use") and self.current_frame:
             controls = recipe_book_controls(self.current_frame)
-            if controls:
+            if controls and not (controls["craftable_only"] and controls["query_present"]):
                 left,top,right,bottom = controls["results"]
-                x,y = args["x"]*(self.width-1)/1000, args["y"]*(self.height-1)/1000
-                if left <= x < right and top <= y < bottom and not (controls["craftable_only"] and controls["query_present"]):
+                point = (round(args["x"]*(self.width-1)/1000),round(args["y"]*(self.height-1)/1000)) if "x" in args else self.cursor_position
+                if point is None:
+                    return "position_cursor_first"
+                x,y = point
+                if left <= x < right and top <= y < bottom:
                     return "search_recipe_first"
         if name == "reposition":
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)

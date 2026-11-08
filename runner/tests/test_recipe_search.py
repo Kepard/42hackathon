@@ -150,3 +150,33 @@ def test_empty_search_caret_is_not_a_query():
     out = io.BytesIO()
     im.save(out,format="PNG")
     assert recipe_book_controls(out.getvalue())["query_present"] is False
+
+
+@pytest.mark.parametrize("name",["mouse_click","mouse_down"])
+@pytest.mark.parametrize("tier",["skills","raw"])
+@pytest.mark.parametrize("recipe",[True,False])
+async def test_coordinate_less_click_checks_last_dispatched_cursor_across_turns(name,tier,recipe):
+    client = RecipeClient()
+    ex = ToolExecutor(client,854,480)
+    ex.begin_step(RED)
+    await ex.execute({"name":"mouse_move_to","arguments":{"x":175 if recipe else 852,"y":335 if recipe else 303}},tier)
+    ex.begin_step(RED)
+    client.events.clear()
+    result = await ex.execute({"name":name,"arguments":{"button":"left","ms":0}},tier)
+    await ex.finish_turn()
+    pressed = any(isinstance(e,tuple) and e[0]=="mouse" and e[1].get("pressed") for e in client.events)
+    assert pressed is (tier=="raw" or not recipe)
+    if not pressed:
+        assert result["outcome"] == "search_recipe_first"
+        assert "search_recipe" in result["next_action"]
+
+
+async def test_unknown_cursor_requires_position_but_mouse_release_is_never_blocked():
+    client = RecipeClient()
+    ex = ToolExecutor(client,854,480)
+    ex.begin_step(RED)
+    result = await ex.execute(parsed("mouse_click",button="left"),"skills")
+    assert result["outcome"] == "position_cursor_first"
+    assert "mouse_move_to" in result["next_action"]
+    await ex.execute(parsed("mouse_up",button="left"),"skills")
+    assert ("mouse",{"button":0,"pressed":False}) in client.events

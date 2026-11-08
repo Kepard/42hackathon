@@ -57,12 +57,30 @@ test("session exchange uses fixed PCM configuration and never stores the key or 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://api.gladia.io/v2/live");
   assert.equal(calls[0].options.headers["x-gladia-key"], GLADIA);
-  assert.equal(calls[0].options.redirect, "error");
+  assert.equal(calls[0].options.redirect, "manual");
   assert.deepEqual(JSON.parse(calls[0].options.body), {encoding: "wav/pcm", bit_depth: 16, sample_rate: 16000, channels: 1, model: "solaria-1", endpointing: 0.3, maximum_duration_without_endpointing: 5, messages_config: {receive_partial_transcripts: true, receive_final_transcripts: true, receive_lifecycle_events: true, receive_errors: true}});
   const records = [...env.BUCKET.records.values()].map((value) => value.text).join("\n");
   for (const privateValue of [GLADIA, URL, "ephemeral-mock-capability"]) assert.ok(!records.includes(privateValue));
   const publicText = await (await handleApi(request("/api/state", undefined, null), env)).text();
   for (const privateValue of [GLADIA, URL, CONTROL]) assert.ok(!publicText.includes(privateValue));
+});
+
+test("session fetch uses Worker-supported redirect mode and never forwards keys to a redirect destination", async (context) => {
+  let redirect = false;
+  const calls = upstream(context, (_url, options) => {
+    // Unlike browser/Node fetch, Cloudflare rejects this mode during Request
+    // construction, before it sends an upstream HTTP request.
+    if (options.redirect === "error") throw new TypeError("Unsupported redirect mode: error");
+    assert.equal(options.redirect, "manual");
+    return redirect ? new Response(null, {status: 307, headers: {Location: "https://untrusted.example/collect"}}) : Response.json({id: SESSION, url: URL}, {status: 201});
+  });
+  assert.equal((await session(environment())).status, 200);
+  redirect = true;
+  const response = await session(environment());
+  assert.equal(response.status, 502);
+  assert.match(await response.text(), /provider_http_307/);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.url === "https://api.gladia.io/v2/live"));
 });
 
 test("one durable request claim prevents duplicate billable calls across retries and concurrent starts", async (context) => {

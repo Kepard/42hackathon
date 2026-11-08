@@ -23,7 +23,7 @@ const MAX_RUN = 8 * 1024 * 1024;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 const FEED_STATUSES = new Set(["online", "stale", "offline", "controller-offline"]);
 const ROUTES = new Set(["from_scratch", "ruined_portal"]);
-const STATE_FIELDS = new Set(["mode", "route", "status", "connected", "run_id", "elapsed_ms", "objective", "strategy", "expected_effect", "keys", "action", "holo_latency_ms", "jev_latency_ms", "metrics", "milestones", "events", "frame_url", "latency_history"]);
+const STATE_FIELDS = new Set(["mode", "route", "launch", "status", "connected", "run_id", "elapsed_ms", "objective", "strategy", "expected_effect", "keys", "action", "holo_latency_ms", "jev_latency_ms", "metrics", "milestones", "events", "frame_url", "latency_history"]);
 const SUMMARY_FIELDS = new Set(["id", "mode", "started_at", "status", "duration_ms", "metrics", "milestones", "config", "protocol", "updated_at"]);
 const ENVELOPE_FIELDS = new Set(["state", "runs", "updated_at", "captured_at", "capture_seq", "feed_status", "source"]);
 const EVENT_FIELDS = new Set(["seq", "type", "elapsed_ms", "timestamp", "data"]);
@@ -217,11 +217,30 @@ function summary(value, token, expectedId) {
   return sanitize(value, token);
 }
 
+function launchState(value) {
+  if (value === null) return;
+  const fields = new Set(["id", "status", "stage", "started_at", "updated_at", "world_name", "run_id", "detail"]);
+  knownFields(value, fields, "launch state");
+  if ([...fields].some((key) => !Object.hasOwn(value, key))) throw new ApiError(400, "Incomplete launch state");
+  commandId(value.id);
+  if (!["preparing", "running", "failed", "cancelled", "interrupted"].includes(value.status) || !["saving", "copying", "loading", "verifying", "starting", "running", "failed", "cancelled", "interrupted"].includes(value.stage)) throw new ApiError(400, "Invalid launch stage");
+  timestamp(value.started_at, "launch timestamp");
+  timestamp(value.updated_at, "launch update timestamp");
+  if (Date.parse(value.updated_at) < Date.parse(value.started_at)) throw new ApiError(400, "Invalid launch timestamp order");
+  if (value.world_name !== null && (typeof value.world_name !== "string" || !value.world_name.trim() || value.world_name.length > 160 || /[/\\\u0000-\u001f]/.test(value.world_name))) throw new ApiError(400, "Invalid public world name");
+  if (value.run_id !== null && (typeof value.run_id !== "string" || !RUN_ID.test(value.run_id))) throw new ApiError(400, "Invalid launch run identity");
+  boundedText(value.detail, 300, "launch detail");
+  // This public payload is presentation state, never an execution plan or
+  // private save location. The launcher supplies generic, user-facing errors.
+  if (/(?:^|\s)(?:\/(?:workspace|home|tmp|var|Users|mnt)\/|[A-Za-z]:\\)/.test(value.detail)) throw new ApiError(400, "Launch detail must not contain private paths");
+}
+
 function state(value, token) {
   if (value === null) return null;
   knownFields(value, STATE_FIELDS, "state");
   if (!["demo", "live"].includes(value.mode)) throw new ApiError(400, "Invalid state mode");
   if (value.route !== undefined && !ROUTES.has(value.route)) throw new ApiError(400, "Invalid state route");
+  if (value.launch !== undefined) launchState(value.launch);
   if (!["idle", "running", "paused", "error", "unavailable"].includes(value.status)) throw new ApiError(400, "Invalid state status");
   if (value.connected !== undefined && typeof value.connected !== "boolean") throw new ApiError(400, "Invalid connection state");
   for (const key of ["objective", "strategy", "expected_effect"]) if (value[key] !== undefined && (typeof value[key] !== "string" || value[key].length > 5000)) throw new ApiError(400, "Invalid state text");
@@ -364,7 +383,9 @@ async function voiceSession(request, env) {
   let result, failure;
   let stage = "provider_fetch", providerStatus = null, diagnostic = null;
   try {
-    const response = await fetch("https://api.gladia.io/v2/live", {method: "POST", redirect: "error", signal: controller.signal, headers: {"Content-Type": "application/json", "x-gladia-key": env.GLADIA_API_KEY}, body: JSON.stringify({
+    // Workers rejects redirect:"error" before sending a request. Manual mode
+    // preserves the same credential boundary: every 3xx is rejected below.
+    const response = await fetch("https://api.gladia.io/v2/live", {method: "POST", redirect: "manual", signal: controller.signal, headers: {"Content-Type": "application/json", "x-gladia-key": env.GLADIA_API_KEY}, body: JSON.stringify({
       encoding: "wav/pcm", bit_depth: 16, sample_rate: 16000, channels: 1, model: "solaria-1", endpointing: 0.3, maximum_duration_without_endpointing: 5,
       messages_config: {receive_partial_transcripts: true, receive_final_transcripts: true, receive_lifecycle_events: true, receive_errors: true},
     })});

@@ -23,8 +23,8 @@ checks, measured model latency, and local skill execution.*
 4. Open **Run journal** to inspect recorded decisions, actions, and outcomes.
 
 The demo is shared: **New run** restarts it for all viewers. Ask the team for a
-private operator link to try **Gladia voice steering**, **pause/resume**, or
-**Devin failure investigations**.
+private operator link to use **Gladia voice steering**, **pause/resume**, or start
+a **Devin failure investigation**.
 
 ## How Holo4 and Jev drive the run
 

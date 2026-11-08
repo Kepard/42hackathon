@@ -38,13 +38,18 @@
         </section>
         <section class="operator-panel" aria-label="Run controls">
           <div class="operator-actions">
-            <button id="control-start_new" class="button control-primary" aria-label="Start a new recording in the current Minecraft world" title="New recording in the current world" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>New run</button>
+            <button id="control-start_new" class="button control-primary" aria-label="Load a clean Minecraft world copy and start a new autonomous run" title="Fresh world · Automatic start" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>New run</button>
             <button id="control-resume" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 9 6-9 6Z"/></svg>Resume</button>
             <button id="control-pause" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4v12M13 4v12"/></svg>Pause</button>
             <button id="control-stop" class="button control-stop" aria-label="Stop and archive the current run" title="Stop and archive" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5h10v10H5Z"/></svg>End run</button>
           </div>
           <div class="operator-heading"><span id="operator-status" class="operator-status">View only</span><a id="operator-unlock-link" class="text-button" href="#operator-access">Unlock</a><button id="lock-controls" class="text-button" hidden>Lock</button></div>
-          <p id="control-feedback" role="status" aria-live="polite">Operator access is required to control runs.</p><span class="operator-world-note">New recording · Current world</span>
+          <p id="control-feedback" role="status" aria-live="polite">Operator access is required to control runs.</p><span id="operator-world-note" class="operator-world-note">Launcher not connected</span>
+        </section>
+        <section id="run-launch" class="run-launch" aria-labelledby="launch-heading" hidden>
+          <div class="launch-heading"><span class="launch-world-icon" aria-hidden="true"></span><div><span class="launch-eyebrow">FRESH WORLD LAUNCH</span><h2 id="launch-heading">Preparing a fresh run</h2></div><span id="launch-state" class="launch-state">PREPARING</span></div>
+          <ol id="launch-stages" class="launch-stages" aria-label="Fresh run preparation stages"><li data-launch-stage="saving"><i aria-hidden="true">1</i><span>Save</span></li><li data-launch-stage="copying"><i aria-hidden="true">2</i><span>Copy</span></li><li data-launch-stage="loading"><i aria-hidden="true">3</i><span>Load</span></li><li data-launch-stage="verifying"><i aria-hidden="true">4</i><span>Verify</span></li><li data-launch-stage="starting"><i aria-hidden="true">5</i><span>Start</span></li></ol>
+          <p id="launch-detail" class="launch-detail" role="status" aria-live="polite">Preparing the next world. Gameplay has not started.</p><div class="launch-reference"><span id="launch-world" hidden></span><span id="launch-run" hidden></span></div><p id="launch-cancel-note" class="launch-cancel-note">Pause or End run cancels preparation. Previous recordings remain saved.</p>
         </section>
         <section id="voice-panel" class="voice-panel" aria-labelledby="voice-title">
           <div class="voice-toolbar"><button id="voice-toggle" class="voice-toggle" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></svg><span id="voice-toggle-label">Speak</span></button><div class="voice-heading"><h2 id="voice-title">Talk to HoloSpeed</h2><span id="voice-status">Microphone off</span></div><span id="voice-timer" class="voice-timer" hidden></span><span class="voice-brand">VOICE BY <b>Gladia</b></span></div>

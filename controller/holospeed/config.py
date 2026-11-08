@@ -16,6 +16,8 @@ class Settings:
     run_goal: str = "early_game"
     nether_route: str = "from_scratch"
     route_target: dict[str, int] | None = None
+    demo_template_dir: Path | None = None
+    minecraft_saves_dir: Path | None = None
     host: str = "127.0.0.1"
     port: int = 8765
     runs_dir: Path = field(default_factory=lambda: Path("runs"))
@@ -62,6 +64,12 @@ class Settings:
             run_goal=os.getenv("RUN_GOAL", "nether"),
             nether_route=route,
             route_target=target,
+            demo_template_dir=Path(os.environ["DEMO_TEMPLATE_DIR"])
+            if os.getenv("DEMO_TEMPLATE_DIR")
+            else None,
+            minecraft_saves_dir=Path(os.environ["MINECRAFT_SAVES_DIR"])
+            if os.getenv("MINECRAFT_SAVES_DIR")
+            else None,
             host=os.getenv("HOLOSPEED_HOST", "127.0.0.1"),
             port=int(os.getenv("HOLOSPEED_PORT", "8765")),
             runs_dir=Path(os.getenv("HOLOSPEED_RUNS_DIR", "runs")),

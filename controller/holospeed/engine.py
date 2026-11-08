@@ -50,6 +50,7 @@ class AgentEngine:
         self.operator_guidance: deque = deque(maxlen=6)
         self.completed_cast_proof: dict | None = None
         self.events: deque = deque(maxlen=80)
+        self.launcher = None
         self.state = self.initial_state()
 
     def initial_state(self) -> dict:
@@ -59,6 +60,7 @@ class AgentEngine:
             "status": "idle",
             "connected": self.bridge.connected,
             "run_id": None,
+            "launch": self.launcher.snapshot() if self.launcher else None,
             "elapsed_ms": 0,
             "objective": "Ready to gather, craft, and build a Nether portal"
             if self.settings.run_goal == "nether" and self.settings.nether_route == "from_scratch"
@@ -118,9 +120,12 @@ class AgentEngine:
         expected_run_id: object = _ANY_RUN,
         arm: bool = False,
         resume_only: bool = False,
+        launch_id: str | None = None,
     ) -> None:
         async with self.lock:
             self._require_run(expected_run_id)
+            if self.launcher:
+                self.launcher.guard_start(launch_id)
             if resume_only and (self.recorder is None or self.recorder.closed):
                 raise ValueError(
                     "The recording ended before resume acquired control; start a new run explicitly"
@@ -211,6 +216,11 @@ class AgentEngine:
         expected_run_id: object = _ANY_RUN,
         pause_world: bool = False,
     ) -> bool:
+        # Invalidate a launch before waiting for the start/arm lock. Otherwise
+        # an operator pause could wait behind the very arm request it must cancel.
+        self._require_run(expected_run_id)
+        if self.launcher:
+            self.launcher.interrupt(reason)
         async with self.lock:
             self._require_run(expected_run_id)
             await self._pause_locked(reason)
@@ -221,7 +231,11 @@ class AgentEngine:
         *,
         expected_run_id: object = _ANY_RUN,
         pause_world: bool = False,
+        launch_id: str | None = None,
     ) -> None:
+        self._require_run(expected_run_id)
+        if self.launcher:
+            self.launcher.interrupt("Run ended by operator", launch_id=launch_id)
         async with self.lock:
             self._require_run(expected_run_id)
             await self._pause_locked("Run ended by operator")

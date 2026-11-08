@@ -1,273 +1,211 @@
 # HoloSpeed
 
-A state-aware Minecraft speedrunning agent with **Holo4 strategy**, **Jev fresh-state
-validation and skill selection**, a custom Fabric bridge, and local navigation,
-mining, crafting, smelting, and portal casting.
-The current target is **Nether entry from scratch**: gather wood, craft tools,
-mine and smelt iron, make a bucket and flint and steel, then build a complete
-portal using natural lava and water. Fourteen checkpoints expose that progression.
-The agent uses normal
-survival interactions and checks progress against game state.
+**Holo4 plans. Jev checks. Minecraft moves.**
 
-**[Watch the live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site)**
-H.264 live video, private operator controls, detailed event logs, input telemetry, model latency,
-objectives, and run archives. Its H Company-inspired design uses Cal Sans.
-The **On a mission** panel follows actual Holo4 and Jev requests through planning,
-validation, and local execution, with input sources, decisions, and measured latency.
-**Devin engineering** turns a selected run into a reviewable investigation brief,
-then displays session status, findings, and proposed regression tests.
-**Gladia voice** adds spoken pause/resume commands, objectives, and Holo4 questions
-beside the gameplay. Unlock operator access using the password form at the bottom.
-The publisher must remain running alongside Minecraft; stale/offline states are explicit.
-See [dashboard setup and source](dashboard/README.md).
+HoloSpeed is an autonomous Minecraft agent built around H Company’s **Holo4** and
+TypeSafe AI’s **Jev**. It combines visual reasoning, fresh game-state validation,
+and local execution to turn model decisions into precise gameplay. The current
+mission is **empty inventory → tools → smelted iron → bucket-cast portal → Nether**.
 
-Minecraft **Java Edition 1.21.1 + Fabric** is the live target. A separate simulated
-mode runs without Minecraft or model APIs. Actual trials have acquired wood, crafted
-tools, returned to a placed table, and autonomously reached the Nether from an
-empty inventory on the previous ruined-portal seed. Those historical results do
-not establish success or timing for the new full-construction route. Roughly two
-minutes is the new gameplay target; full speedrun completion is not yet implemented.
+**[Watch the live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site)** ·
+[Jury description](docs/jury-description.md) · [Setup](docs/setup.md)
 
-## Try the console
+## How Holo4 and Jev drive the run
 
-![HoloSpeed console with explicitly simulated observations](docs/assets/console-demo.png)
+| Component | Input | Responsibility |
+| --- | --- | --- |
+| **Holo4 · `holo4-35b-a3b`** | Minecraft screenshot, summarized game state, eligible skills, recent outcomes, operator guidance | Choose the next progression objective, resource, or recovery approach at phase boundaries. |
+| **Jev · `jev-1.14.0`** | Newly sampled structured state and bounded skill candidates | Validate Holo4’s proposal against current conditions; select routine skills between strategic calls. |
+| **Python controller** | Model selections and fresh client observations | Account for recipe prerequisites, reject stale or invalid choices, dispatch one skill, and verify its outcome. |
+| **Fabric mod + Baritone** | Bounded skill request | Execute navigation, aiming, mining, pickup, crafting, smelting, and bucket placement locally. |
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.11
-or newer. From the repository root:
-
-```sh
-uv sync --extra dev
-uv run holospeed serve --mode demo
+```mermaid
+sequenceDiagram
+    participant MC as Minecraft + Fabric
+    participant C as Local controller
+    participant H as Holo4
+    participant J as Jev
+    participant UI as Live dashboard
+    MC->>C: Screenshot + structured observation
+    C->>H: Eligible skills + state + image + recent outcomes
+    H-->>C: Candidate ID + rationale
+    C->>MC: Sample current state
+    MC-->>C: Fresh inventory, world, hazards, capabilities
+    C->>J: Proposed skill + fresh state
+    J-->>C: Accept candidate or request replanning
+    C->>MC: Resample and check local prerequisites
+    C->>MC: Execute bounded skill
+    MC-->>C: Server-confirmed inventory / block / dimension updates
+    C->>UI: Decision, latency, actual inputs, outcome, milestone
 ```
 
-Open **http://127.0.0.1:8765** and select **Start run**. The simulated sequence
-demonstrates objectives, inputs, latency traces, four milestones, run logging, and
-replay. **Pause** and **Resume run** retain the current run; **End run** finalizes
-it so the next start creates a new archive entry. There is no automatic start.
+Holo4 sees the game before choosing an objective; its screenshot excludes the
+presentation HUD. Observations also include inventory, health, nearby loaded
+blocks, entities, screen state, and executor capabilities. The model receives a
+compact summary; detailed collision geometry stays with the local executor.
+Jev checks **start prerequisites** without requiring an action’s future outcome
+to exist already. Its explicit `__replan__` response prevents execution.
 
-The console requires no Node.js build and no API keys in demo mode. Its images,
-milestones, and model latencies are clearly labeled as simulation. Use it for
-presentation rehearsal and integration checks, not gameplay-performance claims.
+Model calls happen at skill boundaries, with an eight-second decision budget.
+Controls remain released during planning; movement and interaction run locally
+between decisions. The controller samples state again after inference, so a
+valid-looking answer cannot authorize an obsolete action. Service fallbacks are
+explicitly labeled in the journal and mission panel.
 
-## Connect Minecraft
+### Decision and execution contracts
 
-The selected demonstration seed is [`-7131204740862824481`](docs/demo-seed.md).
-Its trees, buried iron, gravel, water, and natural lava pools were independently
-verified in Java 1.21.1. The [route research](docs/new-route-research.md) records
-coordinates and evidence. The executor checks loaded terrain and builds the
-entire frame; structure loot and existing portal frames are excluded.
+Models select immutable candidates. The controller owns item counts, target
+coordinates, deadlines, and interaction parameters. For example, Holo4’s native
+`select_skill` tool returns:
 
-Run the controller and Minecraft on the same computer. The bridge binds to
-loopback and authenticates with a local token.
-
-1. Install **Java 21**, Minecraft **Java Edition 1.21.1**, and
-   [Fabric Loader](https://fabricmc.net/use/installer/) **0.16.14 or newer** for
-   that Minecraft version. Select the intended launcher instance and its actual
-   game directory; custom launcher instances may not use the default `.minecraft`.
-2. Copy `.env.example` to `.env` in this repository. Set `HCOMPANY_API_KEY` and,
-   to enable Jev, `JEV_API_KEY`. The defaults are `holo4-35b-a3b` with reasoning
-   effort `none`, `jev-1.14.0`, and a 30-second model request timeout.
-   `GAMEPLAY_MODE=state` and `RUN_GOAL=nether` are the live defaults. Set
-   `NETHER_ROUTE=from_scratch`, `MINECRAFT_SEED=-7131204740862824481`, and
-   `CAST_PORTAL_TARGET={"x":4,"y":63,"z":2}` for the verified resource layout. Set
-   `RUN_GOAL=early_game` to stop at stone tools. Holo4 chooses objectives at phase
-   boundaries using structured state and screenshots. Jev validates its proposal
-   against fresh state and selects routine skills; local prerequisites and
-   inventory checks govern execution. Model planning is
-   bounded to eight seconds with a logged deterministic fallback. Keep provider
-   credentials in the controller environment, not the mod configuration.
-3. Generate matching controller/mod credentials from the repository root:
-
-   ```sh
-   uv run holospeed init-bridge --minecraft-dir "/path/to/your/game-directory"
-   ```
-
-   Replace the path with the selected instance directory, not its `mods` folder.
-   This writes a token to `.env` and `<game-directory>/config/holospeed.json`.
-   If changing `HOLOSPEED_PORT`, set it in `.env` before running this command so
-   both endpoints use the same port.
-4. Build the client mod:
-
-   ```sh
-   cd fabric-mod
-   ./gradlew build
-   ```
-
-   On Windows, use `gradlew.bat build`. Copy
-   `fabric-mod/build/libs/holospeed-0.1.0.jar` into the instance's `mods` folder
-   together with [Fabric API](https://modrinth.com/mod/fabric-api) for **1.21.1**
-   (the build uses `0.116.5+1.21.1`). Do not install the `-sources.jar`.
-5. Install the pinned [Baritone](https://github.com/cabaletta/baritone) **1.11.3**
-   Fabric API distribution into the same profile (required for mining/navigation):
-
-   ```sh
-   python scripts/install-baritone.py --minecraft-dir "/path/to/your/game-directory"
-   ```
-
-   The installer verifies the official artifact's SHA-256 and writes source/license
-   attribution beside it. Baritone remains an unmodified, replaceable LGPL dependency.
-6. Return to the repository root and start the controller:
-
-   ```sh
-   uv run holospeed serve --mode live
-   ```
-
-7. Restart Minecraft with that Fabric profile, enter a survival world, and wait
-   for the bridge to connect. Keep Minecraft focused and press **F9** to start
-   or resume a run. Actions are rejected when the world is unavailable, the game
-   is paused, or the window is unfocused.
-
-The mod draws a compact HUD with objectives, strategy, inputs, decision latency,
-elapsed time, and milestones. Screenshots are captured before this HUD is drawn,
-so the agent sees vanilla game UI rather than its own presentation.
-
-**F8** immediately stops inputs and latches the bridge off. **F9** rearms it and
-requests start/resume from the controller with a fresh observation. Both keys work
-in inventory screens. See the [mod guide](fabric-mod/README.md) and
-[demo checklist](docs/demo-checklist.md). Disconnects, expired actions, focus loss,
-and world changes also release held controls.
-
-The bridge exposes player/inventory state, screens, crosshair, nearby loaded blocks,
-collision geometry, and entities through a bounded 5 Hz cache. Baritone executes
-navigation and mining; native recipe and inventory interactions craft tools and
-place/open a carried table. Local tick loops continue without model round trips.
-Skills have inventory targets, tick/wall deadlines, and cancellation guards.
-
-## Logs, replay, and comparison
-
-Each run is preserved locally under `runs/<run-id>/`:
-
-```text
-summary.json     mode, status, elapsed time, configuration, metrics, milestones
-events.jsonl     ordered observations, model payloads, decisions, inputs, ACKs, errors
-frames/          captured PNG/JPEG observations with hashes in the event journal
-states/          complete structured snapshots, compressed JSON with journal hashes
+```json
+{
+  "candidate_id": "craft-minecraft-stone_pickaxe-1",
+  "rationale": "Upgrade the pickaxe before mining iron."
+}
 ```
 
-The default `runs/` directory and `.env` files are Git-ignored. Logs retain model
-requests and responses, including their image payloads, with credential redaction.
-Frame files are retained separately for replay. There is no automatic retention
-policy, so plan disk space and keep the entire run directory when archiving a demo.
-Legacy visual-mode recovery notes also persist in `runs/memory.jsonl` for later context.
-The hosted dashboard receives sanitized, size-bounded archives; local run directories
-remain the complete record, including screenshots and every polled state snapshot.
+Jev’s `/v1/systemone` choice response selects that same ID or `__replan__`:
 
-Open **Run archive**, select two saved runs, and choose **Compare runs** for a
-side-by-side view of duration, completed actions, observations, errors, recoveries,
-token usage, and the four milestone splits. DEMO/LIVE labels remain visible;
-missing values are shown as not recorded. Select a run to inspect its evidence.
-Replay supports scrubbing and 1×, 2×, and 4× playback.
-**Download events** exports the full JSONL journal; screenshot files remain in
-the run directory. The comparison uses saved summaries; the journals provide
-the detailed evidence behind those figures.
-
-For local journal analysis without API calls:
-
-```sh
-uv run holospeed report "runs/<run-id>"
-uv run holospeed compare "runs/<first-id>" "runs/<second-id>"
+```json
+{
+  "answers": {
+    "skill": {
+      "type": "choice",
+      "choice": "craft-minecraft-stone_pickaxe-1"
+    }
+  }
+}
 ```
 
-Reports reconcile control acknowledgments and model usage, summarize latency,
-and preserve the distinction between recorded execution and claimed progress.
+After fresh local validation, the authenticated WebSocket bridge receives:
 
-Replay reconstructs recorded observations and actions. It does not replay inputs
-into Minecraft or reproduce the world deterministically. The timer measures
-elapsed session wall time, including pauses, rather than official speedrun
-in-game time. State-aware milestones require actual inventory or table evidence and are labeled
-`game_state`. Historical visual-mode milestones remain model claims; simulated
-records are labeled separately.
-
-## Ask Devin to investigate a run
-
-The [live integration investigation](docs/devin-investigation.md) includes actual
-Devin findings and explicitly unvalidated test proposals. See the [Devin guide](docs/devin.md)
-for current-fix context and the bounded, redacted workflow.
-
-
-Analysis is separate from gameplay and never starts automatically. First prepare
-the bounded, redacted digest without calling Devin:
-
-```sh
-uv run holospeed analyze "runs/<run-id>"
+```json
+{
+  "type": "skill",
+  "id": "craft-stone-pickaxe-request",
+  "skill": "craft",
+  "item": "minecraft:stone_pickaxe",
+  "target_count": 1,
+  "max_ticks": 400
+}
 ```
 
-To submit it, set `DEVIN_API_KEY` and `DEVIN_ORG_ID` in `.env`, then run:
+`target_count` is the required total inventory count. An accepted request is
+followed by state polling and a verified postcondition. Every request retains its
+ID, source observation, provider, measured latency, usage, and result. See the
+[provider contracts](docs/providers.md), [state schema](fabric-mod/STATE_PROTOCOL.md),
+and [skill protocol](fabric-mod/SKILL_PROTOCOL.md).
 
-```sh
-uv run holospeed analyze "runs/<run-id>" --submit
-```
+## From an empty inventory to the Nether
 
-`--submit` creates a Devin v3 session with a **2-ACU cap** and can incur API usage.
-The request asks for failure causes, focused tests, and proposed fixes against
-`Kepard/42hackathon`, branch `feat/holospeed-agent`; it does not authorize merges,
-deployments, pushes, or pull requests. Only selected diagnostic fields are sent:
-no screenshot attachments, local files, raw model bodies, or provider credentials.
-Devin memory is disabled for the session. Uncommitted local changes are not
-available to Devin through GitHub.
+The Java **1.21.1 / Fabric** route gathers every required material. It uses a
+prepared survival world with natural trees, iron, gravel, water, and lava;
+the executor verifies loaded terrain around the configured lava landmark.
 
-```sh
-uv run holospeed devin-identity
-uv run holospeed devin-session "<session-id>"
-```
+| Stage | Dashboard checkpoints |
+| --- | --- |
+| Establish tools | Wood → crafting table → wooden pickaxe → stone pickaxe |
+| Produce iron equipment | Furnace → iron mined → iron smelted → bucket → flint and steel |
+| Construct and enter | Water collected → lava located → portal built → portal lit → Nether |
 
-The first command reads account information to help locate the organization ID;
-the second reads a submitted session's status and structured findings. An
-ambiguous submission timeout is not retried automatically, because the session
-may already have been created. Inspect Devin session history before retrying.
+Baritone handles navigation, mining, and collection. Vanilla recipe and container
+interactions handle crafting and smelting. The casting skill uses a bucket,
+water, temporary supports, and ten distinct natural lava sources to create ten
+new obsidian frame blocks. Server block updates verify construction and ignition;
+a fresh Nether dimension observation completes the goal only with construction
+proof from the same recording.
 
-## How it fits together
+Each skill has cancellation, tick and wall-clock deadlines, and inventory or
+world-state postconditions. Failed approaches feed the next planning step.
+Pause, F8, disconnect, focus loss, and unexpected world changes release controls;
+goal completion also requests singleplayer pause.
+
+## A live demonstration you can supervise
+
+The [dashboard](https://holospeed-live-kepard.kepard.chatgpt.site) combines an
+H Company-inspired interface, Minecraft inventory and progression visuals, and
+[Cal Sans](https://github.com/calcom/sans).
+
+- **Live camera:** Minecraft-window H.264 video, a 60 FPS capture target, and
+  measured browser playback FPS. Video runs independently of model inference.
+- **ON A MISSION:** actual Holo4 → Jev → local skill activity, each model’s input
+  source, latest decision, measured latency, and expandable technical evidence.
+- **Operator controls:** unlock at the page footer; New run copies the prepared
+  empty-inventory world, then reports **Save → Copy → Load → Verify → Start**.
+  Gameplay timing begins after loading. Pause, Resume, and End run remain beside
+  the feed; previous worlds and recordings are preserved.
+- **Run inspector:** health, hunger, inventory, live inputs, fourteen checkpoint
+  splits, searchable events, previous runs, and downloadable sanitized journals.
+
+### Gladia: voice in the control loop
+
+Click **Speak** in **Talk to HoloSpeed** beside the camera to open a Gladia v2 live
+transcription session. The browser streams 16 kHz mono PCM audio to Gladia and
+shows partial captions. Only final utterances enter the authenticated, run-bound
+command queue:
+
+| Say | Effect |
+| --- | --- |
+| “Pause the game.” | Release controls and pause the available singleplayer world. |
+| “Gather wood before going further.” | Add objective guidance to the next Holo4/Jev planning step. |
+| “Why are you mining iron?” | Ask Holo4 for an answer grounded in the latest recorded state. |
+
+Questions run separately so they cannot delay pause or stop. Typed messages use
+the same command path. The API key stays server-side; the browser receives a
+session-specific WebSocket URL. [Voice integration](docs/gladia.md).
+
+### Devin: turn a failed run into an engineering task
+
+**Devin engineering** connects recorded behavior to actionable improvements:
 
 ```mermaid
 flowchart LR
-    MC[Minecraft + Fabric + Baritone] -->|State, screenshots, skill results| C[Local controller]
-    C -->|Bounded mining and crafting skills| MC
-    C <--> H[Holo4 strategy and recovery]
-    C <--> J[Jev routine skill selection]
-    C --> L[Complete local journal, frames, state snapshots]
-    C --> UI[Game HUD + operator console]
-    C --> P[Read-only hosted dashboard]
-    L -->|Explicit redacted digest| D[Devin analysis]
+    R[Recorded run] --> B[Bounded, redacted evidence brief]
+    B --> V[Operator reviews exact prompt]
+    V --> D[Devin API investigation · 2 ACU cap]
+    D --> F[Failure analysis + proposed regression tests + fixes]
+    F --> E[Engineer reviews and validates changes]
 ```
 
-The prerequisite planner credits existing tools and consumed ingredients, choosing
-only currently eligible skills. Holo4 selects among those candidates at the first
-objective, milestone changes, and recovery points. Jev handles routine selections.
-Models choose candidate IDs; they cannot change counts or inject arbitrary controls.
-Fresh state revalidates each selection before execution, and inventory postconditions
-verify completion afterward. Failed routes are excluded for unchanged inventory;
-three consecutive skill failures stop the run.
+The selected run supplies skill outcomes, inventory evidence, and failures.
+The brief adds the controller checkout revision at preparation time and notes
+that uncommitted changes may differ. The operator reviews the exact prompt and
+its digest before creating a session. Submission is idempotent per run and runs
+outside gameplay.
+Findings and proposed test source appear in the dashboard for review. A
+[real investigation](docs/devin-investigation.md) diagnosed a historical
+crafting-table return failure and produced two proposed regression-test files;
+those proposals were retained for review, not applied automatically.
+[Devin workflow](docs/devin.md).
 
-`MAX_ACTIONS=300` counts completed skills and `MAX_RUN_SECONDS=1800` bounds elapsed
-run time by default. Each mining skill has its own limit and stuck detection;
-crafting waits for inventory synchronization. F8, focus loss, world changes,
-disconnects, and deadlines cancel local execution.
+## Complete evidence, reproducible review
 
-`GAMEPLAY_MODE=visual` preserves the earlier screenshot/control experiment,
-including fresh Jev validation, eight consecutive vetoes, and bounded camera recovery.
-Its latency and progress limitations motivated the current architecture. Historical
-[gameplay findings](docs/gameplay-findings.md) and [Jev evaluation](docs/jev-evaluation.md)
-remain available. See [architecture](docs/architecture.md), [providers](docs/providers.md),
-[research and attribution](docs/state-aware-research.md), and [protocol](docs/protocol.md).
+Each run keeps the complete local record with credential redaction:
 
-## Development and current limits
-
-See the [verification report](docs/verification.md) for actual live-run evidence,
-test results, and the distinction between control integration and wood/tool success.
-
-```sh
-uv run pytest
-uv run ruff check controller
+```text
+runs/<run-id>/
+├── events.jsonl      observations, model payloads, decisions, actions, results
+├── frames/           captured gameplay images
+├── states/           compressed structured observations
+├── summary.json      timing, usage, outcomes, milestone evidence
+└── engineering/      reviewed Devin briefs, receipts, findings
 ```
 
-Run `./gradlew build` in `fabric-mod` for Java compilation and action validation
-tests. Python tests exercise provider contracts with mock transports, redaction,
-replay journals, pause/timeout/disconnect behavior, and the complete simulated
-demo. They do not establish performance in an actual Minecraft world.
+The public dashboard receives sanitized, bounded copies. Local archives retain
+full requests and responses, screenshots, state snapshots, and timing for replay
+and comparison. Milestones link to observed evidence; the timer measures session
+wall time, including pauses.
 
-The from-scratch route currently uses a declared natural-lava landmark. General
-random-seed routing, combat, stronghold routing, and full speedrun completion
-remain future work. Structured
-state is bounded to loaded nearby terrain; it is not an omniscient world map.
-Automated tests verify orchestration and inventory accounting; only recorded real
-Minecraft trials establish gameplay success. See the [demo checklist](docs/demo-checklist.md).
+**Current validation:** real trials have acquired stone tools. The new complete
+portal-construction route and fresh-world launcher are implemented; their combined
+live acceptance run is still pending. The present scope ends at Nether entry.
+[Verification](docs/state-aware-verification.md) · [Independent judge](docs/run-judge.md).
+
+[Architecture](docs/architecture.md) · [Live setup](docs/setup.md) ·
+[Prepared world](docs/demo-seed.md) · [Dashboard](dashboard/README.md) ·
+[Research and attribution](docs/state-aware-research.md)
+
+Baritone **1.11.3** is an unmodified LGPL dependency installed from its official
+release. Task decomposition and evidence checks draw on research into AltoClef,
+Mineflayer, and Voyager; source links and licensing notes are in the research guide.

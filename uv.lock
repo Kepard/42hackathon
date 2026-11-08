@@ -93,6 +93,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "nbt" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -110,6 +111,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "nbt", specifier = "==1.5.1" },
     { name = "pillow", specifier = ">=11,<13" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },
@@ -263,6 +265,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/e1/2069291243c926a2ff1cd706c7f3eeb9b62144bf60f77c9fb9ff2fb26bd3/iniconfig-2.3.1.tar.gz", hash = "sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960", size = 21209, upload-time = "2026-10-06T22:48:38.076Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl", hash = "sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7", size = 7552, upload-time = "2026-10-06T22:48:36.959Z" },
+]
+
+[[package]]
+name = "nbt"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/89/b45d1a3608d0335f0cb6f715dc0363a976981c6b94625de9f4d95417e1b4/NBT-1.5.1.tar.gz", hash = "sha256:da3bb2137605cb9dfe7446f13f19b3ae7faf920d430a387fb78efde27f6636c5", size = 122703, upload-time = "2021-12-22T15:48:31.703Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/ae/f3bdbbaccaca97a2bfdd87466a08717a2174f136e3b99a189d32d03d6526/NBT-1.5.1-py2.py3-none-any.whl", hash = "sha256:1503314d0374b983642f9f219890330ce19d9d85966a28bdb6bef1fb17c4c2c0", size = 25601, upload-time = "2021-12-22T15:46:34.546Z" },
 ]
 
 [[package]]

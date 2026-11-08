@@ -150,8 +150,11 @@ then retains completed decisions without implying continuous inference.
 
 Public viewers cannot control the game. Private operator commands have a
 30-second dispatch window and durable claims against accidental replay.
-New recorded run starts a recording in the current world; it does not reset the
-world. Start/resume requires guarded mod rearming. [Dashboard setup](../dashboard/README.md)
+New run saves and unloads the previous world, copies the verified pristine
+template into a unique save, and loads it through Minecraft's normal client API.
+Only verified empty-inventory, full-health starts arm the agent and begin its timer.
+Pause, Stop, F8, or a disconnected bridge cancel pending automatic startup.
+Old worlds and logs remain available. Resume requires guarded mod rearming. [Dashboard setup](../dashboard/README.md)
 documents access and publishing.
 
 [Devin engineering](devin.md) prepares an exact redacted run brief for operator

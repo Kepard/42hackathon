@@ -150,11 +150,19 @@ controller. H.264/fMP4 HLS targets 60 FPS with this command; omitting
 to one FPS. Target capture rate, measured playback FPS, and Minecraft render
 rate are distinct. Only the named Minecraft window is captured.
 
-The public viewing URL does not grant control. A separate private
-`#control=<CONTROL_TOKEN>` operator link enables New recorded run, Resume,
-Pause, and Stop & archive. Keep that link separate from the public URL and
-publisher credentials. New recorded run archives the current recording and
-starts another in the same Minecraft world; it does not reset the world.
+Unlock **Operator access** with the configured password at the page footer to
+enable **New run**, **Resume**, **Pause**, and **End run**. A private
+`#control=<CONTROL_TOKEN>` link also works; keep it separate from the public
+viewing URL and publisher credentials. **Lock controls** removes access from
+the current tab.
+
+**New run** saves the previous world, copies the prepared empty-inventory
+template into a new save, loads it, verifies the starting state, and starts the
+agent. The dashboard reports **Save → Copy → Load → Verify → Start**; gameplay
+timing starts after loading, and previous worlds and recordings are preserved.
+Configure the template once using the [prepared-world guide](demo-seed.md).
+During preparation, **Pause**, **End run**, or F8 cancels launch. During gameplay,
+**Resume** continues the same recording and **End run** stops and archives it.
 
 Commands expire after 30 seconds if not dispatched. The publisher persists each
 claim before applying a local controller operation. If a request's outcome is

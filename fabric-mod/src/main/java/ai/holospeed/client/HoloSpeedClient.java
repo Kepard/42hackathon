@@ -51,6 +51,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
     private BridgeConfig config;
     private BridgeTransport bridge;
     private SkillController skills;
+    private WorldSessionController worlds;
     private KeyBinding emergency;
     private KeyBinding startKey;
     private Map<String, KeyBinding> bindings;
@@ -100,12 +101,14 @@ public final class HoloSpeedClient implements ClientModInitializer {
         skills = new SkillController(client);
         bridge = new BridgeTransport(config, message -> client.execute(() -> receive(message)),
             () -> client.execute(() -> { cancel("bridge disconnected"); pendingObservation = null; frameId = null; }));
+        worlds = new WorldSessionController(client, bridge::send);
         instance = this;
     }
 
     public static void renderTail() {
         HoloSpeedClient self = instance;
         if (self == null) return;
+        self.worlds.poll();
         self.pollArm();
         self.watchdog();
         // Full vanilla frame, including inventory screens, but no HoloSpeed overlay.
@@ -130,6 +133,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
 
     private void onTick() {
         tick++;
+        worlds.poll();
         pollArm();
         watchdog();
         boolean skillWasActive = skills.active();
@@ -153,6 +157,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
             self.frameId = null;
             self.event("emergency_stop", "F8 pressed");
         } else if (self.startKey.matchesKey(key, scancode)) {
+            if (self.worlds.active()) {
+                self.enabled = false;
+                self.cancel("F9 pressed during world lifecycle; launch cancelled");
+                self.event("emergency_stop", "world loading must finish before starting controls");
+                return;
+            }
             self.enabled = true;
             self.cancel("F9 start requested");
             self.frameId = null;
@@ -194,6 +204,14 @@ public final class HoloSpeedClient implements ClientModInitializer {
                 }
                 case "skill" -> startSkill(message);
                 case "arm" -> arm(message);
+                case "world_unload", "world_load", "world_cancel" -> {
+                    enabled = false;
+                    cancel("world lifecycle requested");
+                    pendingObservation = null;
+                    frameId = null;
+                    gameState.invalidate();
+                    worlds.receive(message, !skills.active() && actionId == null);
+                }
                 case "pause_game" -> {
                     cancel("completed run: pause world");
                     JsonObject response = new JsonObject();
@@ -329,6 +347,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         try {
             id = GameStateCache.requestId(message);
             if (id.isBlank() || id.length() > 128) throw new IllegalArgumentException("invalid arm request id");
+            if (worlds.active()) throw new IllegalArgumentException("world lifecycle or cancelled-load cleanup is pending");
             cancel("operator start requested");
             enabled = false;
             pendingObservation = null;
@@ -451,6 +470,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         release(); actionId = null;
         rejectPendingArm(reason);
         if (skills != null) skills.cancel(reason);
+        if (worlds != null) worlds.cancel(reason);
         if (id != null) ack(id, "cancelled", start, reason);
     }
 

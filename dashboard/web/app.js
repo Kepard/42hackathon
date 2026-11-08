@@ -202,13 +202,22 @@
     return valid(token) ? token : "";
   }
   function controlAvailability(state, fresh, unlocked, pending) {
-    const ready = Boolean(unlocked && fresh && !pending && state?.status !== "unavailable");
+    const preparing = state?.launch?.status === "preparing";
+    const ready = Boolean(unlocked && fresh && !pending && (preparing || state?.status !== "unavailable"));
     return {
-      start_new: ready && state?.connected === true,
-      resume: ready && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
-      pause: ready && state?.status === "running",
-      stop: ready && Boolean(state?.run_id),
+      start_new: ready && !preparing && Object.hasOwn(state || {}, "launch") && state?.connected === true,
+      resume: ready && !preparing && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
+      pause: ready && (preparing || state?.status === "running"),
+      stop: ready && (preparing || Boolean(state?.run_id)),
     };
+  }
+  function launchProgress(value) {
+    if (!value || !["preparing", "running", "failed", "cancelled", "interrupted"].includes(value.status)) return null;
+    const stages = ["saving", "copying", "loading", "verifying", "starting"];
+    const labels = {saving: "Saving the previous world", copying: "Copying a clean world", loading: "Loading Minecraft", verifying: "Verifying the fresh spawn", starting: "Starting the agent", running: "Fresh run started", failed: "Launch failed", cancelled: "Launch cancelled", interrupted: "Launch interrupted"};
+    const active = value.status === "preparing";
+    const stage = active && stages.includes(value.stage) ? value.stage : active ? null : value.status;
+    return {active, status: value.status, stage, index: stages.indexOf(stage), label: labels[stage] || "Preparing a fresh run", detail: typeof value.detail === "string" ? value.detail : "", world: typeof value.world_name === "string" ? value.world_name : "", runId: typeof value.run_id === "string" ? value.run_id : null};
   }
 
   function investigationPreview(value, runId) {
@@ -229,7 +238,7 @@
   }
   // Pure helpers can be tested in Node without a browser or network.
   if (typeof module === "object" && module.exports) {
-    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl, routeProgress};
+    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl, routeProgress, launchProgress};
     return;
   }
 
@@ -452,13 +461,17 @@
     }
   }
   function renderState() {
-    const state = envelope?.state || {};
+    const recordedState = envelope?.state || {};
+    const launch = launchProgress(recordedState.launch);
+    // Preparation is not a new gameplay recording. Keep its predecessor in
+    // the journal instead of presenting old progress as the freshly loaded run.
+    const state = launch?.active ? {...recordedState, run_id: null, status: "preparing", action: null, keys: [], metrics: {}, milestones: [], events: [], holo_latency_ms: null, jev_latency_ms: null, objective: "Preparing a fresh Minecraft world.", strategy: launch.detail || "Copy the clean template, load it, and verify the starting state.", expected_effect: "Autonomous gameplay starts after the world is verified."} : recordedState;
     const mode = state.mode;
     const telemetry = telemetryState(envelope, Date.now(), reachable);
-    renderControls(state, telemetry);
-    const label = !telemetry.fresh ? telemetry.label : ({running: "Agent running", paused: "Agent paused", error: "Needs attention", idle: "Agent standing by", finished: "Run finished", completed: "Run complete"})[state.status] || "Waiting for agent";
+    renderControls(recordedState, telemetry);
+    const label = !telemetry.fresh ? telemetry.label : ({running: "Agent running", preparing: "Preparing new run", paused: "Agent paused", error: "Needs attention", idle: "Agent standing by", finished: "Run finished", completed: "Run complete"})[state.status] || "Waiting for agent";
     setStatus($("agent-status"), label, telemetry.fresh ? state.status || "neutral" : "neutral");
-    text("run-context", state.run_id ? `${mode === "demo" ? "SIMULATION · " : ""}${state.run_id}` : "No run connected");
+    text("run-context", launch?.active ? "Fresh world preparation · gameplay has not started" : state.run_id ? `${mode === "demo" ? "SIMULATION · " : ""}${state.run_id}` : "No run connected");
     text("objective", state.objective || "Ready when the agent is.");
     text("strategy", state.strategy || "The current plan will appear once a run begins.");
     text("expected-effect", state.expected_effect || "Waiting for a decision.");
@@ -484,6 +497,7 @@
     if (action.hotbar) extras.push(`Hotbar ${action.hotbar}`);
     text("extra-input", extras.length ? extras.join(" · ") : held.size ? `${held.size} active input${held.size === 1 ? "" : "s"}` : "No held controls");
     renderMilestones(state);
+    $("route-panel").hidden = Boolean(launch?.active);
     if (mode === "demo") text("capture-source", "Game window · agent in simulation mode");
     else text("capture-source", envelope?.source === "minecraft-window" ? "Minecraft window" : "Game window");
     updateCapture();
@@ -534,6 +548,7 @@
   }
   function renderControls(state = envelope?.state || {}, telemetry = telemetryState(envelope, Date.now(), reachable)) {
     const pending = commandBusy || operatorCommand?.status === "pending";
+    const launchSupported = Object.hasOwn(state, "launch");
     const availability = controlAvailability(state, telemetry.fresh, Boolean(operatorToken), pending);
     for (const action of ["start_new", "resume", "pause", "stop"]) $(`control-${action}`).disabled = !availability[action];
     text("operator-status", operatorToken ? "Operator access" : "View only");
@@ -542,13 +557,41 @@
     $("operator-unlock-link").hidden = Boolean(operatorToken);
     renderLogin();
     renderVoice();
+    renderLaunch(state, telemetry);
+    text("operator-world-note", !launchSupported ? "Launcher not connected" : state.connected !== true && state.launch?.status !== "preparing" ? "Waiting for Minecraft" : "Fresh world · Automatic start");
+    $("control-start_new").title = launchSupported ? "Fresh world · Automatic start" : "Launcher not connected";
     let feedback = commandMessage;
     if (operatorCommand?.status === "pending" && operatorCommand.expires_at) {
       const remaining = Math.max(0, Math.ceil((Date.parse(operatorCommand.expires_at) - Date.now()) / 1000));
       feedback = remaining ? `Command accepted · waiting for the local agent (${remaining}s remaining).` : "Waiting for the final command result…";
     }
-    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : "New recordings use the current Minecraft world. Saved runs below are view-only."));
+    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : state.launch?.status === "preparing" ? "Preparing a clean world. Pause or End run cancels this launch." : "New run loads a clean world copy and starts the agent. Previous runs stay in the journal."));
     if (operatorToken && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
+  }
+  function renderLaunch(state, telemetry) {
+    const launch = launchProgress(state.launch);
+    $("run-launch").hidden = !launch;
+    $("control-pause").title = launch?.active ? "Cancel fresh-world preparation" : "Pause gameplay";
+    $("control-stop").title = launch?.active ? "Cancel this launch and preserve its world" : "Stop and archive the current run";
+    $("control-pause").setAttribute("aria-label", $("control-pause").title);
+    $("control-stop").setAttribute("aria-label", $("control-stop").title);
+    if (!launch) return;
+    $("run-launch").dataset.status = launch.status;
+    $("run-launch").classList.toggle("active", launch.active && telemetry.fresh);
+    text("launch-heading", launch.label);
+    text("launch-state", !telemetry.fresh ? "LAST RECORDED" : launch.active ? "PREPARING" : launch.status.toUpperCase());
+    text("launch-detail", launch.detail || (launch.active ? "Preparing the next world. Gameplay has not started." : "This launch attempt has ended."));
+    $("launch-world").hidden = !launch.world;
+    text("launch-world", launch.world);
+    $("launch-run").hidden = !launch.runId;
+    text("launch-run", launch.runId ? `Recording ${launch.runId}` : "");
+    $("launch-stages").hidden = !launch.active;
+    $("launch-cancel-note").hidden = !launch.active;
+    document.querySelectorAll("[data-launch-stage]").forEach((element) => {
+      const current = element.dataset.launchStage === launch.stage;
+      element.classList.toggle("current", current);
+      if (current) element.setAttribute("aria-current", "step"); else element.removeAttribute?.("aria-current");
+    });
   }
   function lockControls(message = "Controls locked. Public viewing remains available.") {
     operatorToken = "";
@@ -878,7 +921,7 @@
     const executing = Boolean(telemetry.fresh && state.status === "running" && skill?.event?.data?.skill?.active === true && skillAge != null && skillAge >= -2000 && skillAge < 5000);
     $("mission-executor").classList.toggle("active", executing);
     text("mission-executor-status", executing ? "Executing" : !telemetry.fresh && skill ? "Last recorded" : state.action?.skill && state.status === "running" ? "Awaiting progress" : "Standby");
-    const phase = !telemetry.fresh ? "Telemetry unavailable" : holo.active ? "Holo4 is planning" : jev.active ? "Jev is checking" : executing ? "Acting in Minecraft" : state.status === "paused" ? "Agent paused" : state.status === "error" ? "Needs attention" : "Ready for the next step";
+    const phase = !telemetry.fresh ? "Telemetry unavailable" : holo.active ? "Holo4 is planning" : jev.active ? "Jev is checking" : executing ? "Acting in Minecraft" : state.status === "preparing" ? "Waiting for the fresh world" : state.status === "paused" ? "Agent paused" : state.status === "error" ? "Needs attention" : "Ready for the next step";
     text("mission-flow-state", phase);
     $("mission-flow-state").classList.toggle("active", holo.active || jev.active || executing);
     const progress = $("executor-progress");

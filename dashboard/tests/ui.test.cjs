@@ -94,7 +94,7 @@ function observerHarness(options = {}) {
     globalThis.observerTest = {
       set(value, online = true) {envelope = value; reachable = online;},
       updateCapture, renderState, renderControls, submitCommand, refreshCommand, lockControls, pollCapture, renderVideo, trackVideoFrame,
-      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun, renderMilestones, unlockControls, renderLogin,
+      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun, renderMilestones, unlockControls, renderLogin, renderLaunch,
       queueVoice, sendNextVoice, sendTypedVoice, toggleVoice, renderVoice,
       command(value) {operatorCommand = value;},
       engineering(runId, value) {engineeringRun = runId; if (value) engineeringByRun.set(runId, value);},
@@ -804,4 +804,83 @@ test("Holo voice answers cannot replace or animate the gameplay strategist's dec
   assert.equal(stage.rationale, "Mine the exposed iron.");
   assert.equal(stage.latest.seq, 1);
   assert.equal(helpers.inferenceStage([question], "holo", {status: "running"}, true, NOW).status, "Standby");
+});
+
+test("launch preparation exposes cancellation without a current run or game connection", () => {
+  for (const status of ["idle", "paused", "unavailable"]) {
+    const state = {status, connected: false, run_id: null, launch: {status: "preparing", stage: "loading"}};
+    const controls = helpers.controlAvailability(state, true, true, false);
+    assert.equal(controls.pause, true);
+    assert.equal(controls.stop, true);
+    assert.equal(controls.start_new, false);
+    assert.equal(controls.resume, false);
+    assert.equal(Object.values(helpers.controlAvailability(state, false, true, false)).some(Boolean), false);
+    assert.equal(Object.values(helpers.controlAvailability(state, true, false, false)).some(Boolean), false);
+  }
+  const menu = {status: "idle", connected: true, run_id: null, launch: {status: "cancelled", stage: "cancelled"}};
+  assert.equal(helpers.controlAvailability(menu, true, true, false).start_new, true, "A connected title screen can launch a fresh world");
+});
+
+test("launch stages do not claim completion from a command acceptance or invent percentages", () => {
+  assert.equal(helpers.launchProgress(null), null);
+  assert.equal(helpers.launchProgress({status: "accepted"}), null);
+  for (const [stage, label] of Object.entries({saving: "Saving the previous world", copying: "Copying a clean world", loading: "Loading Minecraft", verifying: "Verifying the fresh spawn", starting: "Starting the agent"})) {
+    const progress = helpers.launchProgress({status: "preparing", stage, run_id: null});
+    assert.equal(progress.active, true); assert.equal(progress.label, label); assert.equal(progress.runId, null);
+  }
+  assert.equal(helpers.launchProgress({status: "running", stage: "running", run_id: "new"}).label, "Fresh run started");
+  assert.equal(helpers.launchProgress({status: "failed", stage: "failed"}).active, false);
+  assert.equal(helpers.launchProgress({status: "cancelled", stage: "cancelled"}).label, "Launch cancelled");
+  assert.equal(helpers.launchProgress({status: "interrupted", stage: "interrupted"}).label, "Launch interrupted");
+});
+
+test("preparation cannot display the archived run's time, milestones, or decisions as a new run", () => {
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters"});
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {status: "paused", connected: false, run_id: "previous", elapsed_ms: 123000, objective: "Previous run objective", metrics: {actions: 99}, milestones: [{id: "nether", verification: "game_state"}], events: [inference(1, "holo", "complete", {rationale: "Previous plan"})], launch: {status: "preparing", stage: "copying", detail: "Making a new clean copy.", world_name: "fresh-copy", run_id: null}}});
+  ui.renderState();
+  assert.equal(ui.element("agent-status").textContent, "Preparing new run");
+  assert.match(ui.element("run-context").textContent, /gameplay has not started/);
+  assert.equal(ui.element("elapsed").textContent, "—");
+  assert.equal(ui.element("actions").textContent, "—");
+  assert.equal(ui.element("route-panel").hidden, true);
+  assert.equal(ui.element("mission-holo-rationale").textContent, "No decision recorded yet.");
+  assert.equal(ui.element("mission-flow-state").textContent, "Waiting for the fresh world");
+  assert.equal(ui.element("control-pause").disabled, false);
+  assert.equal(ui.element("control-stop").disabled, false);
+  assert.equal(ui.element("control-start_new").disabled, true);
+  assert.equal(ui.element("launch-heading").textContent, "Copying a clean world");
+  assert.equal(ui.element("launch-run").hidden, true);
+});
+
+test("launch failures, stale stages, and missing metadata stay explicit and restore normal control wording", () => {
+  const ui = observerHarness();
+  ui.renderLaunch({launch: {status: "preparing", stage: "verifying", detail: "Checking empty inventory."}}, {fresh: false});
+  assert.equal(ui.element("launch-state").textContent, "LAST RECORDED");
+  assert.equal(ui.element("run-launch").classList.contains("active"), false);
+  ui.renderLaunch({launch: {status: "failed", stage: "failed", detail: "The world could not be verified.", world_name: "preserved-failed-copy", run_id: null}}, {fresh: true});
+  assert.equal(ui.element("launch-heading").textContent, "Launch failed");
+  assert.equal(ui.element("launch-detail").textContent, "The world could not be verified.");
+  assert.equal(ui.element("launch-stages").hidden, true);
+  assert.equal(ui.element("launch-world").textContent, "preserved-failed-copy");
+  assert.equal(ui.element("control-stop").title, "Stop and archive the current run");
+  ui.renderLaunch({}, {fresh: true});
+  assert.equal(ui.element("run-launch").hidden, true);
+  assert.equal(ui.element("control-pause").title, "Pause gameplay");
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+  assert.ok(!html.includes("New recording · Current world"));
+  assert.match(html, /Fresh world · Automatic start/);
+});
+
+test("New run stays disabled for old controllers until the clean-launch capability is published", () => {
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters"});
+  const old = {status: "paused", connected: true, run_id: "previous"};
+  assert.equal(helpers.controlAvailability(old, true, true, false).start_new, false);
+  ui.set({updated_at: NOW, feed_status: "online", state: old}); ui.renderControls();
+  assert.equal(ui.element("control-start_new").disabled, true);
+  assert.equal(ui.element("operator-world-note").textContent, "Launcher not connected");
+  assert.match(ui.element("control-feedback").textContent, /Launcher not connected/);
+  assert.equal(ui.element("control-resume").disabled, false, "Existing controls remain compatible during rollout");
+  ui.set({updated_at: NOW, feed_status: "online", state: {...old, launch: null}}); ui.renderControls();
+  assert.equal(ui.element("control-start_new").disabled, false);
+  assert.equal(ui.element("operator-world-note").textContent, "Fresh world · Automatic start");
 });

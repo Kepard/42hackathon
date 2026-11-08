@@ -70,10 +70,23 @@ Anyone with that private link can control the agent; rotate `CONTROL_TOKEN` in
 hosting settings to revoke it. Never publish the operator link with the public
 viewing URL.
 
-**New recorded run** archives the current recording and starts another in the
-current Minecraft world; it does not reset the world. **Resume** continues the
-current run, **Pause** releases controls, and **Stop & archive** ends it. Selecting
-an archived run only changes the journal being viewed.
+**New run** saves and archives the previous run, copies the prepared starting
+world into a distinct `holospeed-demo-<UUID>` save, loads it through Minecraft's
+normal world-loading API, verifies the seed and empty, healthy starting state,
+then arms controls and starts autonomous gameplay. Configure the controller's
+`DEMO_TEMPLATE_DIR`, `MINECRAFT_SAVES_DIR`, and matching `MINECRAFT_SEED` using
+[the fixed-seed preparation instructions](../docs/demo-seed.md).
+
+The launch panel reports **Save → Copy → Load → Verify → Start**, followed by the
+actual running, failed, cancelled, or interrupted result. World preparation and
+loading happen before the new run timer begins. Previous worlds and logs remain
+preserved; each retry creates a distinct copy. **New run** stays disabled with
+“Launcher not connected” until the controller advertises launcher support.
+
+During preparation, **Pause**, **End run**, or **F8** cancels the launch. During
+gameplay, **Resume** continues the current run, **Pause** releases controls, and
+**End run** stops and archives it. Selecting an archived run only changes the
+journal being viewed.
 
 The UI posts an immutable UUID command with operator authentication. The Worker
 accepts at most one pending command, with a 30-second delivery window. The local
@@ -83,6 +96,11 @@ completion; uncertain requests are checked by ID and never resubmitted
 automatically. The publisher's persistent ledger prevents restart replay of an
 operation whose outcome is unknown. Expired commands are not dispatched; a late
 acknowledgement may still record an operation's actual result.
+
+For a fresh launch, the publisher calls local `POST /api/new-run` with
+`{"command_id":"<UUID>"}`. Its `202` response means preparation was accepted;
+`state.launch` supplies the subsequent stages and outcome. An accepted command
+does not mean that a world has loaded or gameplay has started.
 
 ## Broadcast the local game
 
@@ -154,7 +172,7 @@ also enforces payload complexity and text-size limits. These archives are for
 remote inspection, not full-fidelity backup or frame replay.
 
 The Worker's strict `STATE_FIELDS` schema accepts the controller's current
-hybrid snapshot: status, objectives, input keys, a skill descriptor in `action`,
+hybrid snapshot: status, route, optional launch metadata, objectives, input keys, a skill descriptor in `action`,
 latency, metrics, milestones, recent events, and latency history. Skill progress
 and compact structured evidence travel within event data; full game-state
 assets remain local. New top-level snapshot fields require a coordinated API

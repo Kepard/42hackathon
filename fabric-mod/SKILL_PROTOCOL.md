@@ -219,3 +219,37 @@ undo real blocks already placed or resources already consumed. A failed partial
 construction remains in the world and is not silently claimed as a completed
 portal. The roughly two-minute demonstration target is a performance goal, not
 a fixed timer or a currently verified completion result.
+
+## Fresh-world operator lifecycle
+
+The authenticated local bridge accepts `world_unload`, `world_load`, and
+`world_cancel`, each with a string `id`. Load also requires `save_name`, matching
+`holospeed-demo-[A-Za-z0-9_-]{1,80}`. The folder must already exist directly under
+Minecraft's saves directory with an ordinary `level.dat`; symlink folders and
+path traversal are rejected. The mod does not copy, overwrite, or edit saves.
+
+All responses use `type: "world_ack"`, the same `id`, `operation` (`unload`,
+`load`, or `cancel`), `status`, nullable `reason`/`save_name`, and
+`controls_armed: false`. Unload uses vanilla disconnect/save, then reports
+`unloaded` only after the captured integrated-server **thread has terminated**.
+Minecraft's `isStopped()` flag alone is insufficient because it is set before
+shutdown saving. The helper also remembers servers observed during ordinary
+play, covering native-menu unloads before an operator request.
+
+Load calls vanilla `IntegratedServerLoader.start`. It reports `ready` only
+when an alive Survival player and world are available and a normal pause menu
+has actually paused the integrated world. The acknowledgement includes actual
+`seed` (decimal string), `dimension`, `health`, `inventory_empty`, and
+`game_mode`. The controller independently validates the loaded clone before
+requesting the existing `arm` command; loading never starts gameplay itself.
+
+Cancel acknowledges `cancelled` promptly and cancels the pending load response.
+If vanilla loading is already underway, the helper retains exclusive lifecycle
+ownership until the world arrives and is normally saved/unloaded. A late load
+cannot emit `ready` or arm controls. Other world operations are rejected while
+this cleanup is pending. F8, controller stop, and bridge disconnect apply the
+same cancellation. A 120-second deadline reports `failed` while retaining this
+quarantine; unexpected vanilla backup/recovery prompts are never approved
+automatically. Restart/manual resolution may be required if vanilla never
+finishes or invokes its abort callback. These operator operations are separate
+from timed speedrun gameplay and contain no world editing or item injection.

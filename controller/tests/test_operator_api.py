@@ -11,7 +11,15 @@ from holospeed.config import Settings
 
 
 def application(tmp_path, mode="live"):
-    return create_app(Settings(mode=mode, runs_dir=tmp_path, holo_api_key="unused-test-key"))
+    app = create_app(Settings(mode=mode, runs_dir=tmp_path, holo_api_key="unused-test-key"))
+
+    class Socket:
+        async def send_json(self, message):
+            pass
+
+    app.state.bridge.socket = Socket()
+    app.state.bridge.ready = True
+    return app
 
 
 async def request_start(app):
@@ -22,10 +30,10 @@ async def request_start(app):
 
 
 async def close_engine(app, task=None):
-    if task is not None:
-        task.cancel()
+    for current in {task, app.state.engine.task} - {None}:
+        current.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await task
+            await current
     app.state.engine.task = None
     await app.state.engine.close()
 
@@ -48,13 +56,15 @@ async def test_live_start_waits_for_arm_before_starting_engine(
         await asyncio.sleep(0)
         calls.append("arm_ready")
 
-    async def start():
+    async def run():
         calls.append("engine_start")
+        await asyncio.Future()
 
     monkeypatch.setattr(app.state.bridge, "arm", arm)
-    monkeypatch.setattr(engine, "start", start)
+    monkeypatch.setattr(engine, "run", run)
     try:
         response = await request_start(app)
+        await asyncio.sleep(0)
         assert response.status_code == 200
         assert response.json() == {"ok": True}
         assert calls == ["arm_started", "arm_ready", "engine_start"]
@@ -70,11 +80,11 @@ async def test_rejected_live_arm_returns_conflict_and_never_starts_engine(tmp_pa
         calls.append("arm")
         raise BridgeError("Enter a focused survival world before starting")
 
-    async def forbidden_start():
+    async def forbidden_run():
         pytest.fail("A rejected arm must not start the agent")
 
     monkeypatch.setattr(app.state.bridge, "arm", arm)
-    monkeypatch.setattr(app.state.engine, "start", forbidden_start)
+    monkeypatch.setattr(app.state.engine, "run", forbidden_run)
     try:
         response = await request_start(app)
         assert response.status_code == 409
@@ -96,16 +106,16 @@ async def test_live_start_with_running_task_does_not_rearm_controls(tmp_path, mo
     async def forbidden_arm():
         pytest.fail("An already-running agent must not be rearmed by a duplicate start")
 
-    async def start():
-        calls.append("engine_start")
+    async def forbidden_run():
+        pytest.fail("A duplicate start must keep the existing agent task")
 
     monkeypatch.setattr(app.state.bridge, "arm", forbidden_arm)
-    monkeypatch.setattr(engine, "start", start)
+    monkeypatch.setattr(engine, "run", forbidden_run)
     try:
         response = await request_start(app)
         assert response.status_code == 200
         assert response.json() == {"ok": True}
-        assert calls == ["engine_start"]
+        assert calls == []
         assert not running.done()
     finally:
         await close_engine(app, running)
@@ -119,13 +129,15 @@ async def test_demo_start_never_arms_a_real_minecraft_bridge(tmp_path, monkeypat
     async def forbidden_arm():
         pytest.fail("Demo start must never arm Minecraft")
 
-    async def start():
+    async def run():
         calls.append("engine_start")
+        await asyncio.Future()
 
     monkeypatch.setattr(app.state.bridge, "arm", forbidden_arm)
-    monkeypatch.setattr(app.state.engine, "start", start)
+    monkeypatch.setattr(app.state.engine, "run", run)
     try:
         response = await request_start(app)
+        await asyncio.sleep(0)
         assert response.status_code == 200
         assert response.json() == {"ok": True}
         assert calls == ["engine_start"]

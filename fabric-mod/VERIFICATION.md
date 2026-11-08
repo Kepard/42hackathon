@@ -124,3 +124,12 @@ landmark and must rediscover sources and a valid site from loaded client cells.
 Short grass initially excluded every otherwise suitable footprint; the helper
 now permits replaceable plants during selection and normally mines plants in
 actual mold cells before placing blocks.
+
+## Fresh-world launcher lifecycle
+
+The normal save/unload/load bridge compiles and has seven focused regressions
+covering final server-thread termination, actual pause before readiness, prompt
+cancellation, late arrivals, timeout quarantine, stale callbacks, and path
+validation. Independent lifecycle review found no blocker. Live template-clone
+loading remains pending the next client restart; no launcher gameplay was
+performed during implementation.

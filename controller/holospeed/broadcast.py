@@ -418,7 +418,7 @@ ENGINEERING_PUBLIC_FIELDS = frozenset(
 )
 COMMAND_ACTIONS = frozenset({"start_new", "resume", "pause", "stop", "voice"}) | ENGINEERING_ACTIONS
 COMMAND_STEPS = {
-    "start_new": ("finish", "start"),
+    "start_new": ("new-run",),
     "resume": ("start",),
     "pause": ("pause",),
     "stop": ("finish",),
@@ -703,6 +703,8 @@ class CommandConsumer:
                             }
                         }
                         if voice
+                        else {"json": {"command_id": record["id"]}}
+                        if record["action"] == "start_new"
                         else {}
                     ),
                     timeout=min(8 if voice else 5, remaining),
@@ -770,7 +772,7 @@ class CommandConsumer:
             record.update(
                 status="completed",
                 detail={
-                    "start_new": "Started a new recorded run in the current Minecraft world.",
+                    "start_new": "Fresh-world preparation accepted. Watch launch progress before gameplay starts.",
                     "resume": "Resumed the current recorded run.",
                     "pause": "Paused gameplay and released agent controls.",
                     "stop": "Stopped and archived the current recorded run.",
@@ -780,7 +782,7 @@ class CommandConsumer:
                 }[record["action"]],
             )
         if not engineering and not voice:
-            record["run_id"] = await self._run_id()
+            record["run_id"] = None if record["action"] == "start_new" else await self._run_id()
         record["reported"] = False
         self.ledger.write(commands)
 

@@ -211,12 +211,13 @@ class ToolExecutor:
 
     async def attack_until_broken(self, seconds):
         approach_start = len(self.actions)
+        frame_start = len(self.frames)
         if not await self.approach_close():
             self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
             return "not_close"
         walked = any(a.get("action")=="key" and a.get("key")=="w" and a.get("pressed") for a in self.actions[approach_start:])
         if walked: await self.primitive("wait",ms=350)
-        reference = await self.observe() if self.jev is not None or walked else self.current_frame or await self.observe()
+        reference = await self.observe() if walked or (self.jev is not None and len(self.frames) == frame_start) else self.current_frame or await self.observe()
         probe = {"used": self.jev is not None and not self.pixels(outline, reference), "succeeded": None}
         probe["reference_settle_ms"] = 350 if walked else 0
         target_box = self.close_checks[-1].get("box") if probe["used"] and self.close_checks else None

@@ -1,11 +1,17 @@
 """Screenshot-only transforms and deliberately conservative change heuristics."""
 import io
+from functools import lru_cache
 
 from PIL import Image, ImageChops, ImageStat, ImageFilter
 
 
-def image(png):
+@lru_cache(maxsize=4)
+def _decoded_image(png):
     return Image.open(io.BytesIO(png)).convert("RGB")
+
+
+def image(png):
+    return _decoded_image(bytes(png)).copy()
 
 
 def center(im, width=160, height=120):

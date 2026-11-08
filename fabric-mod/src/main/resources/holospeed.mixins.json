@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "ai.holospeed.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["KeyBindingAccessor", "InputUtilMixin", "GameRendererMixin", "KeyboardMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

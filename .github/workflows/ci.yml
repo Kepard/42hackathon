@@ -1,0 +1,36 @@
+name: Validate HoloSpeed
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check controller
+      - run: uv run ruff format --check controller
+      - run: uv run pytest -q
+  fabric:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew build --no-daemon
+        working-directory: fabric-mod
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holospeed-fabric
+          path: fabric-mod/build/libs/holospeed-*.jar

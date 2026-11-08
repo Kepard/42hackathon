@@ -20,7 +20,8 @@ def parsed(name, **args):
 
 @pytest.mark.parametrize("factor", [.5,1,1.5,3])
 def test_real_recipe_controls_at_multiple_gui_scales(factor):
-    for source, craftable, query in ((RED,False,False),(GREEN,True,True)):
+    focused = (FIXTURES / "recipe_focused_long_query.png").read_bytes()
+    for source, craftable, query in ((RED,False,False),(GREEN,True,True),(focused,True,True)):
         im = Image.open(io.BytesIO(source))
         out = io.BytesIO()
         im.resize((round(im.width*factor),round(im.height*factor)),Image.Resampling.NEAREST).save(out,format="PNG")

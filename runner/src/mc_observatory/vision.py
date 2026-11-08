@@ -66,12 +66,12 @@ def recipe_book_controls(png):
             if abs(width - 79 * scale) > scale or not all(pixels[z,y-1] == border for z in range(x,right)):
                 x = right
                 continue
-            bottom = y + 1
-            while bottom < min(im.height, y + 16 * scale):
-                if pixels[x-1,bottom] != border or right >= im.width or pixels[right,bottom] != border: break
-                if all(pixels[z,bottom] == border for z in range(x,right)): break
-                bottom += 1
-            if abs(bottom - y - 12 * scale) > scale:
+            bottom = y + 12 * scale
+            if bottom >= im.height or right >= im.width or not all(pixels[z,bottom] == border for z in range(x,right)):
+                x = right
+                continue
+            right_border_matches = sum(pixels[right,t] == border for t in range(y,bottom))
+            if right_border_matches < .75 * (bottom-y) or not all(pixels[x-1,t] == border for t in range(y,bottom)):
                 x = right
                 continue
             red = green = 0

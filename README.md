@@ -2,10 +2,11 @@
 
 A state-aware Minecraft speedrunning agent with **Holo4 strategy**, **Jev fresh-state
 validation and skill selection**, a custom Fabric bridge, and local navigation,
-mining, and crafting.
-The current target is **Nether entry**, with verified checkpoints for resources,
-portal discovery, chest loot, repair, ignition, and dimension transfer. Stone tools
-remain an independently verified early-game checkpoint. The agent uses normal
+mining, crafting, smelting, and portal casting.
+The current target is **Nether entry from scratch**: gather wood, craft tools,
+mine and smelt iron, make a bucket and flint and steel, then build a complete
+portal using natural lava and water. Fourteen checkpoints expose that progression.
+The agent uses normal
 survival interactions and checks progress against game state.
 
 **[Watch the live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site)**
@@ -15,13 +16,17 @@ The **On a mission** panel follows actual Holo4 and Jev requests through plannin
 validation, and local execution, with input sources, decisions, and measured latency.
 **Devin engineering** turns a selected run into a reviewable investigation brief,
 then displays session status, findings, and proposed regression tests.
+**Gladia voice** adds spoken pause/resume commands, objectives, and Holo4 questions
+beside the gameplay. Unlock operator access using the password form at the bottom.
 The publisher must remain running alongside Minecraft; stale/offline states are explicit.
 See [dashboard setup and source](dashboard/README.md).
 
 Minecraft **Java Edition 1.21.1 + Fabric** is the live target. A separate simulated
 mode runs without Minecraft or model APIs. Actual trials have acquired wood, crafted
 tools, returned to a placed table, and autonomously reached the Nether from an
-empty inventory on the fixed seed; full speedrun completion is not yet implemented. Gladia is deferred.
+empty inventory on the previous ruined-portal seed. Those historical results do
+not establish success or timing for the new full-construction route. Roughly two
+minutes is the new gameplay target; full speedrun completion is not yet implemented.
 
 ## Try the console
 
@@ -46,10 +51,11 @@ presentation rehearsal and integration checks, not gameplay-performance claims.
 
 ## Connect Minecraft
 
-The selected demonstration seed is [`-1950884254474434485`](docs/demo-seed.md),
-used in verified Java 1.21.1 set-seed runs. Its nearby ruined portal supports a
-short [Nether-entry route](docs/nether-route.md). The executor checks actual loaded
-blocks and acquired chest supplies before attempting repair.
+The selected demonstration seed is [`-7131204740862824481`](docs/demo-seed.md).
+Its trees, buried iron, gravel, water, and natural lava pools were independently
+verified in Java 1.21.1. The [route research](docs/new-route-research.md) records
+coordinates and evidence. The executor checks loaded terrain and builds the
+entire frame; structure loot and existing portal frames are excluded.
 
 Run the controller and Minecraft on the same computer. The bridge binds to
 loopback and authenticates with a local token.
@@ -62,6 +68,8 @@ loopback and authenticates with a local token.
    to enable Jev, `JEV_API_KEY`. The defaults are `holo4-35b-a3b` with reasoning
    effort `none`, `jev-1.14.0`, and a 30-second model request timeout.
    `GAMEPLAY_MODE=state` and `RUN_GOAL=nether` are the live defaults. Set
+   `NETHER_ROUTE=from_scratch`, `MINECRAFT_SEED=-7131204740862824481`, and
+   `CAST_PORTAL_TARGET={"x":4,"y":63,"z":2}` for the verified resource layout. Set
    `RUN_GOAL=early_game` to stop at stone tools. Holo4 chooses objectives at phase
    boundaries using structured state and screenshots. Jev validates its proposal
    against fresh state and selects routine skills; local prerequisites and
@@ -257,9 +265,9 @@ tests. Python tests exercise provider contracts with mock transports, redaction,
 replay journals, pause/timeout/disconnect behavior, and the complete simulated
 demo. They do not establish performance in an actual Minecraft world.
 
-The ruined-portal route currently targets the declared fixed seed and requires
-actual chest supplies; random-seed portal construction, combat, stronghold routing,
-and full speedrun completion remain future work. Structured
+The from-scratch route currently uses a declared natural-lava landmark. General
+random-seed routing, combat, stronghold routing, and full speedrun completion
+remain future work. Structured
 state is bounded to loaded nearby terrain; it is not an omniscient world map.
 Automated tests verify orchestration and inventory accounting; only recorded real
 Minecraft trials establish gameplay success. See the [demo checklist](docs/demo-checklist.md).

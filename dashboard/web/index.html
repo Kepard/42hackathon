@@ -8,6 +8,7 @@
   <title>HoloSpeed / Live</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/hls.min.js" defer></script>
+  <script src="/assets/voice.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
@@ -42,8 +43,15 @@
             <button id="control-pause" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4v12M13 4v12"/></svg>Pause</button>
             <button id="control-stop" class="button control-stop" aria-label="Stop and archive the current run" title="Stop and archive" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5h10v10H5Z"/></svg>End run</button>
           </div>
-          <div class="operator-heading"><span id="operator-status" class="operator-status">View only</span><button id="lock-controls" class="text-button" hidden>Lock</button></div>
+          <div class="operator-heading"><span id="operator-status" class="operator-status">View only</span><a id="operator-unlock-link" class="text-button" href="#operator-access">Unlock</a><button id="lock-controls" class="text-button" hidden>Lock</button></div>
           <p id="control-feedback" role="status" aria-live="polite">Operator access is required to control runs.</p><span class="operator-world-note">New recording · Current world</span>
+        </section>
+        <section id="voice-panel" class="voice-panel" aria-labelledby="voice-title">
+          <div class="voice-toolbar"><button id="voice-toggle" class="voice-toggle" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/></svg><span id="voice-toggle-label">Speak</span></button><div class="voice-heading"><h2 id="voice-title">Talk to HoloSpeed</h2><span id="voice-status">Microphone off</span></div><span id="voice-timer" class="voice-timer" hidden></span><span class="voice-brand">VOICE BY <b>Gladia</b></span></div>
+          <p id="voice-caption" class="voice-caption" hidden>Live words appear here while you speak.</p>
+          <div id="voice-conversation" class="voice-conversation" hidden><p><span>Operator</span><strong id="voice-transcript"></strong></p><p id="voice-reply-row" hidden><span>HoloSpeed</span><strong id="voice-reply"></strong></p></div>
+          <form id="voice-form" class="voice-form"><label for="voice-text" class="visually-hidden">Message the Minecraft agent</label><input id="voice-text" type="text" maxlength="1000" autocomplete="off" placeholder="Pause, give an objective, or ask a question…" disabled><button id="voice-send" class="button secondary" type="submit" disabled>Send <span aria-hidden="true">↗</span></button></form>
+          <p id="voice-feedback" class="voice-feedback" role="status" aria-live="polite">Unlock controls below to speak or send a message.</p><p class="voice-note">Click to record · 2-minute maximum · Instructions and replies are saved in the run journal.</p>
         </section>
         <section class="metrics-strip" aria-label="Run metrics">
           <div class="timer-metric"><span class="metric-label"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="11" r="6"/><path d="M8 2h4m-2 3v6l3 2"/></svg>Run time</span><strong id="elapsed">—</strong><small>Including pauses</small></div>
@@ -71,21 +79,24 @@
       </aside>
     </div>
 
-    <section class="milestone-panel" aria-labelledby="progression-title">
-      <div class="compact-heading"><h2 id="progression-title">The route</h2><span id="milestone-count">0 / 11 milestones</span></div>
-      <div class="preparation-strip"><span class="route-group-label">PREPARATION</span><ol class="milestones preparation-milestones" aria-label="Preparation checkpoints">
+    <section id="route-panel" class="milestone-panel" data-route="from_scratch" aria-labelledby="progression-title">
+      <div class="compact-heading"><h2 id="progression-title">From scratch to the Nether</h2><span id="milestone-count">0 / 14 milestones</span></div>
+      <div class="preparation-strip"><span id="preparation-label" class="route-group-label">BUILD THE KIT</span><ol id="preparation-milestones" class="milestones preparation-milestones" aria-label="Preparation checkpoints">
         <li data-milestone="wood"><span class="milestone-dot item-log" aria-hidden="true"></span><div><strong>Wood</strong><span>Not recorded</span></div></li>
-        <li data-milestone="crafting_table"><span class="milestone-dot item-table" aria-hidden="true"></span><div><strong>Crafting table</strong><span>Not recorded</span></div></li>
-        <li data-milestone="wooden_pickaxe"><span class="milestone-dot item-pickaxe" aria-hidden="true"></span><div><strong>Wooden pickaxe</strong><span>Not recorded</span></div></li>
-        <li data-milestone="stone_tools"><span class="milestone-dot item-stone-pickaxe" aria-hidden="true"></span><div><strong>Stone tools</strong><span>Not recorded</span></div></li>
+        <li data-milestone="crafting_table"><span class="milestone-dot item-table" aria-hidden="true"></span><div><strong>Workbench</strong><span>Not recorded</span></div></li>
+        <li data-milestone="wooden_pickaxe"><span class="milestone-dot item-pickaxe" aria-hidden="true"></span><div><strong>Wood pick</strong><span>Not recorded</span></div></li>
+        <li data-milestone="stone_pickaxe"><span class="milestone-dot item-stone-pickaxe" aria-hidden="true"></span><div><strong>Stone pick</strong><span>Not recorded</span></div></li>
+        <li data-milestone="furnace"><span class="milestone-dot item-furnace" aria-hidden="true"></span><div><strong>Furnace</strong><span>Not recorded</span></div></li>
       </ol></div>
-      <div class="portal-route-heading"><span class="route-group-label">NETHER ROUTE</span><span>Locate. Build. Cross.</span></div>
+      <div class="portal-route-heading"><span id="portal-route-label" class="route-group-label">MINE · SMELT · CAST</span><span id="portal-route-caption">Survival resources. A new portal.</span></div>
       <ol id="milestones" class="milestones portal-milestones" aria-label="Nether entry checkpoints">
-        <li data-milestone="portal_located"><span class="milestone-dot item-locate" aria-hidden="true"></span><div><strong>Locate portal</strong><span>Not recorded</span></div></li>
-        <li data-milestone="chest_looted"><span class="milestone-dot item-chest" aria-hidden="true"></span><div><strong>Loot chest</strong><span>Not recorded</span></div></li>
-        <li data-milestone="obsidian_acquired"><span class="milestone-dot item-obsidian" aria-hidden="true"></span><div><strong>Obsidian</strong><span>Not recorded</span></div></li>
-        <li data-milestone="ignition_acquired"><span class="milestone-dot item-fire" aria-hidden="true"></span><div><strong>Ignition</strong><span>Not recorded</span></div></li>
-        <li data-milestone="portal_repaired"><span class="milestone-dot item-frame" aria-hidden="true"></span><div><strong>Repair frame</strong><span>Not recorded</span></div></li>
+        <li data-milestone="iron_mined"><span class="milestone-dot item-iron-ore" aria-hidden="true"></span><div><strong>Mine iron</strong><span>Not recorded</span></div></li>
+        <li data-milestone="iron_smelted"><span class="milestone-dot item-iron" aria-hidden="true"></span><div><strong>Smelt iron</strong><span>Not recorded</span></div></li>
+        <li data-milestone="bucket"><span class="milestone-dot item-bucket" aria-hidden="true"></span><div><strong>Bucket</strong><span>Not recorded</span></div></li>
+        <li data-milestone="flint_and_steel"><span class="milestone-dot item-igniter" aria-hidden="true"></span><div><strong>Flint &amp; steel</strong><span>Not recorded</span></div></li>
+        <li data-milestone="water_collected"><span class="milestone-dot item-water-bucket" aria-hidden="true"></span><div><strong>Water</strong><span>Not recorded</span></div></li>
+        <li data-milestone="lava_located"><span class="milestone-dot item-lava" aria-hidden="true"></span><div><strong>Lava</strong><span>Not recorded</span></div></li>
+        <li data-milestone="portal_built"><span class="milestone-dot item-frame" aria-hidden="true"></span><div><strong>Cast frame</strong><span>Not recorded</span></div></li>
         <li data-milestone="portal_lit"><span class="milestone-dot item-lit-portal" aria-hidden="true"></span><div><strong>Light portal</strong><span>Not recorded</span></div></li>
         <li data-milestone="nether"><span class="milestone-dot item-portal" aria-hidden="true"></span><div><strong>Enter Nether</strong><span>Not recorded</span></div><b class="goal-tag">GOAL</b></li>
       </ol>
@@ -104,6 +115,12 @@
         <div class="journal-layout"><aside class="run-sidebar" aria-labelledby="runs-title"><div class="runs-heading"><h3 id="runs-title">Runs <span id="runs-count">0</span></h3><button id="follow-live" class="text-button" aria-pressed="true">Follow live</button></div><div id="runs-list" class="runs-list"><p class="empty-list">Saved runs will appear here.</p></div></aside><div class="journal-content"><div class="journal-run-heading"><div><span id="journal-mode" class="small-tag">NO RUN SELECTED</span><h3 id="journal-run-title">Waiting for a run</h3></div><span id="journal-load-status" class="journal-load-status" aria-live="polite">No events yet</span></div><div class="journal-filters"><label class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="event-search" type="search" placeholder="Search events…" aria-label="Search journal events"></label><label class="type-filter"><span class="visually-hidden">Event type</span><select id="event-type"><option value="all">All event types</option></select></label><span id="filtered-count" class="filtered-count">0 events</span></div><div id="journal-alert" class="journal-alert" role="status" hidden></div><div id="event-list" class="event-list"><div class="journal-empty"><span class="journal-empty-mark" aria-hidden="true">[ ]</span><h4>Nothing to inspect yet.</h4><p>Choose a saved run or follow the current session.</p></div></div><button id="load-more" class="load-more" hidden>Show more events</button><div class="journal-footer"><span>Newest first · Expand for details</span><span id="journal-scope">Read-only evidence</span></div></div></div>
       </div>
     </details>
+    <section id="operator-access" class="operator-access" aria-labelledby="operator-access-title">
+      <div class="operator-access-intro"><span class="operator-access-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5Z"/><circle cx="12" cy="15" r="1"/><path d="M12 16v2"/></svg></span><div><span class="eyebrow">OPERATOR ACCESS</span><h2 id="operator-access-title">Take the controls.</h2></div><span id="operator-access-state" class="operator-access-state">VIEW ONLY</span></div>
+      <form id="operator-login-form" class="operator-login-form"><label for="operator-password">Operator password</label><div><input id="operator-password" type="password" autocomplete="current-password" maxlength="512" required placeholder="Enter password" aria-describedby="operator-login-feedback"><button id="operator-login-submit" class="button control-primary" type="submit">Unlock controls</button></div></form>
+      <button id="operator-footer-lock" class="button secondary" hidden>Lock controls</button>
+      <p id="operator-login-feedback" class="operator-login-feedback" role="status" aria-live="polite">Enter the operator password to control runs. Watching is always available.</p>
+    </section>
     <footer class="site-footer"><span>HoloSpeed <span class="footer-divider">/</span> Intelligence in the wild.</span><span>Observe. Act. Verify.</span></footer>
   </main>
   <dialog id="devin-dialog" class="devin-dialog" aria-labelledby="devin-title">

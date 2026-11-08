@@ -287,3 +287,27 @@ async def test_portal_rpc_rejects_invalid_objectives_and_landmarks_without_sendi
     assert socket.sent == []
     assert bridge.pending == {}
     await bridge.detach(socket)
+
+
+async def test_cast_rpc_reserves_construction_bounds_and_preserves_actual_lava_target():
+    bridge, socket = await connected({"type": "skill_ack", "status": "accepted"})
+    candidate = {**portal_candidate(), "skill": "cast_portal", "target": {"x": 4, "y": 63, "z": 2}}
+    await bridge.start_skill(candidate)
+    assert socket.sent[0]["skill"] == "cast_portal"
+    assert socket.sent[0]["target"] == candidate["target"]
+    for y in (-64, 314):
+        with pytest.raises(BridgeError, match="construction needs room"):
+            await bridge.start_skill({**candidate, "target": {"x": 4, "y": y, "z": 2}})
+    assert len(socket.sent) == 1
+    await bridge.detach(socket)
+
+
+async def test_smelt_rpc_only_allows_the_implemented_iron_recipe():
+    bridge, socket = await connected({"type": "skill_ack", "status": "accepted"})
+    await bridge.start_skill(
+        skill_candidate(skill="smelt", item="minecraft:iron_ingot", target_count=4)
+    )
+    with pytest.raises(BridgeError, match="Unsupported smelting"):
+        await bridge.start_skill(skill_candidate(skill="smelt", item="minecraft:diamond"))
+    assert len(socket.sent) == 1
+    await bridge.detach(socket)

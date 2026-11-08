@@ -17,6 +17,7 @@ from .config import Settings
 from .engine import AgentEngine
 from .engineering import Engineering
 from .recording import read_events
+from .voice import VoiceControl
 
 STATIC = Path(__file__).parent / "static"
 
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bridge = GameBridge()
     engine = AgentEngine(settings, bridge)
     engineering = Engineering(settings)
+    voice = VoiceControl(engine, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -60,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ticker.cancel()
             investigations.cancel()
             await engine.close()
+            await voice.close()
             await engineering.close()
             done, _ = await asyncio.wait((ticker, investigations), timeout=2)
             for task in done:
@@ -70,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.bridge = bridge
     app.state.engineering = engineering
+    app.state.voice = voice
 
     @app.middleware("http")
     async def protect_local_control(request: Request, call_next):
@@ -114,6 +118,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def finish():
         await engine.finish()
         return {"ok": True}
+
+    @app.post("/api/voice")
+    async def voice_command(request: Request):
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise HTTPException(400, "Voice command exceeds its bounded size")
+        try:
+            value = json.loads(raw)
+            return {"ok": True, "data": await voice.apply(value)}
+        except (ValueError, BridgeError) as error:
+            raise HTTPException(409, str(error)) from error
 
     def run_path(run_id: str) -> Path:
         if not run_id or any(c not in "0123456789TZ-abcdef" for c in run_id):
@@ -241,7 +256,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if (
                             message.get("name") == "world_changed"
                             and engine.state["status"] == "running"
-                            and (engine.state.get("action") or {}).get("skill") == "portal"
+                            and (engine.state.get("action") or {}).get("skill")
+                            in {"portal", "cast_portal"}
                         ):
                             # The skill releases controls during normal portal transfer;
                             # only a fresh Nether snapshot can confirm its postcondition.

@@ -19,6 +19,7 @@ async def test_holo_plan_gets_real_jev_fresh_state_validation_before_portal_skil
         PortalBridge(),
         jev_api_key="unused-test-jev",
         run_goal="nether",
+        nether_route="ruined_portal",
         declared_seed="-1950884254474434485",
     )
     try:
@@ -70,6 +71,7 @@ async def test_disabled_validation_has_no_invented_jev_activity(tmp_path):
         jev_api_key="unused-test-jev",
         validate_holo_plans=False,
         run_goal="nether",
+        nether_route="ruined_portal",
         declared_seed="-1950884254474434485",
     )
     try:
@@ -136,6 +138,7 @@ async def test_jev_service_failure_is_labeled_and_uses_revalidated_local_fallbac
         strategist=RejectingJev(ProviderError),
         jev_api_key="unused-test-jev",
         run_goal="nether",
+        nether_route="ruined_portal",
         declared_seed="-1950884254474434485",
     )
     try:
@@ -155,6 +158,81 @@ async def test_jev_service_failure_is_labeled_and_uses_revalidated_local_fallbac
         assert [event["phase"] for event in jev] == ["thinking", "failed"]
         assert "accepted" not in jev[-1].get("rationale", "")
         assert any(event["type"] == "strategy_fallback" for event in events)
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("later_jev_outage", [False, True])
+async def test_holo_error_after_explicit_veto_cannot_execute_local_fallback(
+    tmp_path, later_jev_outage
+):
+    class VetoThenHoloFailure(FirstCandidateStrategist):
+        async def choose(self, observation, state, candidates, context, provider="holo"):
+            result = await super().choose(observation, state, candidates, context, provider)
+            if provider == "holo" and len(self.calls) > 1:
+                raise ProviderError("Malformed Holo output", provider="holo")
+            if provider == "jev":
+                error_type = (
+                    ProviderError if later_jev_outage and len(self.calls) > 2 else ReplanRequired
+                )
+                raise error_type("Jev rejected or became unavailable", provider="jev")
+            return result
+
+    engine, bridge, strategist = await engine_with_fakes(
+        tmp_path,
+        PortalBridge(),
+        strategist=VetoThenHoloFailure(),
+        jev_api_key="unused-test-jev",
+        run_goal="nether",
+        nether_route="ruined_portal",
+        declared_seed="-1950884254474434485",
+    )
+    try:
+        await engine.start()
+        await asyncio.wait_for(asyncio.shield(engine.task), 5)
+        assert bridge.started == []
+        assert engine.state["status"] == "error"
+        assert [call["provider"] for call in strategist.calls] == ["holo", "jev"] * 8
+        validation = strategist.calls[3]["context"]
+        assert validation["proposal_origin"] == "local"
+        assert "previous_local_proposal" in validation
+        assert "previous_holo_plan" not in validation
+        events = run_events(engine)
+        assert len([event for event in events if event["type"] == "strategy_rejected"]) == 8
+        assert not any(event["type"] == "skill_started" for event in events)
+    finally:
+        await engine.close()
+
+
+async def test_new_actual_jev_approval_can_release_previously_vetoed_local_fallback(tmp_path):
+    class VetoThenApprove(FirstCandidateStrategist):
+        async def choose(self, observation, state, candidates, context, provider="holo"):
+            result = await super().choose(observation, state, candidates, context, provider)
+            if provider == "holo" and len(self.calls) > 1:
+                raise ProviderError("Malformed Holo output", provider="holo")
+            if provider == "jev" and len(self.calls) == 2:
+                raise ReplanRequired("First proposal vetoed", provider="jev")
+            return result
+
+    engine, bridge, strategist = await engine_with_fakes(
+        tmp_path,
+        PortalBridge(),
+        strategist=VetoThenApprove(),
+        jev_api_key="unused-test-jev",
+        run_goal="nether",
+        nether_route="ruined_portal",
+        declared_seed="-1950884254474434485",
+    )
+    try:
+        await engine.start()
+        await asyncio.wait_for(asyncio.shield(engine.task), 5)
+        assert [call["provider"] for call in strategist.calls] == ["holo", "jev", "holo", "jev"]
+        assert len(bridge.started) == 1
+        decision = next(
+            event["data"] for event in run_events(engine) if event["type"] == "skill_decision"
+        )
+        assert decision["provider"] == "local"
+        assert decision["validation_provider"] == "jev"
     finally:
         await engine.close()
 

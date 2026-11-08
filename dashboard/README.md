@@ -2,7 +2,7 @@
 
 Public dashboard: [open the site](https://holospeed-live-kepard.kepard.chatgpt.site).
 The initial source was copied from the Sites project at
-`81345ddd0107d99fe1c2c57dff37e38428577f1c`. The interface shows the Minecraft
+`f3fb8d925a048a79ec5956e492f7996cd467fb71`. The interface shows the Minecraft
 window, controller intent, input telemetry, model latency, metrics, milestones,
 and searchable run events. Public viewers can watch; a separate private
 operator capability enables run controls.
@@ -40,18 +40,28 @@ that project's Sites hosting workflow. Building locally does not publish.
 
 Viewer access follows the Sites project sharing settings. The current project
 is public; publishing preserves that setting. For private hosting, restrict
-viewers in Sites settings. Configure two independent runtime secrets:
+viewers in Sites settings. Configure these runtime secrets:
 
 - `INGEST_TOKEN`: publisher authentication, matching local
   `HOLOSPEED_INGEST_TOKEN` (at least 16 characters).
 - `CONTROL_TOKEN`: private operator capability (32–256 URL-safe characters),
   distinct from `INGEST_TOKEN`.
+- `OPERATOR_PASSWORD_SHA256`: optional lowercase SHA-256 of the exact UTF-8
+  operator password, enabling the footer login form. Keep this value server-side.
+- `GLADIA_API_KEY`: enables operator-only voice session creation. The browser
+  receives a short-lived transcription session URL, never this API key.
 
-Keep secrets out of source and browser assets. A public viewer needs neither
+Keep secrets out of source and browser assets. A public viewer needs no
 secret. Other hosting platforms must provide the `BUCKET` binding and any
 desired viewer access layer.
 
 ## Operator access
+
+Enter the configured password in **Operator access** at the bottom of the page.
+The same-origin login endpoint returns the existing capability only after server
+verification, uses no-store responses, and limits repeated attempts. The password
+is cleared immediately; the capability stays only in that tab's session storage.
+**Lock controls** clears it and stops any microphone capture.
 
 Privately share `https://<site>/#control=<CONTROL_TOKEN>` with the operator.
 The browser removes the fragment immediately and retains the capability only

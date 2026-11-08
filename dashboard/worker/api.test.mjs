@@ -72,6 +72,33 @@ test("waiting state is honest and control routes do not exist", async () => {
   assert.equal((await handleApi(new Request(ORIGIN + "/api/state", { method: "POST" }), configuration)).status, 405);
 });
 
+test("route discriminator survives live metadata and archived summary configuration", async () => {
+  for (const route of ["from_scratch", "ruined_portal"]) {
+    const configuration = env();
+    const input = metadata();
+    input.state.route = route;
+    input.runs[0].config = {route};
+    assert.equal((await handleApi(ingest(input), configuration)).status, 200);
+    const saved = await (await handleApi(get("/api/state"), configuration)).json();
+    assert.equal(saved.state.route, route);
+    assert.equal(saved.runs[0].config.route, route);
+    const archive = {summary: input.runs[0], events: []};
+    assert.equal((await handleApi(postRun("run-1", archive), configuration)).status, 200);
+    assert.equal((await (await handleApi(get("/api/runs/run-1"), configuration)).json()).summary.config.route, route);
+  }
+});
+
+test("invalid route values never enter public state or archives", async () => {
+  for (const route of ["unknown_route", null, 1, {name: "from_scratch"}]) {
+    const configuration = env();
+    const input = metadata();
+    input.state.route = route;
+    assert.equal((await handleApi(ingest(input), configuration)).status, 400);
+    assert.equal((await handleApi(postRun("run-1", {summary: {id: "run-1", config: {route}}, events: []}), configuration)).status, 400);
+    assert.equal(configuration.BUCKET.records.size, 0);
+  }
+});
+
 test("lightweight capture metadata omits telemetry and preserves actual capture freshness", async () => {
   const configuration = env();
   const input = metadata(Date.now() - 30000);

@@ -67,7 +67,7 @@ function observerHarness(options = {}) {
   const context = {
     document: {
       getElementById: element,
-      querySelectorAll: (selector) => selector === "[data-key]" ? [forwardKey] : [],
+      querySelectorAll: (selector) => selector === "[data-key]" ? [forwardKey] : selector === "[data-milestone]" ? [...(element("preparation-milestones").nodes || []), ...(element("milestones").nodes || [])] : [],
       createElement: () => new Element(),
       createTextNode: (textContent) => ({textContent}),
       createDocumentFragment: () => new Element(),
@@ -82,6 +82,7 @@ function observerHarness(options = {}) {
     Number, String, Set, Map, encodeURIComponent, URLSearchParams, AbortController,
     crypto: {randomUUID: options.randomUUID || (() => "ad67598a-6d1f-4e66-8730-0e2e76c1cd28")},
     Hls: options.Hls,
+    HoloVoice: options.HoloVoice,
     location: {hash: options.hash || "", pathname: "/", search: ""},
     history: {replaceState(_state, _title, url) {replacedUrls.push(url);}},
     sessionStorage: {getItem(key) {return stored.get(key) || null;}, setItem(key, value) {stored.set(key, value);}, removeItem(key) {stored.delete(key);}},
@@ -93,7 +94,9 @@ function observerHarness(options = {}) {
     globalThis.observerTest = {
       set(value, online = true) {envelope = value; reachable = online;},
       updateCapture, renderState, renderControls, submitCommand, refreshCommand, lockControls, pollCapture, renderVideo, trackVideoFrame,
-      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun,
+      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun, renderMilestones, unlockControls, renderLogin,
+      queueVoice, sendNextVoice, sendTypedVoice, toggleVoice, renderVoice,
+      command(value) {operatorCommand = value;},
       engineering(runId, value) {engineeringRun = runId; if (value) engineeringByRun.set(runId, value);},
       journal(value, runId) {journal = value; selectedRun = runId;},
       videoMetadata(value) {videoMetadata = value; videoReachable = true; startVideo(value);},
@@ -409,10 +412,10 @@ test("locking controls during an in-flight POST ignores its late feedback", asyn
   assert.equal(ui.stored.has("holospeed.operator"), false);
 });
 
-test("the visual route names all eleven preparation and Nether checkpoints", () => {
+test("the default route names every from-scratch checkpoint and preserves legacy event labels", () => {
   const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
   const ids = [...html.matchAll(/data-milestone="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(ids, ["wood", "crafting_table", "wooden_pickaxe", "stone_tools", "portal_located", "chest_looted", "obsidian_acquired", "ignition_acquired", "portal_repaired", "portal_lit", "nether"]);
+  assert.deepEqual(ids, ["wood", "crafting_table", "wooden_pickaxe", "stone_pickaxe", "furnace", "iron_mined", "iron_smelted", "bucket", "flint_and_steel", "water_collected", "lava_located", "portal_built", "portal_lit", "nether"]);
   for (const [id, label] of Object.entries({portal_located: "Locate the portal", chest_looted: "Loot the portal chest", obsidian_acquired: "Acquire obsidian", ignition_acquired: "Acquire ignition", portal_repaired: "Repair the portal", portal_lit: "Light the portal"})) {
     assert.equal(helpers.eventDescription({type: "milestone", data: {id, verification: "game_state"}}), `Confirmed from game state: ${label}`);
   }
@@ -585,4 +588,220 @@ test("local execution requires fresh matching skill evidence and does not invent
   assert.equal(ui.element("mission-executor").classList.contains("active"), true);
   assert.equal(ui.element("skill-count").textContent, "Portal route");
   assert.equal(ui.element("skill-name").textContent, "Navigate · build · enter Nether");
+});
+
+test("from-scratch progress requires its own explicit claims, without imposing an axe or rewriting historical runs", () => {
+  const legacy = helpers.routeProgress({run_id: "historical", milestones: [{id: "stone_tools"}, {id: "ignition_acquired"}]});
+  assert.equal(legacy.key, "ruined_portal");
+  assert.equal(legacy.completed, 2);
+  assert.equal(legacy.ids.length, 11);
+  assert.ok(legacy.ids.includes("chest_looted"));
+  const scratch = helpers.routeProgress({run_id: "new", route: "from_scratch", inventory: {"minecraft:water_bucket": 1}, milestones: [{id: "wood"}, {id: "wood"}, {id: "stone_tools"}, {id: "ignition_acquired"}]});
+  assert.equal(scratch.completed, 1, "Duplicates and old composite/ignition claims cannot satisfy new checkpoints");
+  assert.equal(scratch.ids.length, 14);
+  assert.ok(scratch.ids.includes("stone_pickaxe"));
+  assert.ok(scratch.ids.includes("flint_and_steel"));
+  assert.ok(!scratch.ids.some((id) => id.includes("axe") && !id.includes("pickaxe")));
+  assert.ok(!scratch.ids.includes("chest_looted"));
+  assert.equal(helpers.routeProgress().key, "from_scratch");
+  assert.equal(helpers.routeProgress({route: "ruined_portal"}).ids.length, 11);
+});
+
+test("the visual route switches by current-run metadata and marks only matching recorded evidence", () => {
+  const ui = observerHarness();
+  const scratch = {run_id: "new", route: "from_scratch", milestones: [{id: "stone_pickaxe", elapsed_ms: 23000, verification: "game_state", evidence: {inventory: {"minecraft:stone_pickaxe": 1}}}]};
+  ui.renderMilestones(scratch);
+  assert.equal(ui.element("route-panel").dataset.route, "from_scratch");
+  assert.equal(ui.element("milestone-count").textContent, "1 / 14 milestones");
+  assert.equal(ui.element("preparation-milestones").nodes.length, 5);
+  assert.equal(ui.element("milestones").nodes.length, 9);
+  const pick = ui.element("preparation-milestones").nodes.find((node) => node.dataset.milestone === "stone_pickaxe");
+  assert.equal(pick.classList.contains("claimed"), true);
+  assert.match(pick.querySelector("div > span").textContent, /00:23.*Confirmed from game state/);
+  const previous = ui.element("milestones").nodes;
+  ui.renderMilestones(scratch);
+  assert.equal(ui.element("milestones").nodes, previous, "Routine polling preserves the current route's DOM");
+  ui.renderMilestones({run_id: "old", milestones: [{id: "portal_repaired", verification: "game_state"}]});
+  assert.equal(ui.element("progression-title").textContent, "Ruined portal route");
+  assert.equal(ui.element("milestone-count").textContent, "1 / 11 milestones");
+  assert.equal(ui.element("milestones").nodes.find((node) => node.dataset.milestone === "portal_repaired").classList.contains("claimed"), true);
+  assert.ok(!ui.element("milestones").nodes.some((node) => node.dataset.milestone === "portal_built"));
+});
+
+test("password unlock clears the input and grants only this tab's existing operator capability", async () => {
+  const token = "fictional-password-login-token-with-32-characters";
+  const password = "test-only-password";
+  const requests = [];
+  const ui = observerHarness({fetch: async (url, options) => {
+    requests.push({url, options});
+    return {ok: true, json: async () => ({token})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
+  ui.renderControls();
+  assert.equal(ui.element("control-resume").disabled, true);
+  ui.element("operator-password").value = password;
+  await ui.unlockControls();
+  assert.equal(ui.element("operator-password").value, "");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/api/operator/login");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(requests[0].options.redirect, "error");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {password});
+  assert.equal(ui.stored.get("holospeed.operator"), token);
+  assert.ok(![...ui.stored.values()].includes(password));
+  assert.equal(ui.element("operator-login-form").hidden, true);
+  assert.equal(ui.element("operator-footer-lock").hidden, false);
+  assert.equal(ui.element("control-resume").disabled, false);
+  assert.ok(!ui.element("operator-login-feedback").textContent.includes(token));
+  ui.lockControls();
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+  assert.equal(ui.element("operator-login-form").hidden, false);
+  assert.equal(ui.element("operator-footer-lock").hidden, true);
+  assert.equal(ui.element("control-resume").disabled, true);
+});
+
+test("failed password attempts and malformed tokens cannot unlock controls or expose server messages", async () => {
+  for (const result of [{ok: false, status: 401}, {ok: false, status: 429}, {ok: false, status: 503}, {ok: true, json: async () => ({token: "invalid"})}]) {
+    const ui = observerHarness({fetch: async () => result});
+    ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
+    ui.element("operator-password").value = "test-only-password";
+    await ui.unlockControls();
+    assert.equal(ui.element("operator-password").value, "");
+    assert.equal(ui.element("operator-status").textContent, "View only");
+    assert.equal(ui.element("control-resume").disabled, true);
+    assert.equal(ui.stored.has("holospeed.operator"), false);
+    assert.equal(ui.element("operator-login-submit").disabled, false);
+  }
+});
+
+test("a locked or superseded password request cannot restore operator access", async () => {
+  let finish;
+  let calls = 0;
+  const ui = observerHarness({fetch: () => {calls++; return new Promise((resolve) => {finish = resolve;});}});
+  ui.element("operator-password").value = "test-only-password";
+  const pending = ui.unlockControls();
+  assert.equal(ui.element("operator-password").value, "");
+  assert.equal(ui.element("operator-login-submit").disabled, true);
+  await ui.unlockControls();
+  assert.equal(calls, 1);
+  ui.lockControls();
+  finish({ok: true, json: async () => ({token: "fictional-password-login-token-with-32-characters"})});
+  await pending;
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+  assert.equal(ui.element("operator-login-form").hidden, false);
+  assert.equal(ui.element("operator-status").textContent, "View only");
+});
+
+test("typed voice instructions use the current run and immutable command protocol", async () => {
+  const requests = [];
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (url, options) => {
+    const body = JSON.parse(options.body); requests.push({url, options, body});
+    return {ok: true, json: async () => ({command: {...body, status: "completed", data: {intent: "pause", reply: "Gameplay paused."}}})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "current-run", status: "running", events: []}});
+  ui.journal({events: []}, "archived-run");
+  ui.element("voice-text").value = " pause "; ui.sendTypedVoice();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/api/commands");
+  assert.deepEqual(requests[0].body, {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "voice", text: "pause", run_id: "current-run", session_id: "typed", utterance_id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28"});
+  assert.equal(ui.element("voice-text").value, "");
+  assert.equal(ui.element("voice-transcript").textContent, "pause");
+  assert.equal(ui.element("voice-reply").textContent, "Gameplay paused.");
+});
+
+test("public viewers cannot start a microphone or submit typed instructions", () => {
+  let starts = 0;
+  const ui = observerHarness({HoloVoice: {Session: class {start() {starts++;}}}});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "run", status: "running"}});
+  ui.renderVoice(); ui.toggleVoice();
+  ui.element("voice-text").value = "pause"; ui.sendTypedVoice();
+  assert.equal(starts, 0);
+  assert.equal(ui.element("voice-toggle").disabled, true);
+  assert.equal(ui.element("voice-send").disabled, true);
+});
+
+test("queued speech cannot spill into another run", async () => {
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters"});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "first", status: "running"}});
+  ui.command({id: "existing", action: "pause", status: "pending"});
+  ui.queueVoice({text: "collect more wood", run_id: "first", session_id: "typed", utterance_id: "utterance-1"});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "second", status: "running"}});
+  ui.command(null); await ui.sendNextVoice();
+  assert.match(ui.element("voice-feedback").textContent, /previous run/);
+});
+
+test("uncertain voice delivery only checks the original command ID", async () => {
+  const requests = [];
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (url, options) => {
+    requests.push({url, method: options.method});
+    if (options.method === "POST") throw new Error("Network interrupted after send");
+    return {ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "voice", status: "completed", data: {intent: "pause", reply: "Paused."}}})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "run", status: "running"}});
+  ui.queueVoice({text: "pause", run_id: "run", session_id: "typed", utterance_id: "utterance-1"});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map((request) => request.method), ["POST", "GET"]);
+  assert.equal(requests[1].url, "/api/commands/ad67598a-6d1f-4e66-8730-0e2e76c1cd28");
+  assert.equal(ui.element("voice-reply").textContent, "Paused.");
+});
+
+test("explicit queue-busy rejection may retry the same unaccepted voice identity after waiting", async () => {
+  const bodies = [];
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (_url, options) => {
+    const body = JSON.parse(options.body); bodies.push(body);
+    if (bodies.length === 1) return {ok: false, status: 409, json: async () => ({error: "Another command is pending"})};
+    return {ok: true, json: async () => ({command: {...body, status: "completed", data: {intent: "pause", reply: "Paused."}}})};
+  }});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "run", status: "running"}});
+  ui.queueVoice({text: "pause", run_id: "run", session_id: "typed", utterance_id: "utterance-1"});
+  await new Promise((resolve) => setImmediate(resolve));
+  ui.renderVoice(); assert.equal(bodies.length, 1);
+  ui.setNow(NOW + 1000); await ui.sendNextVoice();
+  assert.equal(bodies.length, 2); assert.deepEqual(bodies[1], bodies[0]);
+});
+
+test("locking controls stops the microphone before callbacks can dispatch queued speech", async () => {
+  let recording;
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", HoloVoice: {Session: class {
+    constructor(options) {this.options = options; recording = this;}
+    start() {this.active = true; this.options.onState("listening");}
+    cancel() {this.active = false; this.cancelled = true; this.options.onState("idle");}
+  }}});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "run", status: "running"}});
+  ui.toggleVoice();
+  ui.command({id: "existing", action: "pause", status: "pending"});
+  ui.queueVoice({text: "collect wood", run_id: "run", session_id: "typed", utterance_id: "utterance-1"});
+  ui.command(null); ui.lockControls();
+  assert.equal(recording.cancelled, true);
+  recording.options.onFinal({text: "pause", session_id: "test", utterance_id: "late"});
+  await ui.sendNextVoice();
+  assert.equal(ui.element("voice-toggle").disabled, true);
+  assert.equal(ui.element("operator-status").textContent, "View only");
+});
+
+test("public voice captions pair the latest instruction with its own asynchronous reply", () => {
+  const ui = observerHarness();
+  ui.set({updated_at: NOW, state: {run_id: "run", events: [
+    {seq: 1, type: "voice_received", data: {command_id: "old", text: "old question"}},
+    {seq: 2, type: "voice_received", data: {command_id: "new", text: "what are you doing?"}},
+    {seq: 3, type: "voice_reply", data: {command_id: "new", reply: "I am gathering iron."}},
+    {seq: 4, type: "voice_reply", data: {command_id: "old", reply: "Late reply to the old question."}}
+  ]}});
+  ui.renderVoice();
+  assert.equal(ui.element("voice-transcript").textContent, "what are you doing?");
+  assert.equal(ui.element("voice-reply").textContent, "I am gathering iron.");
+  assert.equal(helpers.eventDescription({type: "voice_received", data: {source: "gladia", text: "pause"}}), "Gladia transcript · pause");
+});
+
+test("Holo voice answers cannot replace or animate the gameplay strategist's decision", () => {
+  const gameplay = inference(1, "holo", "complete", {decision_role: "skill_selection", rationale: "Mine the exposed iron."});
+  const question = inference(2, "holo", "thinking", {decision_role: "voice_response", input_source: "recorded_state", task: "Answer the operator"});
+  const answer = inference(3, "holo", "complete", {decision_role: "voice_response", input_source: "recorded_state", rationale: "A chat reply"});
+  const stage = helpers.inferenceStage([gameplay, question, answer], "holo", {status: "running"}, true, NOW);
+  assert.equal(stage.active, false);
+  assert.equal(stage.rationale, "Mine the exposed iron.");
+  assert.equal(stage.latest.seq, 1);
+  assert.equal(helpers.inferenceStage([question], "holo", {status: "running"}, true, NOW).status, "Standby");
 });

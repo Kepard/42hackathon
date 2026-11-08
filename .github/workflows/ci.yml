@@ -26,7 +26,8 @@ jobs:
         with:
           python-version: '3.12'
       # Use the published wheel instead of the unreliable GitHub release download.
-      - run: python -m pip install --only-binary=:all: --index-url https://pypi.org/simple uv==0.13.7
+      - run: >-
+          python -m pip install --only-binary=:all: --index-url https://pypi.org/simple uv==0.13.7
       - run: uv sync --frozen --extra dev --python 3.12
       - run: uv run ruff check controller
       - run: uv run ruff format --check controller

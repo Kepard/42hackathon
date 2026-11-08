@@ -1,11 +1,10 @@
 # Gladia voice steering
 
-Open the dashboard through a private `#control=<CONTROL_TOKEN>` operator link,
-click **Speak** in **Talk to HoloSpeed** beside the game feed, and grant microphone
-permission. Public New run access does not enable voice controls. Partial
-transcription appears as a caption; only finalized utterances
-enter the authenticated command queue. The text field uses the same command path
-when a microphone is unavailable.
+Open the public dashboard, click **Speak** in **Talk to HoloSpeed** beside the
+game feed, and grant microphone permission. Everyone can use voice and typed
+messages without an account or private link. Partial transcription appears as
+a caption; only finalized utterances enter the command queue. The text field
+uses the same command path when a microphone is unavailable.
 
 Supported interaction:
 
@@ -13,7 +12,7 @@ Supported interaction:
   singleplayer world. **“Resume”** rearms the bridge and continues the existing
   recording with fresh observations. **“End the run”** stops and archives it.
 - Spoken objectives such as **“Gather wood before going further”** become bounded
-  operator guidance for the next planning step. Holo4 and Jev consider this
+  viewer guidance for the next planning step. Holo4 and Jev consider this
   guidance among available, locally eligible survival skills. It does not bypass
   prerequisites, create an unimplemented skill, or change the run's configured
   goal implicitly.
@@ -32,8 +31,8 @@ request from completed execution.
 
 Set `GLADIA_API_KEY` as a **secret** in the dashboard's Sites runtime environment,
 then deploy a saved version to apply that environment revision. The local
-publisher still needs its existing Sites and ingest capabilities; the browser
-uses the separate operator capability from the private link.
+publisher still needs its existing Sites and ingest capabilities; browser
+session creation and voice commands require no dashboard credential.
 No Gladia API credential is embedded in browser assets or returned to visitors.
 The optional local `.env` entry is used only for separate integration checks.
 
@@ -47,21 +46,21 @@ returned a bare `start_recording` event without a `data` object.
 
 The browser converts microphone samples through a same-origin AudioWorklet into
 100 ms little-endian PCM chunks. Recording ends after two minutes, excessive
-socket backpressure, a provider/network error, locking controls, leaving the page,
+socket backpressure, a provider/network error, leaving the page,
 or an explicit stop. Stopping releases microphone tracks immediately, sends
 `stop_recording`, and permits up to three seconds for final transcription before
 closing the socket. There is no automatic microphone restart or session creation.
 
 Session initiation uses an immutable UUID and durable creation claim, a bounded
 lease, and a cooldown. An ambiguous upstream response is never retried
-implicitly. The ephemeral WebSocket URL is returned only to the authenticated
-operator and is not stored in R2 or published in run data.
+implicitly. The ephemeral WebSocket URL is returned to the requesting browser
+and is not stored in R2 or published in run data.
 
 ## Command and evidence flow
 
 Final text carries an immutable command UUID, the run ID captured when the
 utterance was heard, the Gladia session ID, and the provider utterance ID. The
-Worker's existing authenticated queue, 30-second expiry, and publisher's durable
+Worker's command queue, 30-second expiry, and publisher's durable
 ledger apply. A changed run rejects delayed guidance. Repeated command or
 utterance identities cannot dispatch a second control action. Typed messages use
 `session_id: "typed"` and a new utterance UUID.
@@ -72,7 +71,7 @@ interaction while a recording is open. Holo4 questions also emit real `inference
 lifecycle events and keep redacted provider requests/responses in the local run
 journal. Their role is `voice_response`, their input source is `recorded_state`,
 and they never claim screenshot access or successful gameplay actions. Public
-viewers can read published captions and replies but cannot record or send commands.
+viewers can record or send commands and read published captions and replies.
 
 The project does not write raw microphone audio to its local run directory or
 browser storage. Gladia receives the audio as the configured transcription
@@ -90,7 +89,7 @@ Two preceding diagnostic sessions exposed the readiness-event mismatch before
 the corrected test succeeded. Credential-free evidence is retained locally in
 `runs/evaluations/gladia/synthetic-live-check.json`.
 
-Automated checks cover server authentication/session idempotency, PCM conversion,
+Automated checks cover session idempotency, PCM conversion,
 provider readiness, partial/final handling, microphone cleanup, stale run binding,
 negation-aware controls, transcript deduplication, publisher crash handling,
 and background questions that cannot delay pause. Browser microphone permission

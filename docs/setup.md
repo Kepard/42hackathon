@@ -84,7 +84,7 @@ instance-specific token; model credentials remain in the controller environment.
    Enter the intended survival world and open `http://127.0.0.1:8765` to inspect
    the connected client. Keep Minecraft focused and use F9 to start/resume.
    F8 stops and latches local control off; F9 rearms it. An explicit local or
-   authenticated dashboard Start/Resume also requests guarded rearming. The mod
+   dashboard Start/Resume also requests guarded rearming. The mod
    still requires a focused, living player in a usable world; it can close the
    pause menu or an empty inventory/crafting screen. Starting the server alone
    does not begin gameplay.
@@ -132,7 +132,7 @@ world changes pause the run. Preserve the entire run directory with frames,
 compressed state assets, commands, outcomes, and model records. The separate
 [live verification report](state-aware-verification.md) records observed results.
 
-## Hosted camera and operator controls
+## Hosted camera and shared controls
 
 On Linux/X11, install `xwininfo` and FFmpeg with `x11grab` and H.264 encoding.
 Set `HOLOSPEED_SITE_TOKEN` and `HOLOSPEED_INGEST_TOKEN` in the ignored `.env`,
@@ -153,11 +153,11 @@ controller. H.264/fMP4 HLS targets 60 FPS with this command; omitting
 to one FPS. Target capture rate, measured playback FPS, and Minecraft render
 rate are distinct. Only the named Minecraft window is captured.
 
-Anyone can choose **New run** without a password or token. **Resume**, **Pause**,
-**End run**, voice steering, and Devin investigations require a private
-`#control=<CONTROL_TOKEN>` operator link. Keep that link separate from the public
-URL and publisher credentials. **Lock controls** removes operator access from
-the current tab; public New run remains available.
+Every viewer can use **New run**, **Resume**, **Pause**, **End run**, voice or
+typed steering, and Devin investigations without an account, password, or token.
+The game is shared: these actions affect the same session for everyone. Devin
+requires review of the exact redacted brief and confirmation of its 2-ACU cap.
+Publisher credentials and provider keys remain server-side.
 
 **New run** saves the previous world, copies the prepared empty-inventory
 template into a new save, loads it, verifies the starting state, and starts the
@@ -209,8 +209,8 @@ Baritone source and LGPL notices are linked in the installed source notice and
 
 ## Gladia voice interaction
 
-The dashboard's operator-only microphone uses Gladia transcription and the same
-private command path as typed requests. Recording starts only after an explicit
+The dashboard's public microphone uses Gladia transcription and the same
+command path as typed requests. Recording starts only after an explicit
 microphone click. Final transcripts can pause, stop, resume, supply bounded
 objective guidance, or ask Holo4 about the recorded state; partial captions do
 not dispatch actions. Configure the server-side `GLADIA_API_KEY` and follow

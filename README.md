@@ -22,15 +22,16 @@ checks, measured model latency, and local skill execution.*
 3. Watch the **Live camera** and **ON A MISSION** panel: Holo4 chooses objectives, Jev validates actions, and local skills execute them. Follow model latency, inventory, and progression milestones.
 4. Open **Run journal** to inspect recorded decisions, actions, and outcomes.
 
-The demo is shared: **New run** restarts it for all viewers. Ask the team for a
-private operator link to use **Gladia voice steering**, **pause/resume**, or start
-a **Devin failure investigation**.
+The demo is shared: **New run** restarts it for all viewers. Everyone can pause,
+resume, end runs, speak or type objectives, and ask questions. Open **Devin
+engineering** to prepare a failure investigation, review its exact prompt and
+2-ACU budget, then choose **Create investigation**.
 
 ## How Holo4 and Jev drive the run
 
 | Component | Input | Responsibility |
 | --- | --- | --- |
-| **Holo4 · `holo4-35b-a3b`** | Minecraft screenshot, summarized game state, eligible skills, recent outcomes, operator guidance | Choose the next progression objective, resource, or recovery approach at phase boundaries. |
+| **Holo4 · `holo4-35b-a3b`** | Minecraft screenshot, summarized game state, eligible skills, recent outcomes, viewer guidance | Choose the next progression objective, resource, or recovery approach at phase boundaries. |
 | **Jev · `jev-1.14.0`** | Newly sampled structured state and bounded skill candidates | Validate Holo4’s proposal against current conditions; select routine skills between strategic calls. |
 | **Python controller** | Model selections and fresh client observations | Account for recipe prerequisites, reject stale or invalid choices, dispatch one skill, and verify its outcome. |
 | **Fabric mod + Baritone** | Bounded skill request | Execute navigation, aiming, mining, pickup, crafting, smelting, and bucket placement locally. |
@@ -157,18 +158,17 @@ H Company-inspired interface, Minecraft inventory and progression visuals, and
 - **Run controls:** anyone can choose **New run** without a password. It copies
   the prepared empty-inventory world and reports **Save → Copy → Load → Verify
   → Start**. Gameplay timing begins after loading; previous worlds and recordings
-  are preserved. **Pause**, **Resume**, and **End run** require a private operator
-  link, as do voice steering and Devin investigations.
+  are preserved. **Pause**, **Resume**, **End run**, voice steering, and Devin
+  investigations are available to everyone on the same shared game.
 - **Run inspector:** health, hunger, inventory, live inputs, fourteen checkpoint
   splits, searchable events, previous runs, and downloadable sanitized journals.
 
 ### Gladia: voice in the control loop
 
-With a private operator link, click **Speak** in **Talk to HoloSpeed** beside the
-camera to open a Gladia v2 live transcription session. The browser streams
-16 kHz mono PCM audio to Gladia and
-shows partial captions. Only final utterances enter the authenticated, run-bound
-command queue:
+Click **Speak** in **Talk to HoloSpeed** beside the camera and grant microphone
+permission to open a Gladia v2 live transcription session. The browser streams
+16 kHz mono PCM audio to Gladia and shows partial captions. Only final utterances
+enter the run-bound command queue:
 
 | Say | Effect |
 | --- | --- |
@@ -187,7 +187,7 @@ session-specific WebSocket URL. [Voice integration](docs/gladia.md).
 ```mermaid
 flowchart LR
     R[Recorded run] --> B[Bounded, redacted evidence brief]
-    B --> V[Operator reviews exact prompt]
+    B --> V[Viewer reviews exact prompt and budget]
     V --> D[Devin API investigation · 2 ACU cap]
     D --> F[Failure analysis + proposed regression tests + fixes]
     F --> E[Engineer reviews and validates changes]
@@ -195,7 +195,7 @@ flowchart LR
 
 The selected run supplies skill outcomes, inventory evidence, and failures.
 The brief adds the controller checkout revision at preparation time and notes
-that uncommitted changes may differ. The operator reviews the exact prompt and
+that uncommitted changes may differ. The viewer reviews the exact prompt and
 its digest before creating a session. Submission is idempotent per run and runs
 outside gameplay.
 Findings and proposed test source appear in the dashboard for review. A

@@ -93,10 +93,10 @@ function observerHarness(options = {}) {
   const instrumented = source.replace(entryPoint, `
     globalThis.observerTest = {
       set(value, online = true) {envelope = value; reachable = online;},
-      updateCapture, renderState, renderControls, submitCommand, refreshCommand, lockControls, pollCapture, renderVideo, trackVideoFrame,
+      updateCapture, renderState, renderControls, submitCommand, refreshCommand, endPageInteractions, createVoiceSession, pollCapture, renderVideo, trackVideoFrame,
       renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun, renderMilestones, renderLaunch,
       queueVoice, sendNextVoice, sendTypedVoice, toggleVoice, renderVoice,
-      command(value) {operatorCommand = value;},
+      command(value) {activeCommand = value;},
       engineering(runId, value) {engineeringRun = runId; if (value) engineeringByRun.set(runId, value);},
       journal(value, runId) {journal = value; selectedRun = runId;},
       videoMetadata(value) {videoMetadata = value; videoReachable = true; startVideo(value);},
@@ -269,39 +269,30 @@ test("structured inventory distinguishes an empty sample from missing state and 
   assert.match(helpers.eventDescription({type: "skill_progress", data: {inventory_count: 2, skill: {item: "minecraft:birch_log", target_count: 4, phase: "mining"}}}), /birch log · 2 \/ 4 · mining/);
 });
 
-test("operator fragment is removed before requests and kept only in session storage", () => {
-  const token = "test-operator-capability-with-at-least-32-characters";
-  const ui = observerHarness({hash: `#control=${token}`});
-  assert.deepEqual(ui.replacedUrls, ["/"]);
-  assert.equal(ui.stored.get("holospeed.operator"), token);
+test("obsolete operator fragments and storage are discarded before requests", () => {
+  const token = "obsolete-test-capability-with-at-least-32-characters";
+  const ui = observerHarness({token, hash: `#control=${token}&view=journal`});
+  assert.deepEqual(ui.replacedUrls, ["/#view=journal"]);
+  assert.equal(ui.stored.has("holospeed.operator"), false);
   ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
   ui.renderControls();
-  assert.equal(ui.element("operator-status").textContent, "Operator access");
+  assert.equal(ui.element("shared-status").textContent, "Shared controls");
   assert.equal(ui.element("control-resume").disabled, false);
-  assert.equal(ui.element("control-pause").disabled, true);
   assert.ok(!ui.element("control-feedback").textContent.includes(token));
-  ui.lockControls();
-  assert.equal(ui.stored.has("holospeed.operator"), false);
-  assert.equal(ui.element("control-resume").disabled, true);
 });
 
-test("public, stale, disconnected, and pending states cannot issue unintended controls", () => {
-  const running = {status: "running", connected: true, run_id: "run-1"};
-  for (const values of [[true, false, false], [false, true, false], [true, true, true]]) {
-    const availability = helpers.controlAvailability(running, ...values);
-    assert.equal(Object.values(availability).some(Boolean), false);
+test("stale, disconnected, and pending states retain normal control availability guards", () => {
+  const running = {status: "running", connected: true, run_id: "run-1", launch: null};
+  for (const [fresh, pending] of [[false, false], [true, true]]) {
+    assert.equal(Object.values(helpers.controlAvailability(running, fresh, pending)).some(Boolean), false);
   }
-  assert.equal(helpers.controlAvailability(running, true, true, false).pause, true);
-  assert.equal(helpers.controlAvailability(running, true, true, false).resume, false);
-  assert.equal(helpers.controlAvailability({...running, connected: false}, true, true, false).start_new, false);
-  const ui = observerHarness({token: "valid-stored-operator-capability-32-characters", hash: "#control=invalid"});
-  ui.renderControls();
-  assert.equal(ui.stored.has("holospeed.operator"), false);
-  assert.equal(ui.element("operator-status").textContent, "Shared demo");
-  assert.equal(ui.element("control-start_new").disabled, true);
+  assert.equal(helpers.controlAvailability(running, true, false).pause, true);
+  assert.equal(helpers.controlAvailability(running, true, false).resume, false);
+  assert.equal(helpers.controlAvailability({...running, connected: false}, true, false).start_new, false);
+  assert.equal(helpers.controlAvailability({...running, connected: false, status: "paused"}, true, false).resume, false);
 });
 
-test("operator commands send only UUID/action to the same-origin queue with bearer authorization", async () => {
+test("run commands send only UUID/action to the same-origin queue without credentials", async () => {
   const token = "test-operator-capability-with-at-least-32-characters";
   const requests = [];
   const ui = observerHarness({token, fetch: async (url, options) => {
@@ -313,7 +304,7 @@ test("operator commands send only UUID/action to the same-origin queue with bear
   await ui.submitCommand("resume");
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, "/api/commands");
-  assert.equal(requests[0].options.headers.Authorization, `Bearer ${token}`);
+  assert.equal(Object.hasOwn(requests[0].options.headers, "Authorization"), false);
   assert.deepEqual(JSON.parse(requests[0].options.body), {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "resume"});
   assert.equal(ui.element("control-feedback").textContent, "Run resumed.");
   assert.ok(!requests[0].options.body.includes(token));
@@ -382,7 +373,7 @@ test("HLS video stays composited while starting and reports measured presented F
   assert.equal(players.length, 2, "A new encoder generation must reload its media timeline");
 });
 
-test("uncertain operator submission is checked by ID and never posted again automatically", async () => {
+test("uncertain control submission is checked by ID and never posted again automatically", async () => {
   const requests = [];
   const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (url, options) => {
     requests.push({url, method: options.method});
@@ -397,19 +388,15 @@ test("uncertain operator submission is checked by ID and never posted again auto
   assert.equal(ui.element("control-feedback").textContent, "Paused.");
 });
 
-test("locking controls during an in-flight POST ignores its late feedback", async () => {
+test("leaving the page ignores late command feedback while retaining its reconciliation identity", async () => {
   let complete;
-  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: () => new Promise((resolve) => {complete = resolve;})});
-  ui.set({updated_at: NOW, feed_status: "online", state: {status: "running", connected: true, run_id: "run-1"}});
-  ui.renderControls();
-  const pending = ui.submitCommand("pause");
-  ui.lockControls("Controls locked by the operator.");
-  complete({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", status: "completed", detail: "Paused."}})});
+  const ui = observerHarness({fetch: () => new Promise((resolve) => {complete = resolve;})});
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "running", connected: true, run_id: "run-1"}}); ui.renderControls();
+  const pending = ui.submitCommand("pause"); ui.endPageInteractions();
+  complete({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "pause", status: "completed", detail: "Late completion."}})});
   await pending;
-  assert.equal(ui.element("operator-status").textContent, "Shared demo");
-  assert.equal(ui.element("control-feedback").textContent, "Controls locked by the operator.");
-  assert.equal(ui.element("control-pause").disabled, true);
-  assert.equal(ui.stored.has("holospeed.operator"), false);
+  assert.notEqual(ui.element("control-feedback").textContent, "Late completion.");
+  assert.equal(JSON.parse(ui.stored.get("holospeed.command")).action, "pause");
 });
 
 test("the default route names every from-scratch checkpoint and preserves legacy event labels", () => {
@@ -479,7 +466,7 @@ test("Devin preview is bound to one run, exact digest, and the capped budget", (
   for (const url of ["https://evil.example/sessions/123", "https://app.devin.ai.evil.example/sessions/123", "javascript:alert(1)", "https://app.devin.ai/sessions/123?token=private"]) assert.equal(helpers.devinSessionUrl(url), null);
   assert.equal(helpers.engineeringStatus({status: "running"}), "Devin is investigating");
   assert.equal(helpers.engineeringStatus({status: "running", status_detail: "finished"}), "Investigation finished");
-  assert.equal(helpers.engineeringStatus({status: "running", status_detail: "waiting_for_user"}), "Waiting for operator input");
+  assert.equal(helpers.engineeringStatus({status: "running", status_detail: "waiting_for_user"}), "Waiting for your input");
   assert.equal(helpers.engineeringStatus({status: "running", updated_at: NOW - 61000}, NOW), "Last recorded: running");
   assert.equal(helpers.engineeringStatus({status: "running", updated_at: NOW - 1000}, NOW), "Devin is investigating");
   assert.equal(helpers.engineeringStatus({status: "unknown"}), "Submission unconfirmed");
@@ -501,7 +488,7 @@ test("unavailable Devin submission never invents an existing investigation", () 
   assert.match(ui.element("devin-feedback").textContent, /already has a recorded investigation/);
 });
 
-test("Devin submits only after private preparation and explicit confirmation of that brief", async () => {
+test("everyone can submit Devin only after exact preparation and explicit confirmation of that brief", async () => {
   const token = "test-operator-capability-with-at-least-32-characters";
   const requests = [];
   let serial = 0;
@@ -530,19 +517,19 @@ test("Devin submits only after private preparation and explicit confirmation of 
   await ui.submitCommand("investigate", {run_id: "run-1", digest_hash: preview.digest_hash});
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1].body, {id: "command-2", action: "investigate", run_id: "run-1", digest_hash: preview.digest_hash});
-  assert.equal(requests[1].options.headers.Authorization, `Bearer ${token}`);
+  assert.equal(Object.hasOwn(requests[1].options.headers, "Authorization"), false);
   assert.ok(!requests[1].options.body.includes(preview.prompt));
   assert.equal(ui.element("devin-prompt").textContent, "");
   assert.equal(ui.element("devin-submit").disabled, true);
   assert.equal(ui.element("devin-session-status").textContent, "Submitting to Devin");
 });
 
-test("public findings remain viewable but public viewers cannot prepare or submit investigations", async () => {
+test("findings and test proposals stay safe plain text while every viewer can prepare a brief", async () => {
   const ui = observerHarness();
   ui.set({updated_at: NOW, state: {}, runs: [{id: "run-1"}]});
   ui.engineering("run-1", {status: "running", status_detail: "finished", url: "https://app.devin.ai/sessions/session-1", structured_output: {summary: "<script>Never execute report text</script>", likely_causes: ["Route was blocked"], proposed_tests: ["Test blocked route recovery"], test_patches: [{relative_path: "tests/test_route.py", purpose: "Exercise recovery", code: "<script>plain code only</script>", validation_status: "not_run"}]}});
   ui.renderEngineering();
-  assert.equal(ui.element("devin-prepare").disabled, true);
+  assert.equal(ui.element("devin-prepare").disabled, false);
   assert.equal(ui.element("devin-submit").disabled, true);
   assert.equal(ui.element("devin-findings-summary").textContent, "<script>Never execute report text</script>");
   assert.equal(ui.element("devin-causes").textContent, "Route was blocked");
@@ -551,18 +538,16 @@ test("public findings remain viewable but public viewers cannot prepare or submi
   assert.equal(patch.appended[2].textContent, "<script>plain code only</script>");
   ui.renderEngineering();
   assert.equal(ui.element("devin-patches").nodes[0], patch, "Polling must not collapse an open test proposal");
-  await ui.submitCommand("prepare_investigation", {run_id: "run-1"});
-  assert.equal(ui.element("devin-review").hidden, true);
 });
 
-test("locking controls during preparation ignores the late private brief", async () => {
+test("changing the selected run during preparation rejects the late mismatched brief", async () => {
   let finish;
   const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: () => new Promise((resolve) => {finish = resolve;})});
   ui.set({updated_at: NOW, state: {}, runs: [{id: "run-1"}]});
   ui.engineering("run-1");
   const pending = ui.submitCommand("prepare_investigation", {run_id: "run-1"});
-  ui.lockControls();
-  finish({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "prepare_investigation", status: "completed", data: {run_id: "run-1", prompt: "PRIVATE PREVIEW", digest_hash: "a".repeat(64), max_acu_limit: 2, can_submit: true, existing: null}}})});
+  ui.engineering("run-2");
+  finish({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "prepare_investigation", status: "completed", data: {run_id: "run-1", prompt: "FIRST RUN PREVIEW", digest_hash: "a".repeat(64), max_acu_limit: 2, can_submit: true, existing: null}}})});
   await pending;
   assert.equal(ui.element("devin-review").hidden, true);
   assert.equal(ui.element("devin-prompt").textContent, "");
@@ -646,15 +631,19 @@ test("typed voice instructions use the current run and immutable command protoco
   assert.equal(ui.element("voice-reply").textContent, "Gameplay paused.");
 });
 
-test("public viewers cannot start a microphone or submit typed instructions", () => {
+test("every viewer can explicitly start the microphone but render never starts recording", () => {
   let starts = 0;
   const ui = observerHarness({HoloVoice: {Session: class {start() {starts++;}}}});
   ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "run", status: "running"}});
-  ui.renderVoice(); ui.toggleVoice();
-  ui.element("voice-text").value = "pause"; ui.sendTypedVoice();
+  ui.renderVoice();
   assert.equal(starts, 0);
+  assert.equal(ui.element("voice-toggle").disabled, false);
+  assert.equal(ui.element("voice-send").disabled, false);
+  ui.toggleVoice(); assert.equal(starts, 1);
+  ui.set({updated_at: NOW - 60000, feed_status: "online", state: {run_id: "run", status: "running"}});
+  ui.renderVoice(); ui.toggleVoice();
+  assert.equal(starts, 1);
   assert.equal(ui.element("voice-toggle").disabled, true);
-  assert.equal(ui.element("voice-send").disabled, true);
 });
 
 test("queued speech cannot spill into another run", async () => {
@@ -697,7 +686,7 @@ test("explicit queue-busy rejection may retry the same unaccepted voice identity
   assert.equal(bodies.length, 2); assert.deepEqual(bodies[1], bodies[0]);
 });
 
-test("locking controls stops the microphone before callbacks can dispatch queued speech", async () => {
+test("leaving the page stops the microphone before callbacks can dispatch queued speech", async () => {
   let recording;
   const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", HoloVoice: {Session: class {
     constructor(options) {this.options = options; recording = this;}
@@ -708,12 +697,11 @@ test("locking controls stops the microphone before callbacks can dispatch queued
   ui.toggleVoice();
   ui.command({id: "existing", action: "pause", status: "pending"});
   ui.queueVoice({text: "collect wood", run_id: "run", session_id: "typed", utterance_id: "utterance-1"});
-  ui.command(null); ui.lockControls();
+  ui.command(null); ui.endPageInteractions();
   assert.equal(recording.cancelled, true);
   recording.options.onFinal({text: "pause", session_id: "test", utterance_id: "late"});
   await ui.sendNextVoice();
   assert.equal(ui.element("voice-toggle").disabled, true);
-  assert.equal(ui.element("operator-status").textContent, "Shared demo");
 });
 
 test("public voice captions pair the latest instruction with its own asynchronous reply", () => {
@@ -744,16 +732,15 @@ test("Holo voice answers cannot replace or animate the gameplay strategist's dec
 test("launch preparation exposes cancellation without a current run or game connection", () => {
   for (const status of ["idle", "paused", "unavailable"]) {
     const state = {status, connected: false, run_id: null, launch: {status: "preparing", stage: "loading"}};
-    const controls = helpers.controlAvailability(state, true, true, false);
+    const controls = helpers.controlAvailability(state, true, false);
     assert.equal(controls.pause, true);
     assert.equal(controls.stop, true);
     assert.equal(controls.start_new, false);
     assert.equal(controls.resume, false);
-    assert.equal(Object.values(helpers.controlAvailability(state, false, true, false)).some(Boolean), false);
-    assert.equal(Object.values(helpers.controlAvailability(state, true, false, false)).some(Boolean), false);
+    assert.equal(Object.values(helpers.controlAvailability(state, false, false)).some(Boolean), false);
   }
   const menu = {status: "idle", connected: true, run_id: null, launch: {status: "cancelled", stage: "cancelled"}};
-  assert.equal(helpers.controlAvailability(menu, true, true, false).start_new, true, "A connected title screen can launch a fresh world");
+  assert.equal(helpers.controlAvailability(menu, true, false).start_new, true, "A connected title screen can launch a fresh world");
 });
 
 test("launch stages do not claim completion from a command acceptance or invent percentages", () => {
@@ -809,15 +796,15 @@ test("launch failures, stale stages, and missing metadata stay explicit and rest
 test("New run stays disabled for old controllers until the clean-launch capability is published", () => {
   const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters"});
   const old = {status: "paused", connected: true, run_id: "previous"};
-  assert.equal(helpers.controlAvailability(old, true, true, false).start_new, false);
+  assert.equal(helpers.controlAvailability(old, true, false).start_new, false);
   ui.set({updated_at: NOW, feed_status: "online", state: old}); ui.renderControls();
   assert.equal(ui.element("control-start_new").disabled, true);
-  assert.equal(ui.element("operator-world-note").textContent, "Launcher not connected");
+  assert.equal(ui.element("world-note").textContent, "Launcher not connected");
   assert.match(ui.element("control-feedback").textContent, /Launcher not connected/);
   assert.equal(ui.element("control-resume").disabled, false, "Existing controls remain compatible during rollout");
   ui.set({updated_at: NOW, feed_status: "online", state: {...old, launch: null}}); ui.renderControls();
   assert.equal(ui.element("control-start_new").disabled, false);
-  assert.equal(ui.element("operator-world-note").textContent, "Fresh world · Automatic start");
+  assert.equal(ui.element("world-note").textContent, "Fresh world · Automatic start");
 });
 
 test("a fresh-run request masks the previous attempt immediately and waits for its own launch ID", async () => {
@@ -933,46 +920,22 @@ test("definitive New run rejection or expiration clears the pending launch prese
   }
 });
 
-test("leaving operator mode preserves public New run reconciliation and cannot strand a rejected launch", async () => {
-  let finish;
-  const token = "test-operator-capability-with-at-least-32-characters";
-  const ui = observerHarness({token, fetch: () => new Promise((resolve) => {finish = resolve;})});
-  ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {status: "idle", connected: true, run_id: null, launch: null}});
-  ui.renderControls();
-  const pending = ui.submitCommand("start_new");
-  ui.lockControls();
-  assert.equal(ui.element("launch-heading").textContent, "Requesting a fresh run");
-  assert.equal(ui.element("operator-status").textContent, "Shared demo");
-  assert.equal(ui.stored.has("holospeed.operator"), false);
-  assert.equal(ui.element("control-start_new").disabled, true, "A public pending command remains tracked after leaving private mode");
-  finish({ok: false, status: 409, json: async () => ({error: "The request was not accepted."})});
-  await pending;
-  assert.equal(ui.stored.has("holospeed.command"), false);
-  assert.equal(ui.element("control-start_new").disabled, false);
-  assert.equal(ui.element("run-launch").hidden, true);
-});
 
-test("everyone can start a fresh run while all other controls remain private", async () => {
-  let requests = 0;
-  const ui = observerHarness({fetch: () => {requests++; throw new Error("Private command must not be sent");}});
+
+test("everyone can access run controls, speech, and Devin with current agent telemetry", () => {
+  const ui = observerHarness();
   const state = {status: "paused", connected: true, run_id: "recorded-run", launch: null};
-  ui.set({updated_at: NOW, feed_status: "online", state}); ui.renderControls();
-  assert.equal(ui.element("operator-status").textContent, "Shared demo");
+  ui.set({updated_at: NOW, feed_status: "online", state, runs: [{id: "recorded-run"}]}); ui.renderControls();
   assert.equal(ui.element("control-start_new").disabled, false);
-  for (const action of ["resume", "pause", "stop"]) {
-    assert.equal(ui.element(`control-${action}`).disabled, true);
-    await ui.submitCommand(action);
-  }
-  assert.equal(requests, 0);
-  assert.equal(ui.element("voice-toggle").disabled, true);
-  assert.equal(ui.element("voice-send").disabled, true);
-  ui.lockControls();
-  assert.equal(ui.element("control-start_new").disabled, false, "Leaving private operator mode does not remove public launch access");
-  for (const changed of [{...state, connected: false}, {...state, launch: {status: "preparing", stage: "loading"}}]) {
-    assert.equal(Object.values(helpers.controlAvailability(changed, true, false, false)).some(Boolean), false);
-  }
-  assert.equal(Object.values(helpers.controlAvailability(state, false, false, false)).some(Boolean), false);
-  assert.equal(Object.values(helpers.controlAvailability(state, true, false, true)).some(Boolean), false);
+  assert.equal(ui.element("control-resume").disabled, false);
+  assert.equal(ui.element("control-stop").disabled, false);
+  assert.equal(ui.element("voice-toggle").disabled, false);
+  assert.equal(ui.element("voice-send").disabled, false);
+  ui.engineering("recorded-run"); ui.renderEngineering();
+  assert.equal(ui.element("devin-prepare").disabled, false);
+  assert.equal(ui.element("devin-submit").disabled, true, "An exact reviewed brief is still required");
+  ui.set({updated_at: NOW, feed_status: "online", state: {...state, status: "running"}}); ui.renderControls();
+  assert.equal(ui.element("control-pause").disabled, false);
 });
 
 test("public New run submits and polls without exposing an operator credential", async () => {
@@ -1033,9 +996,9 @@ test("reloading a pending or accepted public launch only reconciles the original
   }
 });
 
-test("public reloads do not request private or malformed saved commands", () => {
+test("reloads do not request unknown or malformed saved commands", () => {
   for (const saved of [
-    {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "investigate", submitted_at: NOW},
+    {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "unknown_action", submitted_at: NOW},
     {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", submitted_at: NOW},
     {id: "invalid", action: "start_new", submitted_at: NOW},
     {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "start_new"},
@@ -1067,29 +1030,20 @@ test("uncertain public submission keeps one ID and the existing 404 deadline wit
   assert.equal(ui.stored.has("holospeed.command"), false);
 });
 
-test("public launch completion after leaving operator mode remains observable", async () => {
-  let finish;
-  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
-  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: () => new Promise((resolve) => {finish = resolve;})});
-  ui.set({updated_at: NOW, feed_status: "online", state: {status: "idle", connected: true, run_id: null, launch: null}}); ui.renderControls();
-  const pending = ui.submitCommand("start_new"); ui.lockControls();
-  finish({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", detail: "Preparation accepted."}})}); await pending;
-  assert.equal(ui.element("launch-state").textContent, "ACCEPTED");
-  assert.equal(ui.element("control-start_new").disabled, true);
-  assert.equal(ui.element("control-pause").disabled, true);
-  assert.equal(ui.element("launch-cancel-note").hidden, true);
-  assert.equal(ui.stored.has("holospeed.operator"), false);
-});
 
-test("the shared demo has no password form, login request, or password-unlock links", () => {
+
+test("the shared demo has no operator role, token authorization, login form, or locked features", () => {
   const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
-  assert.match(html, /Anyone can start a fresh run/);
+  assert.match(html, /Everyone can take the controls/);
   assert.ok(!html.includes('type="password"'));
   assert.ok(!html.includes("operator-login"));
   assert.ok(!html.includes("operator-unlock-link"));
   assert.ok(!source.includes("/api/operator/login"));
   assert.ok(!source.includes("unlockControls"));
-  assert.ok(!source.includes("Unlock controls at the bottom"));
+  assert.ok(!source.includes("Authorization"));
+  assert.ok(!source.includes("operatorToken"));
+  assert.ok(!source.includes("private operator"));
+  assert.ok(!html.includes("lock-controls"));
 });
 
 test("a restored launch yields to a fresh explicitly newer shared launch without replaying the old command", async () => {
@@ -1124,4 +1078,75 @@ test("older, un-timestamped, and stale launch records cannot supersede an accept
     assert.equal(ui.element("control-start_new").disabled, true);
     assert.equal(ui.stored.has("holospeed.command"), true);
   }
+});
+
+test("anonymous viewers can submit and reconcile pause, resume, and stop without credentials", async () => {
+  for (const action of ["pause", "resume", "stop"]) {
+    const requests = [];
+    const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+    const ui = observerHarness({fetch: async (url, options) => {
+      requests.push({url, options});
+      return {ok: true, json: async () => ({command: {id, action, status: options.method === "POST" ? "pending" : "completed"}})};
+    }});
+    ui.set({updated_at: NOW, feed_status: "online", state: {status: action === "resume" ? "paused" : "running", connected: true, run_id: "run-1", launch: null}});
+    ui.renderControls(); await ui.submitCommand(action); await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(requests.map(({options}) => options.method), ["POST", "GET"]);
+    assert.deepEqual(JSON.parse(requests[0].options.body), {id, action});
+    assert.ok(requests.every(({options}) => !Object.hasOwn(options.headers, "Authorization")));
+    assert.equal(ui.stored.has("holospeed.command"), false, "Completed controls do not replay on reload");
+  }
+});
+
+test("anonymous speech sessions use the same-origin API without credentials or automatic retries", async () => {
+  for (const ok of [true, false]) {
+    const requests = [];
+    const grant = {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", url: "wss://api.gladia.io/audio/text-only-test", sample_rate: 16000};
+    const ui = observerHarness({fetch: async (url, options) => {
+      requests.push({url, options});
+      return {ok, status: ok ? 201 : 503, json: async () => grant};
+    }});
+    const signal = new AbortController().signal;
+    if (ok) assert.equal((await ui.createVoiceSession(signal)).id, grant.id);
+    else await assert.rejects(ui.createVoiceSession(signal), /Voice session unavailable/);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "/api/voice/session");
+    assert.equal(requests[0].options.method, "POST");
+    assert.equal(requests[0].options.credentials, "same-origin");
+    assert.equal(Object.hasOwn(requests[0].options.headers, "Authorization"), false);
+    assert.deepEqual(JSON.parse(requests[0].options.body), {id: grant.id});
+    assert.ok(![...ui.stored.values()].some((value) => value.includes(grant.url)), "Ephemeral speech URLs stay out of storage");
+  }
+});
+
+test("all saved control, voice, and Devin commands reconcile by ID on anonymous reload without replay", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  for (const action of ["pause", "resume", "stop", "voice", "prepare_investigation", "investigate"]) {
+    const requests = [];
+    const ui = observerHarness({stored: [["holospeed.command", JSON.stringify({id, action, submitted_at: NOW - 1000})]], fetch: async (url, options) => {
+      requests.push({url, options});
+      return {ok: true, json: async () => ({command: {id, action, status: "completed"}})};
+    }});
+    ui.set({updated_at: NOW, feed_status: "online", state: {status: "idle", connected: true, run_id: null, launch: null}});
+    ui.renderControls(); await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(requests.map(({options}) => options.method), ["GET"]);
+    assert.equal(requests[0].url, `/api/commands/${id}`);
+    assert.equal(Object.hasOwn(requests[0].options.headers, "Authorization"), false);
+    assert.equal(ui.stored.has("holospeed.command"), false);
+  }
+});
+
+test("an anonymous microphone session stops when the run changes and cannot submit a late transcript", async () => {
+  let recording;
+  let sent = 0;
+  const ui = observerHarness({fetch: () => {sent++;}, HoloVoice: {Session: class {
+    constructor(options) {this.options = options; recording = this;}
+    start() {this.active = true; this.options.onState("listening");}
+    cancel() {this.active = false; this.cancelled = true; this.options.onState("idle");}
+  }}});
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "first", status: "running"}}); ui.toggleVoice();
+  ui.set({updated_at: NOW, feed_status: "online", state: {run_id: "second", status: "running"}}); ui.renderVoice();
+  assert.equal(recording.cancelled, true);
+  recording.options.onFinal({text: "pause", session_id: "test", utterance_id: "late"}); await ui.sendNextVoice();
+  assert.equal(sent, 0);
+  assert.match(ui.element("voice-feedback").textContent, /run or agent connection changed/);
 });

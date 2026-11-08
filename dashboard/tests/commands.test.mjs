@@ -58,10 +58,10 @@ function request(path, {method = "GET", token, body, contentType = "application/
   return new Request(ORIGIN + path, {method, headers, ...(body === undefined ? {} : {body: typeof body === "string" ? body : JSON.stringify(body)})});
 }
 
-function create(configuration, id = FIRST, action = "start_new", token = CONTROL) {
+function create(configuration, id = FIRST, action = "start_new", token = null) {
   return handleApi(request("/api/commands", {method: "POST", token, body: {id, action}}), configuration);
 }
-function status(configuration, id = FIRST, token = CONTROL) {
+function status(configuration, id = FIRST, token = null) {
   return handleApi(request(`/api/commands/${id}`, {token}), configuration);
 }
 function next(configuration, token = INGEST) {
@@ -71,10 +71,9 @@ function ack(configuration, id = FIRST, body = {status: "completed", detail: "Ap
   return handleApi(request(`/api/commands/${id}/result`, {method: "POST", token, body}), configuration);
 }
 
-test("public viewers cannot create private commands, deliver, or acknowledge commands", async () => {
+test("public dashboard access cannot deliver or acknowledge publisher commands", async () => {
   const configuration = env();
   for (const response of [
-    await create(configuration, FIRST, "pause", null),
     await next(configuration, null),
     await ack(configuration, FIRST, undefined, null),
   ]) {
@@ -86,24 +85,23 @@ test("public viewers cannot create private commands, deliver, or acknowledge com
   assert.equal(configuration.BUCKET.records.size, 0);
 });
 
-test("operator and publisher credentials grant separate capabilities", async () => {
+test("only the publisher credential permits delivery and acknowledgement", async () => {
   const configuration = env();
-  assert.equal((await create(configuration, FIRST, "pause", INGEST)).status, 401);
   assert.equal((await next(configuration, CONTROL)).status, 401);
   assert.equal((await ack(configuration, FIRST, undefined, CONTROL)).status, 401);
   assert.equal((await create(configuration, FIRST, "pause")).status, 202);
-  assert.equal((await status(configuration, FIRST, INGEST)).status, 401);
-  assert.equal((await status(configuration, FIRST, null)).status, 401);
+  assert.equal((await status(configuration, FIRST, INGEST)).status, 200);
+  assert.equal((await status(configuration, FIRST, null)).status, 200);
   assert.equal((await status(configuration)).status, 200);
   assert.equal((await next(configuration)).status, 200);
 });
 
-test("missing, short, or reused control secrets disable operator access", async () => {
-  for (const token of [undefined, "too-short", INGEST]) {
+test("legacy control configuration has no effect on public dashboard access", async () => {
+  for (const token of [undefined, "", "too-short", INGEST]) {
     const configuration = env({CONTROL_TOKEN: token});
-    const response = await create(configuration, FIRST, "pause", token || CONTROL);
-    assert.equal(response.status, 503);
-    assert.equal(configuration.BUCKET.records.size, 0);
+    assert.equal((await create(configuration, FIRST, "pause", null)).status, 202);
+    assert.equal((await status(configuration, FIRST, null)).status, 200);
+    assert.equal((await next(configuration, null)).status, 401);
   }
 });
 
@@ -191,7 +189,7 @@ test("an accepted queue entry survives a failed secondary record write without d
   assert.equal((await (await next(configuration)).json()).command, null);
 });
 
-test("recorded command feedback redacts both publisher and operator credentials", async () => {
+test("recorded command feedback redacts publisher and legacy credentials", async () => {
   const configuration = env();
   await create(configuration);
   const response = await ack(configuration, FIRST, {status: "failed", detail: `Failure ${CONTROL} ${INGEST}`});
@@ -285,15 +283,17 @@ test("any same-origin viewer can start and poll a new run without an operator se
   assert.equal((await ack(configuration, FIRST, undefined, null)).status, 401);
 });
 
-test("public New run requires exact same-origin POST and strict bounded command fields", async () => {
+test("all public actions require exact same-origin POST and strict bounded command fields", async () => {
   const configuration = env();
   for (const options of [
     {origin: null}, {origin: "null"}, {origin: "https://evil.example"},
     {origin: "https://observer.example.evil.example"}, {origin: ORIGIN + "/"},
     {site: "cross-site"}, {site: "same-site"},
   ]) {
-    const response = await handleApi(request("/api/commands", {method: "POST", body: {id: FIRST, action: "start_new"}, ...options}), configuration);
-    assert.equal(response.status, 403);
+    for (const action of ["start_new", "resume", "pause", "stop", "voice", "prepare_investigation", "investigate"]) {
+      const response = await handleApi(request("/api/commands", {method: "POST", body: {id: FIRST, action}, ...options}), configuration);
+      assert.equal(response.status, 403);
+    }
   }
   for (const body of [
     {id: FIRST, action: "start_new", run_id: "old-run"},
@@ -306,12 +306,12 @@ test("public New run requires exact same-origin POST and strict bounded command 
   assert.equal(configuration.BUCKET.records.size, 0);
 });
 
-test("public launch admission remains atomic across viewers and competes with private commands", async () => {
-  for (const privateCompetitor of [false, true]) {
+test("public command admission remains atomic across viewers and different actions", async () => {
+  for (const differentAction of [false, true]) {
     const configuration = env();
     const responses = await Promise.all([
       create(configuration, FIRST, "start_new", null),
-      create(configuration, SECOND, privateCompetitor ? "pause" : "start_new", privateCompetitor ? CONTROL : null),
+      create(configuration, SECOND, differentAction ? "pause" : "start_new", null),
     ]);
     assert.deepEqual(responses.map((response) => response.status).sort(), [202, 409]);
     const winner = (await responses.find((response) => response.status === 202).json()).command;
@@ -320,17 +320,14 @@ test("public launch admission remains atomic across viewers and competes with pr
   }
 });
 
-test("public access cannot create or read any protected action or substitute a private command ID", async () => {
+test("every dashboard action and its status is public while immutable IDs cannot change actions", async () => {
   for (const action of ["resume", "pause", "stop", "voice", "prepare_investigation", "investigate"]) {
-    const configuration = env();
+    const configuration = env({CONTROL_TOKEN: undefined});
     const body = {id: FIRST, action, ...(action === "voice" ? {text: "Where are you?", session_id: "typed", utterance_id: "typed-1", run_id: null} : action.includes("investigat") ? {run_id: "run-1", ...(action === "investigate" ? {digest_hash: "a".repeat(64)} : {})} : {})};
-    for (const token of [undefined, INGEST]) {
-      assert.equal((await handleApi(request("/api/commands", {method: "POST", token, body}), configuration)).status, 401);
-      assert.equal(configuration.BUCKET.records.size, 0);
-    }
-    assert.equal((await handleApi(request("/api/commands", {method: "POST", token: CONTROL, body}), configuration)).status, 202);
-    assert.equal((await status(configuration, FIRST, null)).status, 401);
-    assert.equal((await status(configuration, FIRST, INGEST)).status, 401);
+    assert.equal((await handleApi(request("/api/commands", {method: "POST", body}), configuration)).status, 202);
+    assert.equal((await handleApi(request("/api/commands", {method: "POST", body}), configuration)).status, 200);
+    assert.equal((await status(configuration, FIRST, null)).status, 200);
+    assert.equal((await status(configuration, FIRST, INGEST)).status, 200);
     assert.equal((await status(configuration, FIRST, CONTROL)).status, 200);
     const collision = await create(configuration, FIRST, "start_new", null);
     assert.equal(collision.status, 409);

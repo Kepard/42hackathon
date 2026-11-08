@@ -141,9 +141,9 @@ Minecraft's normal single-player pause state when available, replying with
 `status:"unavailable"`. This protects the completed single-player demonstration;
 it is not evidence of goal completion and does not pause a multiplayer server.
 
-## Explicit operator rearm
+## Explicit control rearm
 
-An operator Start/Resume uses `{"type":"arm","id":"request-id"}` before
+A user Start/Resume uses `{"type":"arm","id":"request-id"}` before
 starting an idle live controller. A successful reply is
 `{"type":"arm_ack","id":"request-id","status":"ready"}`; a rejection
 includes status/reason and must not start gameplay. The request has a five-second
@@ -157,13 +157,13 @@ the guarded `arm` exchange described above. Autonomous skills and model
 responses cannot rearm themselves.
 
 Hosted controls use a separate HTTP command queue, not direct access to the
-Fabric WebSocket. `start_new`, `resume`, `pause`, and `stop` require the site's
-private `CONTROL_TOKEN`; the publisher pulls/acknowledges them with
-`INGEST_TOKEN`. UUID identity, a 30-second dispatch deadline, and a durable local
-claim prevent automatic replay after an uncertain interruption. `start_new`
-archives the current recording and starts another in the same world; `stop`
-finishes/archives it. See [dashboard setup](../dashboard/README.md) for endpoints
-and the private operator link.
+Fabric WebSocket. All dashboard command submissions and result reads are public;
+the publisher alone pulls and acknowledges queued commands using `INGEST_TOKEN`.
+UUID identity, a 30-second dispatch deadline, and a durable local claim prevent
+automatic replay after an uncertain interruption. `start_new` archives the
+current recording, loads a fresh copy of the prepared world, and starts after
+verification; `stop` finishes and archives the current run. See
+[dashboard setup](../dashboard/README.md) for endpoints and deployment.
 
 ## Retained screenshot and input protocol
 

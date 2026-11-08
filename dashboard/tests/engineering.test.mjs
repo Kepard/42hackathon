@@ -27,7 +27,7 @@ class Bucket {
 }
 function environment() {return {BUCKET: new Bucket(), CONTROL_TOKEN: CONTROL, INGEST_TOKEN: INGEST};}
 function request(path, body, token) {
-  return new Request(`https://observer.example${path}`, {method: body === undefined ? "GET" : "POST", headers: {...(token ? {Authorization: `Bearer ${token}`} : {}), ...(body === undefined ? {} : {"Content-Type": "application/json"})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+  return new Request(`https://observer.example${path}`, {method: body === undefined ? "GET" : "POST", headers: {...(token ? {Authorization: `Bearer ${token}`} : {}), ...(body === undefined ? {} : {"Content-Type": "application/json", Origin: "https://observer.example"})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
 }
 function compact(overrides = {}) {
   return {run_id: RUN, status: "running", digest_hash: HASH, max_acu_limit: 2, created_at: NOW, updated_at: NOW, session_id: "devin-test-1", url: "https://app.devin.ai/sessions/devin-test-1", ...overrides};
@@ -37,7 +37,7 @@ async function preview(prompt = "Investigate this recorded run.\nEvidence: a fai
   return {run_id: RUN, prompt, digest_hash, max_acu_limit: 2, can_submit: true, existing: null};
 }
 function create(env, action = "prepare_investigation", extra = {}) {
-  return handleApi(request("/api/commands", {id: ID, action, run_id: RUN, ...extra}, CONTROL), env);
+  return handleApi(request("/api/commands", {id: ID, action, run_id: RUN, ...extra}), env);
 }
 function result(env, data, extra = {}) {
   return handleApi(request(`/api/commands/${ID}/result`, {status: "completed", detail: "Investigation response prepared", run_id: RUN, data, ...extra}, INGEST), env);
@@ -77,15 +77,15 @@ test("command identity includes the run and approved hash, independent of JSON k
   assert.equal((await create(env)).status, 409);
 });
 
-test("preview preserves exact UTF-8 prompt bytes and remains operator-private", async () => {
+test("public preview preserves exact UTF-8 prompt bytes without copying them into run archives", async () => {
   const env = environment();
+  delete env.CONTROL_TOKEN;
   await create(env);
   const data = await preview();
   assert.equal((await result(env, data)).status, 200);
-  const privateResult = await handleApi(request(`/api/commands/${ID}`, undefined, CONTROL), env);
-  assert.deepEqual((await privateResult.json()).command.data, data);
-  assert.equal((await handleApi(request(`/api/commands/${ID}`), env)).status, 401);
-  assert.equal((await handleApi(request(`/api/commands/${ID}`, undefined, INGEST), env)).status, 401);
+  const publicResult = await handleApi(request(`/api/commands/${ID}`), env);
+  assert.deepEqual((await publicResult.json()).command.data, data);
+  assert.equal((await handleApi(request(`/api/commands/${ID}`, undefined, INGEST), env)).status, 200);
   assert.equal((await handleApi(request("/api/state"), env)).status, 200);
   const published = await upload(env, compact());
   assert.equal(published.status, 200);
@@ -110,7 +110,7 @@ test("preview rejects hash changes, unredacted credentials, wrong runs, and alte
   assert.equal((await result(env, valid)).status, 200);
 });
 
-test("terminal private results are immutable but accept semantically identical key order", async () => {
+test("terminal investigation results are immutable but accept semantically identical key order", async () => {
   const env = environment();
   await create(env);
   const data = await preview();
@@ -171,7 +171,7 @@ test("public engineering rejects private payloads, forged session links, and uns
   assert.equal(env.BUCKET.records.size, 0);
 });
 
-test("private and public engineering payload limits are enforced before persistence", async () => {
+test("command and archive engineering payload limits are enforced before persistence", async () => {
   const env = environment();
   await create(env);
   const value = await preview();

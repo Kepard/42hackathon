@@ -195,9 +195,12 @@ Holo4 proposes an action from a screenshot. With Jev configured and
 captures a new screenshot, and asks Jev to validate that unexecuted plan. Only
 the validated action executes, against the fresh frame. Jev also validates exact
 bounded continuations with a binary continue/replan choice; uncertainty or danger returns to Holo4. Both stages'
-latency and usage are recorded. Eight repeated model abstentions stop the run
+latency and usage are recorded. Eight consecutive model abstentions stop the run
 for review. This adds a validation call after each Holo plan to check scene
 changes during planning.
+Completed non-idle inputs reset that consecutive-veto counter; total recovery
+attempts remain visible in the run metrics. Stuck detection and run budgets apply
+independently, so an acknowledged input is never treated as proof of progress.
 
 The request timeout (`MODEL_TIMEOUT_SECONDS=30`) and the source-frame freshness
 budget are distinct: a request completing within its timeout does not authorize

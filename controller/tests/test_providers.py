@@ -855,6 +855,31 @@ async def test_compact_holo_optional_intent_is_labeled_not_progress(settings, ob
     assert result.decision.milestone is None
 
 
+async def test_compact_holo_directs_continuous_log_mining_before_inventory_claim(
+    settings, observation
+):
+    settings.holo_compact = True
+    payload = holo_response({"intent": "Mine the aimed birch log"})
+    payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = "mine_block"
+
+    def handle(request):
+        body = json.loads(request.content)
+        prompt = body["messages"][0]["content"]
+        assert "at least60 CONTINUOUS attack ticks" in prompt
+        assert "Separate 10–20-tick punches reset" in prompt
+        assert "call mine_block with target intent and default80 ticks" in prompt
+        assert "dropped item, breaking particles, or planned action does NOT prove wood" in prompt
+        assert "verify the inventory/hotbar before claiming wood" in prompt
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result = await HoloProvider(settings, client).decide(
+            observation, {"objective": "Gather wood"}
+        )
+    assert result.decision.action == Action(keys=["attack"], duration_ticks=80)
+    assert result.decision.milestone is None
+
+
 async def test_compact_holo_still_accepts_legacy_explicit_metadata(settings, observation, decision):
     settings.holo_compact = True
     async with httpx.AsyncClient(

@@ -29,3 +29,29 @@ Minecraft's keyboard callback; the full smoke sequence passed after that fix.
 This verifies the bridge and input lifecycle. It does not establish autonomous
 wood gathering, crafting success, a repeatable speedrun milestone, or model
 latency. Those require separate model-driven gameplay trials.
+
+## Follow-up manual mining fixture
+
+A separate, operator-directed test in the existing seed-42 smoke world recorded
+movement, jumping, camera alignment, leaf breaking, and two 80-tick stationary
+attack commands. The commands acknowledged tick intervals 4100–4180 and
+5946–6026, and the HUD showed held LMB in the recordings. Neither attempt
+produced visible log-breaking or a collected log; the aligned targets were
+likely outside reach. A later close-range attempt was rejected because a zombie
+had killed the player during night-time setup. The death guard behaved correctly.
+
+The disposable smoke world was then changed to Peaceful through vanilla options
+for setup, but the test timebox ended without successful log-acquisition evidence.
+The original HoloSpeed Demo world was preserved, and its controller configuration
+was restored. No model calls, cheats, inventory injection, world-state API queries,
+or mod source changes were used in this follow-up.
+
+**Result: log acquisition remains inconclusive**, and this is not an autonomous
+gameplay milestone. Ignored local evidence is in
+`runs/evaluations/manual-mining/`: `result.json`, complete frame/action/ACK records,
+PNG observations, and three short recordings. Scheduler completion and a held-key
+HUD are not evidence of successful mining by themselves.
+
+A subsequent [autonomous compact-planning trial](../docs/verification.md#compact-planning-and-exact-jev-continuation)
+did visibly break a birch log through the same 80-tick control path. That separate
+result demonstrates block breaking, while collected wood remains unverified.

@@ -5,7 +5,7 @@ and actual model-driven gameplay.
 
 ## Automated and interface checks
 
-* 193 Python tests passed after compact planning, exact Jev continuation,
+* 196 Python tests passed after compact planning, exact Jev continuation,
   recovery-context, no-op, and offline-analysis changes, covering provider formats, fresh-frame validation,
   cancellation, credentials, action bounds, recordings, replay, and API controls.
 * The Fabric mod built and remapped successfully; 14 Java tests passed.
@@ -98,3 +98,60 @@ after the deadline. The controller now applies the remaining deadline to
 observations, inference, and action execution, cancels in-flight operations when
 it expires, and releases inputs. Regression tests cover this behavior and the
 preservation of late cancellation acknowledgments in the complete wire journal.
+
+## Compact planning and exact Jev continuation
+
+Run `20261108T083505-2284d213` used compact Holo4-35B control calls with thinking
+enabled (`HOLO_REASONING_EFFORT=low`), binary exact-action Jev validation, and the
+same restored fixed-seed Survival/Easy world. It approached a nearby birch and
+visibly broke the lower log. The stationary 80-tick attack was requested at
+event 202, acknowledged at event 205 (ticks 1804–1884), and followed by screenshots
+showing the block removed and a dropped birch item. The hotbar remains empty:
+**log breaking is demonstrated; collection and crafting are not.**
+
+| Result | Observed value |
+| --- | --- |
+| Time until recovery stop | 45.214 seconds |
+| Completed controls / observations | 8 / 25 |
+| Total Jev vetoes | 8 |
+| Holo calls / median latency | 9 / 1.626 seconds |
+| Jev calls / median latency | 16 / 358 ms |
+| Independently confirmed resource milestones | 0 |
+
+![Actual dropped birch item after autonomous mining](assets/compact-mined-log.png)
+
+The model made a premature `wood` claim at event 199, citing an aimed standing
+trunk before mining. This claim is preserved as `model_visual_claim`, **not**
+accepted as evidence of collection. The console screenshot shows that historical
+claim; the journal and image take precedence. The compact prompt now explicitly
+requires a visible hotbar/inventory log item before claiming wood, and directs
+the agent to collect the dropped item after continuous mining.
+
+![Actual compact-planning run in the console](assets/compact-live-console.png)
+
+Desktop and 390px mobile console checks passed without changing controller state.
+The shorter Holo latency was sustained across this small live trial, but prior
+runs began from different views and used different prompts, so the comparison
+is not a controlled gameplay benchmark. See [the same-frame provider experiment](providers.md)
+and [two-frame Jev ablation](jev-evaluation.md) for the narrower comparisons.
+
+## Consecutive-veto follow-up
+
+The approved policy now stops after eight **consecutive** model vetoes, resetting
+that counter only after a completed input with actual controls. No-input waits
+do not reset it. The cumulative recovery metric, stuck checks, hard deadline,
+action limit, and four-camera-scan cap remain independent.
+
+Run `20261108T084145-9a987763` continued from the dropped-log scene with this
+policy and the tightened mining/milestone prompt. It recorded 5 completed
+controls, 46 observations, four camera scans, and 21 total vetoes, then stopped
+at 56.606 seconds after eight consecutive vetoes. Holo median latency was
+1.231 seconds across 20 calls; Jev median was 246ms across 26 calls. The scene
+became dark, and navigation/pickup remained blocked. No hotbar log or crafted
+tool was observed, and the model made no milestone claims.
+
+This verifies the changed stopping policy and continued low inference latency;
+it does not establish reliable wood collection. The world was paused and the
+controller returned to idle after finalizing the archive. The offline report
+separates the 56.602-second active interval from 22.307 seconds of post-stop
+inspection included in the 78.913-second archive duration.

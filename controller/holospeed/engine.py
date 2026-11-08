@@ -287,6 +287,7 @@ class AgentEngine:
         last_pixels = None
         repeated_ticks = 0
         errors = 0
+        consecutive_abstentions = 0
         steps_since_plan = self.settings.planner_interval
         last_view_recovery_at = -1
         view_recoveries = self.view_recoveries
@@ -356,6 +357,7 @@ class AgentEngine:
                     and self.settings.allow_exploration
                     and self.jev
                     and self.previous is None
+                    and consecutive_abstentions >= 2
                     and len(self.failures) >= 2
                     and view_recoveries < 4
                     and recovery_count != last_view_recovery_at
@@ -521,6 +523,8 @@ class AgentEngine:
                         },
                     )
                     veto = isinstance(error, ReplanRequired)
+                    if veto:
+                        consecutive_abstentions += 1
                     rejected = proposed or (self.previous if veto and provider == "jev" else None)
                     self.recovery(
                         str(error),
@@ -536,9 +540,9 @@ class AgentEngine:
                         raise RuntimeError(
                             "Three model failures; inspect logs before resuming"
                         ) from error
-                    if self.state["metrics"]["recoveries"] >= 8:
+                    if consecutive_abstentions >= 8:
                         raise RuntimeError(
-                            "Repeated model abstentions; inspect the run before resuming"
+                            "Repeated model abstentions: eight consecutive vetoes; inspect the run before resuming"
                         ) from error
                     await self.bridge.stop("Replanning after provider rejection")
                     self.broadcast()
@@ -683,6 +687,18 @@ class AgentEngine:
                 self.state.update(keys=[], action=None)
                 if ack["status"] == "completed":
                     self.state["metrics"]["actions"] += 1
+                    if any(
+                        action.get(key)
+                        for key in (
+                            "keys",
+                            "yaw_delta",
+                            "pitch_delta",
+                            "cursor",
+                            "hotbar",
+                            "scroll",
+                        )
+                    ):
+                        consecutive_abstentions = 0
                     self.recent.append(
                         {
                             "action": action,

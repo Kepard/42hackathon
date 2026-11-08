@@ -238,16 +238,21 @@ Follow run_goal; use recent results/failures to avoid ineffective repetition. Fi
 logs, then craft planks/sticks/table, wooden pickaxe, and stone tools through visible GUI.
 Return ONE native action call with controls only. Omit unused fields. Optional intent is
 one short target phrase; intent is REQUIRED for mine_block and GUI interactions. No narrative
-needed. Optional milestone+evidence may report a newly visible item only; omit both if unseen.
-Never infer a milestone from issuing inputs or expected progress.
+needed. Optional milestone+evidence requires a visible acquired item in the inventory/hotbar.
+A standing trunk, dropped item, breaking particles, or planned action does NOT prove wood
+collected. Omit milestone+evidence until acquisition is visible.
 Distinguish leaves from solid log trunks. Leaves under the crosshair: attack for 10 ticks
 to clear them before moving. Approach and aim separately. If exploration is enabled,
 prefer probes <=10 ticks and small look changes when progress is uncertain.
 propose_decision: simultaneous keys, 20 ticks/second, at most20 ticks. Positive yaw turns
 right, positive pitch looks down. GUI click_x/y integers0–1000, only with screen_open.
-mine_block: stationary attack only, duration60–80 ticks(default80), only when a reachable
-log/block is already under the crosshair. Do not move while mining; early release resets
-breaking. Keep controls safe. Never use cheats, commands, or hidden game state.
+Bare-hand logs need at least60 CONTINUOUS attack ticks. Separate 10–20-tick punches reset
+breaking and cannot harvest a log. Once a reachable oak/birch log is under the crosshair,
+call mine_block with target intent and default80 ticks; do not repeat short punches or
+reselect an empty hotbar slot. mine_block is stationary attack only, duration60–80 ticks;
+approach/aim first, never move while mining. After the block breaks, safely approach the
+dropped item to pick it up, then verify the inventory/hotbar before claiming wood.
+Keep controls safe. Never use cheats, commands, or hidden game state.
 answer only when the entire run_goal is visibly complete; give visible evidence, not
 an action-based assumption. Explicit no-input tests use empty keys and duration_ticks1.
 """

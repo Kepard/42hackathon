@@ -114,6 +114,16 @@ class WaitingProvider:
         pass
 
 
+@pytest.fixture
+def skip_retry_delays(monkeypatch):
+    real_sleep = asyncio.sleep
+
+    async def without_retry_delay(delay, *args, **kwargs):
+        return await real_sleep(0 if delay == 0.5 else delay, *args, **kwargs)
+
+    monkeypatch.setattr("holospeed.engine.asyncio.sleep", without_retry_delay)
+
+
 async def test_actual_demo_flow_produces_complete_replay_and_summary(tmp_path, monkeypatch):
     """Use the real demo decisions, delays, images, executor, engine, and journal."""
     engine = AgentEngine(Settings(mode="demo", runs_dir=tmp_path), GameBridge())
@@ -935,6 +945,153 @@ async def test_provider_error_after_completed_action_does_not_blame_that_action(
         assert engine.recent[0]["action"] == plan.action.model_dump()
         assert engine.recent[0]["ack"]["status"] == "completed"
         assert not any(event["type"] == "recovery_plan" for event in events)
+    finally:
+        await engine.close()
+
+
+async def test_completed_movement_resets_consecutive_veto_budget_but_retains_total_recoveries(
+    tmp_path, monkeypatch, skip_retry_delays
+):
+    bridge = FakeBridge()
+    engine = AgentEngine(
+        Settings(
+            mode="live",
+            runs_dir=tmp_path,
+            holo_api_key="unused-holo",
+            jev_api_key="unused-jev",
+            validate_holo_plans=True,
+            allow_exploration=False,
+            max_actions=2,
+        ),
+        bridge,
+    )
+    plan = Decision(
+        objective="Approach the visible trunk",
+        strategy="Use a short forward step after fresh visual validation",
+        expected_effect="Nearby block edges shift",
+        action=Action(keys=["forward"], duration_ticks=10),
+    )
+    outcomes = ["veto"] * 7 + ["accept"] + ["veto"] * 2 + ["accept"]
+    jev_calls = []
+
+    async def holo_decide(observation, context):
+        return ModelResult(decision=plan, request={}, response={}, latency_ms=1, model="fake-holo")
+
+    async def jev_decide(observation, context):
+        outcome = outcomes[len(jev_calls)]
+        jev_calls.append(outcome)
+        if outcome == "veto":
+            raise ReplanRequired(
+                "Synthetic visible obstruction",
+                provider="jev",
+                latency_ms=1,
+                request={},
+                response={},
+            )
+        return ModelResult(decision=plan, request={}, response={}, latency_ms=1, model="fake-jev")
+
+    monkeypatch.setattr(engine.holo, "decide", holo_decide)
+    monkeypatch.setattr(engine.jev, "decide", jev_decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=3)
+        assert jev_calls == outcomes
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 2
+        assert engine.state["metrics"]["recoveries"] == 9
+        assert engine.state["metrics"]["errors"] == 0
+        assert [action for action, _, _ in bridge.executed] == [plan.action, plan.action]
+        events = read_events(engine.recorder.path / "events.jsonl")
+        acks = [event for event in events if event["type"] == "ack"]
+        recoveries = [event for event in events if event["type"] == "recovery"]
+        assert len(acks) == 2 and all(event["data"]["status"] == "completed" for event in acks)
+        assert sum(event["seq"] < acks[0]["seq"] for event in recoveries) == 7
+        assert sum(acks[0]["seq"] < event["seq"] < acks[1]["seq"] for event in recoveries) == 2
+        assert not any(event["type"] == "error" for event in events)
+        assert any(
+            event["type"] == "event" and event["data"].get("name") == "run_budget_reached"
+            for event in events
+        )
+    finally:
+        await engine.close()
+
+
+async def test_camera_recovery_requires_new_consecutive_vetoes_after_completed_movement(
+    tmp_path, monkeypatch, skip_retry_delays
+):
+    bridge = FakeBridge()
+    engine = AgentEngine(
+        Settings(
+            mode="live",
+            runs_dir=tmp_path,
+            holo_api_key="unused-holo",
+            jev_api_key="unused-jev",
+            validate_holo_plans=True,
+            allow_exploration=True,
+            max_actions=3,
+        ),
+        bridge,
+    )
+    plan = Decision(
+        objective="Approach the visible trunk",
+        strategy="Take one validated forward step",
+        expected_effect="Nearby block edges shift",
+        action=Action(keys=["forward"], duration_ticks=10),
+    )
+    outcomes = ["veto", "veto", "scan", "move", "veto", "veto", "scan"]
+    jev_calls, holo_calls = [], []
+
+    async def holo_decide(observation, context):
+        holo_calls.append(context)
+        return ModelResult(decision=plan, request={}, response={}, latency_ms=1, model="fake-holo")
+
+    async def jev_decide(observation, context):
+        outcome = outcomes[len(jev_calls)]
+        jev_calls.append(outcome)
+        proposal = Decision.model_validate(context["previous_decision"])
+        if outcome == "scan":
+            assert context["validate_unexecuted_plan"] is True
+            assert proposal.action.keys == []
+            assert proposal.action.yaw_delta or proposal.action.pitch_delta
+        else:
+            assert proposal.action == plan.action
+        if outcome == "veto":
+            raise ReplanRequired(
+                "Synthetic visible obstruction",
+                provider="jev",
+                latency_ms=1,
+                request={},
+                response={},
+            )
+        return ModelResult(
+            decision=proposal, request={}, response={}, latency_ms=1, model="fake-jev"
+        )
+
+    monkeypatch.setattr(engine.holo, "decide", holo_decide)
+    monkeypatch.setattr(engine.jev, "decide", jev_decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=3)
+        assert jev_calls == outcomes
+        assert len(holo_calls) == 4
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 3
+        assert engine.state["metrics"]["recoveries"] == 4
+        assert engine.state["metrics"]["errors"] == 0
+        assert bridge.executed[0][0].keys == []
+        assert bridge.executed[1][0] == plan.action
+        assert bridge.executed[2][0].keys == []
+        events = read_events(engine.recorder.path / "events.jsonl")
+        scans = [event for event in events if event["type"] == "recovery_plan"]
+        acks = [event for event in events if event["type"] == "ack"]
+        recoveries = [event for event in events if event["type"] == "recovery"]
+        assert len(scans) == 2
+        assert sum(event["seq"] < scans[0]["seq"] for event in recoveries) == 2
+        # The two historical vetoes remain in memory, but a new scan waits for
+        # two new rejections after the completed movement ACK.
+        assert sum(acks[1]["seq"] < event["seq"] < scans[1]["seq"] for event in recoveries) == 2
+        assert not any(acks[0]["seq"] < event["seq"] < acks[1]["seq"] for event in scans)
+        assert bridge.stops[-1] == "Agent loop stopped"
     finally:
         await engine.close()
 

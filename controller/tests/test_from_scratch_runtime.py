@@ -103,3 +103,46 @@ async def test_world_pauses_after_goal_evidence_without_changing_achievement(tmp
         )
     finally:
         await engine.close()
+
+
+@pytest.mark.parametrize("verified", [False, True])
+async def test_failed_cast_provenance_cannot_become_success_on_next_loop(
+    tmp_path, monkeypatch, verified
+):
+    class CastBridge(SkillBridge):
+        async def start_skill(self, candidate):
+            ack = await super().start_skill(candidate)
+            self.pending = None
+            self.value["dimension"] = "minecraft:the_nether"
+            self.skill.update(
+                active=False,
+                status="completed",
+                phase="entered_nether",
+                verified_steps=["portal_built", "portal_lit"] if verified else [],
+            )
+            return ack
+
+    candidate = {
+        "id": "cast-full-frame",
+        "skill": "cast_portal",
+        "item": "minecraft:nether_portal",
+        "target_count": 1,
+        "max_ticks": 1800,
+        "target": {"x": 4, "y": 63, "z": 2},
+        "reason": "Construct the complete portal",
+        "postcondition": "dimension",
+        "expected_dimension": "minecraft:the_nether",
+    }
+    monkeypatch.setattr("holospeed.state_engine.next_skills", lambda *args, **kwargs: [candidate])
+    engine, _, _ = await engine_with_fakes(tmp_path, CastBridge(), run_goal="nether")
+    try:
+        await engine.start()
+        await asyncio.wait_for(asyncio.shield(engine.task), 5)
+        goals = [
+            event for event in run_events(engine) if event["data"].get("name") == "goal_reached"
+        ]
+        assert bool(goals) is verified
+        assert engine.state["metrics"]["actions"] == int(verified)
+        assert engine.state["status"] == ("paused" if verified else "error")
+    finally:
+        await engine.close()

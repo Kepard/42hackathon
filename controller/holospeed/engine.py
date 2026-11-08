@@ -48,6 +48,7 @@ class AgentEngine:
         self.failures: deque = deque(maxlen=8)
         self.recent: deque = deque(maxlen=8)
         self.operator_guidance: deque = deque(maxlen=6)
+        self.completed_cast_proof: dict | None = None
         self.events: deque = deque(maxlen=80)
         self.state = self.initial_state()
 
@@ -137,6 +138,7 @@ class AgentEngine:
                 self.events.clear()
                 self.recent.clear()
                 self.operator_guidance.clear()
+                self.completed_cast_proof = None
                 self.failures.clear()
                 self.view_recoveries = 0
                 if self.settings.mode == "demo":

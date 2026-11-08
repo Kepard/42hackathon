@@ -364,6 +364,17 @@ async def run_state_agent(engine) -> None:
             state = await read_state(engine)
             milestones(engine, state)
             if goal_reached(state, engine.settings.run_goal):
+                if (
+                    engine.settings.run_goal == "nether"
+                    and engine.settings.nether_route == "from_scratch"
+                    and (
+                        not engine.completed_cast_proof
+                        or engine.completed_cast_proof["run_id"] != engine.recorder.id
+                    )
+                ):
+                    raise RuntimeError(
+                        "Nether present without verified full-frame construction in this recording"
+                    )
                 await capture(engine)
                 engine.state.update(
                     status="paused",
@@ -551,6 +562,12 @@ async def run_state_agent(engine) -> None:
             engine.recent.append(result)
             engine.state.update(keys=[], action=None)
             if success:
+                if candidate["skill"] == "cast_portal":
+                    engine.completed_cast_proof = {
+                        "run_id": engine.recorder.id,
+                        "state_id": after.id,
+                        "skill_id": after.skill.skill_id,
+                    }
                 failures = 0
                 engine.state["metrics"]["actions"] += 1
                 engine.log("skill_completed", result)

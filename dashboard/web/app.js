@@ -318,14 +318,14 @@
       const value = JSON.parse(saved);
       if (/^[0-9a-f-]{36}$/i.test(value.id) && (value.action === "start_new" || operatorToken) && Number.isFinite(value.submitted_at)) {
         operatorCommand = {id: value.id, action: value.action, status: "pending", submitted_at: value.submitted_at};
-        if (value.action === "start_new" && value.await_launch !== false) requestedLaunch = {id: value.id, accepted: value.launch_accepted === true};
+        if (value.action === "start_new" && value.await_launch !== false) requestedLaunch = {id: value.id, accepted: value.launch_accepted === true, commandAt: timestamp(value.launch_command_at)};
       }
     }
   } catch { /* An invalid local history must not trigger commands. */ }
   function rememberCommand() {
     try {
       if (!operatorCommand || (operatorCommand.action === "start_new" && operatorCommand.status !== "pending" && requestedLaunch?.id !== operatorCommand.id)) storage?.removeItem("holospeed.command");
-      else storage?.setItem("holospeed.command", JSON.stringify({id: operatorCommand.id, action: operatorCommand.action, submitted_at: operatorCommand.submitted_at, await_launch: requestedLaunch?.id === operatorCommand.id, launch_accepted: requestedLaunch?.accepted === true}));
+      else storage?.setItem("holospeed.command", JSON.stringify({id: operatorCommand.id, action: operatorCommand.action, submitted_at: operatorCommand.submitted_at, await_launch: requestedLaunch?.id === operatorCommand.id, launch_accepted: requestedLaunch?.accepted === true, launch_command_at: requestedLaunch?.commandAt ?? null}));
     } catch { /* Keep tracking in this page when storage is unavailable. */ }
   }
 
@@ -578,7 +578,15 @@
     if ((operatorToken || operatorCommand?.action === "start_new") && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
   }
   function launchForDisplay(state) {
-    if (requestedLaunch && state.launch?.id === requestedLaunch.id) {requestedLaunch = null; rememberCommand();}
+    const startedAt = timestamp(state.launch?.started_at);
+    // A different viewer may have launched again while this tab was closed.
+    // Only fresh, explicitly newer server records supersede the expected ID;
+    // never infer that from local elapsed time or an old terminal snapshot.
+    const superseded = requestedLaunch?.accepted && requestedLaunch.commandAt != null && startedAt != null && startedAt > requestedLaunch.commandAt && state.launch?.id && state.launch.id !== requestedLaunch.id && launchProgress(state.launch) && telemetryState(envelope, Date.now(), reachable).fresh;
+    if (requestedLaunch && (state.launch?.id === requestedLaunch.id || superseded)) {
+      requestedLaunch = null; rememberCommand();
+      if (superseded) commandMessage = "A newer shared run is now being shown.";
+    }
     if (!requestedLaunch) return launchProgress(state.launch);
     const accepted = requestedLaunch.accepted;
     return {active: true, awaiting: true, accepted, status: accepted ? "accepted" : "requested", stage: null,
@@ -588,7 +596,10 @@
   }
   function handleLaunchCommand(command) {
     if (requestedLaunch?.id !== command?.id) return;
-    if (command.status === "completed") requestedLaunch.accepted = true;
+    if (command.status === "completed") {
+      requestedLaunch.accepted = true;
+      requestedLaunch.commandAt = timestamp(command.completed_at) ?? timestamp(command.created_at) ?? requestedLaunch.commandAt;
+    }
     else if (["failed", "expired"].includes(command.status)) requestedLaunch = null;
   }
   function renderLaunch(state, telemetry, launch = launchForDisplay(state)) {

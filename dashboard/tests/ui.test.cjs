@@ -1091,3 +1091,37 @@ test("the shared demo has no password form, login request, or password-unlock li
   assert.ok(!source.includes("unlockControls"));
   assert.ok(!source.includes("Unlock controls at the bottom"));
 });
+
+test("a restored launch yields to a fresh explicitly newer shared launch without replaying the old command", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  const saved = JSON.stringify({id, action: "start_new", submitted_at: NOW - 30000, await_launch: true, launch_accepted: true});
+  const requests = [];
+  const ui = observerHarness({stored: [["holospeed.command", saved]], fetch: async (url, options) => {
+    requests.push({url, options});
+    return {ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", created_at: new Date(NOW - 30000).toISOString(), completed_at: new Date(NOW - 28000).toISOString()}})};
+  }});
+  const state = {status: "idle", connected: true, run_id: null, launch: {id: "another-viewer-launch", status: "running", stage: "running", started_at: new Date(NOW - 10000).toISOString()}};
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state}); ui.renderState();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map(({options}) => options.method), ["GET"]);
+  assert.equal(requests[0].url, `/api/commands/${id}`);
+  assert.equal(ui.element("launch-heading").textContent, "Fresh run started");
+  assert.equal(ui.element("route-panel").hidden, false);
+  assert.equal(ui.element("control-start_new").disabled, false);
+  assert.equal(ui.stored.has("holospeed.command"), false);
+  assert.match(ui.element("control-feedback").textContent, /newer shared run/);
+});
+
+test("older, un-timestamped, and stale launch records cannot supersede an accepted request", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  for (const [startedAt, fresh] of [[NOW - 40000, true], [null, true], [NOW - 10000, false]]) {
+    const saved = JSON.stringify({id, action: "start_new", submitted_at: NOW - 30000, await_launch: true, launch_accepted: true});
+    const ui = observerHarness({stored: [["holospeed.command", saved]], fetch: async () => ({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", created_at: new Date(NOW - 30000).toISOString()}})})});
+    ui.set({updated_at: fresh ? NOW : NOW - 60000, feed_status: "online", runs: [], state: {status: "idle", connected: true, run_id: null, launch: {id: "different-launch", status: "failed", stage: "failed", started_at: startedAt == null ? null : new Date(startedAt).toISOString()}}});
+    ui.renderState(); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(ui.element("launch-heading").textContent, "Fresh run accepted");
+    assert.equal(ui.element("route-panel").hidden, true);
+    assert.equal(ui.element("control-start_new").disabled, true);
+    assert.equal(ui.stored.has("holospeed.command"), true);
+  }
+});

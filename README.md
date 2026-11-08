@@ -10,6 +10,11 @@ mission is **empty inventory → tools → smelted iron → bucket-cast portal �
 **[Watch the live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site)** ·
 [Jury description](docs/jury-description.md) · [Setup](docs/setup.md)
 
+[![HoloSpeed live dashboard showing Minecraft gameplay, Holo4 planning, Jev validation, and New run controls](docs/assets/dashboard-main.png)](https://holospeed-live-kepard.kepard.chatgpt.site/)
+
+*The live dashboard: Minecraft gameplay alongside Holo4’s strategy, Jev’s fresh-state
+checks, measured model latency, and local skill execution.*
+
 ## How Holo4 and Jev drive the run
 
 | Component | Input | Responsibility |

@@ -362,21 +362,37 @@ async function voiceSession(request, env) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   let result, failure;
+  let stage = "provider_fetch", providerStatus = null, diagnostic = null;
   try {
     const response = await fetch("https://api.gladia.io/v2/live", {method: "POST", redirect: "error", signal: controller.signal, headers: {"Content-Type": "application/json", "x-gladia-key": env.GLADIA_API_KEY}, body: JSON.stringify({
       encoding: "wav/pcm", bit_depth: 16, sample_rate: 16000, channels: 1, model: "solaria-1", endpointing: 0.3, maximum_duration_without_endpointing: 5,
       messages_config: {receive_partial_transcripts: true, receive_final_transcripts: true, receive_lifecycle_events: true, receive_errors: true},
     })});
+    providerStatus = response.status;
+    stage = "provider_http";
     if (!response.ok) throw new Error("Transcription provider rejected session creation");
-    const data = parseJson(new TextDecoder().decode(await bytes(response, 64 * 1024)));
+    stage = "provider_body";
+    const raw = await bytes(response, 64 * 1024);
+    stage = "provider_json";
+    const data = parseJson(new TextDecoder().decode(raw));
+    stage = "provider_id";
+    if (!COMMAND_ID.test(data.id || "")) throw new Error("Invalid transcription session identity");
+    stage = "provider_url";
     const url = typeof data.url === "string" && data.url.length <= 4096 ? new URL(data.url) : null;
-    if (!COMMAND_ID.test(data.id || "") || !url || url.protocol !== "wss:" || (url.hostname !== "gladia.io" && !url.hostname.endsWith(".gladia.io")) || url.username || url.password || url.port || url.hash || data.url.includes(env.GLADIA_API_KEY) || data.url.includes(env.CONTROL_TOKEN)) throw new Error("Invalid transcription session response");
+    if (!url || url.protocol !== "wss:" || (url.hostname !== "gladia.io" && !url.hostname.endsWith(".gladia.io")) || url.username || url.password || url.port || url.hash) throw new Error("Invalid transcription session response");
+    stage = "provider_url_credentials";
+    if (data.url.includes(env.GLADIA_API_KEY) || data.url.includes(env.CONTROL_TOKEN)) throw new Error("Transcription URL contains a permanent credential");
     result = {id: data.id.toLowerCase(), url: url.href, sample_rate: 16000};
   } catch {
-    failure = new ApiError(controller.signal.aborted ? 504 : 502, "Voice session creation was not confirmed. It will not be retried automatically.");
+    const code = controller.signal.aborted ? "provider_timeout" : stage === "provider_http" ? `provider_http_${providerStatus}` : stage;
+    diagnostic = {stage: code, provider_status: providerStatus};
+    // Only allowlisted stages and numeric status leave this catch. Provider
+    // response bodies, exception messages, headers, and URLs can hold secrets.
+    console.warn("voice_session_unconfirmed", JSON.stringify(diagnostic));
+    failure = new ApiError(controller.signal.aborted ? 504 : 502, `Voice session creation was not confirmed (${code}). It will not be retried automatically.`);
   } finally { clearTimeout(timer); }
   // No WebSocket URL, API key, raw provider payload, or audio is persisted.
-  const completed = {...lease, status: result ? "created" : "unconfirmed", completed_at: Date.now(), expires_at: Date.now() + 10_000};
+  const completed = {...lease, status: result ? "created" : "unconfirmed", completed_at: Date.now(), expires_at: Date.now() + 10_000, ...(diagnostic ? {diagnostic} : {})};
   await env.BUCKET.put(key, JSON.stringify(completed), {...metadata, onlyIf: {etagMatches: receipt.etag}});
   await env.BUCKET.put(VOICE_CREATE_KEY, JSON.stringify(completed), {...metadata, onlyIf: {etagMatches: admitted.etag}});
   if (failure) throw failure;

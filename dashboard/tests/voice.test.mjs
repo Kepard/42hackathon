@@ -107,6 +107,27 @@ test("upstream creation times out with a durable unknown outcome", async (contex
   assert.equal(calls.length, 1);
 });
 
+test("session failure diagnostics identify provider stage without exposing its raw error payload", async (context) => {
+  let status = 401, payload = {error: GLADIA, url: URL};
+  const messages = [];
+  context.mock.method(console, "warn", (...values) => messages.push(values.join(" ")));
+  upstream(context, () => Response.json(payload, {status}));
+  const denied = environment();
+  const deniedResponse = await session(denied);
+  assert.equal(deniedResponse.status, 502);
+  assert.match(await deniedResponse.text(), /provider_http_401/);
+  status = 201; payload = {id: SESSION, url: "wss://evil.example/private?token=never-log-this"};
+  const malformed = environment();
+  assert.match(await (await session(malformed)).text(), /provider_url/);
+  const stored = [...denied.BUCKET.records.values(), ...malformed.BUCKET.records.values()].map((value) => value.text).join("\n");
+  assert.match(stored, /provider_http_401/);
+  assert.match(stored, /provider_status/);
+  for (const privateValue of [GLADIA, URL, "never-log-this"]) {
+    assert.ok(!messages.join(" ").includes(privateValue));
+    assert.ok(!stored.includes(privateValue));
+  }
+});
+
 test("provider URLs must use a Gladia secure WebSocket without returned API credentials", async (context) => {
   let payload;
   upstream(context, () => Response.json(payload));

@@ -238,6 +238,7 @@ ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
 Craft: use search_recipe(query) to ensure craftable-only filter (GREEN check, not red X) and type the item name FIRST. Blank results mean check item name/grid or missing ingredients. Then click the matching filtered result; unsearched recipe clicks are blocked.
 Observe the output slot: shift-click ONLY if visibly nonempty AND NOT a red-tinted ghost. Red ghost ingredients/output are NOT owned/craftable items. If empty/red, obtain missing ingredients first; never repeat empty-output clicks.
 2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
+Portal: purple tears on SOLID blocks are crying obsidian, NOT a portal. Only enter a purple-sheet INTERIOR. Inspect ground before circling/retreating; loot the chest and repair/ignite from safe ground.
 4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
 Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.
 7 raw iron icon: cliffs/caves, tan-speckled iron, not copper; mine with

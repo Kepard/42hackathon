@@ -65,6 +65,15 @@ def test_cost_math():
     assert usage_cost({}, "custom-id")[1] is None
 
 
+def test_portal_hint_distinguishes_crying_blocks_and_requires_safe_ground():
+    from mc_observatory.holo import PRIMER
+    assert "SOLID blocks are crying obsidian, NOT a portal" in PRIMER
+    assert "Only enter a purple-sheet INTERIOR" in PRIMER
+    assert "Inspect ground before circling/retreating" in PRIMER
+    assert "loot the chest and repair/ignite from safe ground" in PRIMER
+    assert len(PRIMER.split()) <= 550
+
+
 @pytest.mark.parametrize("bad", [call("unknown"), call(seconds=-1), call(seconds=True), call(seconds=float("nan")),
                                   call(seconds=1, extra=1), {"function": {"name": "wait", "arguments": "{"}},
                                   {"function": {"name": "wait", "arguments": "null"}}, call("select_hotbar", n=1.2),

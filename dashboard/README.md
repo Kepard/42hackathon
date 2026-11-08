@@ -4,8 +4,8 @@ Public dashboard: [open the site](https://holospeed-live-kepard.kepard.chatgpt.s
 The initial source was copied from the Sites project at
 `f3fb8d925a048a79ec5956e492f7996cd467fb71`. The interface shows the Minecraft
 window, controller intent, input telemetry, model latency, metrics, milestones,
-and searchable run events. Public viewers can watch; a separate private
-operator capability enables run controls.
+and searchable run events. Anyone can watch and choose **New run**. A separate
+private operator capability enables Pause, Resume, End run, voice, and Devin.
 The **On a mission** pipeline shows actual Holo4 and Jev request lifecycles,
 their recorded input sources and decisions, and the local skill executing next.
 Animation requires a fresh, active request or skill; completed decisions remain
@@ -46,8 +46,6 @@ viewers in Sites settings. Configure these runtime secrets:
   `HOLOSPEED_INGEST_TOKEN` (at least 16 characters).
 - `CONTROL_TOKEN`: private operator capability (32–256 URL-safe characters),
   distinct from `INGEST_TOKEN`.
-- `OPERATOR_PASSWORD_SHA256`: optional lowercase SHA-256 of the exact UTF-8
-  operator password, enabling the footer login form. Keep this value server-side.
 - `GLADIA_API_KEY`: enables operator-only voice session creation. The browser
   receives a short-lived transcription session URL, never this API key.
 
@@ -55,13 +53,11 @@ Keep secrets out of source and browser assets. A public viewer needs no
 secret. Other hosting platforms must provide the `BUCKET` binding and any
 desired viewer access layer.
 
-## Operator access
+## Public launch and operator access
 
-Enter the configured password in **Operator access** at the bottom of the page.
-The same-origin login endpoint returns the existing capability only after server
-verification, uses no-store responses, and limits repeated attempts. The password
-is cleared immediately; the capability stays only in that tab's session storage.
-**Lock controls** clears it and stops any microphone capture.
+**New run** is public and requires no password or token. The **Shared demo**
+footer states “Anyone can start a fresh run.” Pause, Resume, End run, voice
+steering, and Devin investigations still require a private operator link.
 
 Privately share `https://<site>/#control=<CONTROL_TOKEN>` with the operator.
 The browser removes the fragment immediately and retains the capability only
@@ -88,7 +84,8 @@ gameplay, **Resume** continues the current run, **Pause** releases controls, and
 **End run** stops and archives it. Selecting an archived run only changes the
 journal being viewed.
 
-The UI posts an immutable UUID command with operator authentication. The Worker
+The UI posts an immutable UUID command. New run submission and result polling
+are public; other commands require operator authentication. The Worker
 accepts at most one pending command, with a 30-second delivery window. The local
 publisher polls using `INGEST_TOKEN`, executes controller operations, and records
 a completed/failed result. Browser feedback distinguishes acceptance from

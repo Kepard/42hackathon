@@ -43,8 +43,8 @@
             <button id="control-pause" class="button secondary" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4v12M13 4v12"/></svg>Pause</button>
             <button id="control-stop" class="button control-stop" aria-label="Stop and archive the current run" title="Stop and archive" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5h10v10H5Z"/></svg>End run</button>
           </div>
-          <div class="operator-heading"><span id="operator-status" class="operator-status">View only</span><a id="operator-unlock-link" class="text-button" href="#operator-access">Unlock</a><button id="lock-controls" class="text-button" hidden>Lock</button></div>
-          <p id="control-feedback" role="status" aria-live="polite">Operator access is required to control runs.</p><span id="operator-world-note" class="operator-world-note">Launcher not connected</span>
+          <div class="operator-heading"><span id="operator-status" class="operator-status">Shared demo</span><button id="lock-controls" class="text-button" hidden>Leave operator mode</button></div>
+          <p id="control-feedback" role="status" aria-live="polite">Anyone can start a fresh run.</p><span id="operator-world-note" class="operator-world-note">Launcher not connected</span>
         </section>
         <section id="run-launch" class="run-launch" aria-labelledby="launch-heading" hidden>
           <div class="launch-heading"><span class="launch-world-icon" aria-hidden="true"></span><div><span class="launch-eyebrow">FRESH WORLD LAUNCH</span><h2 id="launch-heading">Preparing a fresh run</h2></div><span id="launch-state" class="launch-state">PREPARING</span></div>
@@ -56,7 +56,7 @@
           <p id="voice-caption" class="voice-caption" hidden>Live words appear here while you speak.</p>
           <div id="voice-conversation" class="voice-conversation" hidden><p><span>Operator</span><strong id="voice-transcript"></strong></p><p id="voice-reply-row" hidden><span>HoloSpeed</span><strong id="voice-reply"></strong></p></div>
           <form id="voice-form" class="voice-form"><label for="voice-text" class="visually-hidden">Message the Minecraft agent</label><input id="voice-text" type="text" maxlength="1000" autocomplete="off" placeholder="Pause, give an objective, or ask a question…" disabled><button id="voice-send" class="button secondary" type="submit" disabled>Send <span aria-hidden="true">↗</span></button></form>
-          <p id="voice-feedback" class="voice-feedback" role="status" aria-live="polite">Unlock controls below to speak or send a message.</p><p class="voice-note">Click to record · 2-minute maximum · Instructions and replies are saved in the run journal.</p>
+          <p id="voice-feedback" class="voice-feedback" role="status" aria-live="polite">A private operator link is required to speak or send a message.</p><p class="voice-note">Click to record · 2-minute maximum · Instructions and replies are saved in the run journal.</p>
         </section>
         <section class="metrics-strip" aria-label="Run metrics">
           <div class="timer-metric"><span class="metric-label"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="11" r="6"/><path d="M8 2h4m-2 3v6l3 2"/></svg>Run time</span><strong id="elapsed">—</strong><small>Including pauses</small></div>
@@ -120,11 +120,10 @@
         <div class="journal-layout"><aside class="run-sidebar" aria-labelledby="runs-title"><div class="runs-heading"><h3 id="runs-title">Runs <span id="runs-count">0</span></h3><button id="follow-live" class="text-button" aria-pressed="true">Follow live</button></div><div id="runs-list" class="runs-list"><p class="empty-list">Saved runs will appear here.</p></div></aside><div class="journal-content"><div class="journal-run-heading"><div><span id="journal-mode" class="small-tag">NO RUN SELECTED</span><h3 id="journal-run-title">Waiting for a run</h3></div><span id="journal-load-status" class="journal-load-status" aria-live="polite">No events yet</span></div><div class="journal-filters"><label class="search-field"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="event-search" type="search" placeholder="Search events…" aria-label="Search journal events"></label><label class="type-filter"><span class="visually-hidden">Event type</span><select id="event-type"><option value="all">All event types</option></select></label><span id="filtered-count" class="filtered-count">0 events</span></div><div id="journal-alert" class="journal-alert" role="status" hidden></div><div id="event-list" class="event-list"><div class="journal-empty"><span class="journal-empty-mark" aria-hidden="true">[ ]</span><h4>Nothing to inspect yet.</h4><p>Choose a saved run or follow the current session.</p></div></div><button id="load-more" class="load-more" hidden>Show more events</button><div class="journal-footer"><span>Newest first · Expand for details</span><span id="journal-scope">Read-only evidence</span></div></div></div>
       </div>
     </details>
-    <section id="operator-access" class="operator-access" aria-labelledby="operator-access-title">
-      <div class="operator-access-intro"><span class="operator-access-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5Z"/><circle cx="12" cy="15" r="1"/><path d="M12 16v2"/></svg></span><div><span class="eyebrow">OPERATOR ACCESS</span><h2 id="operator-access-title">Take the controls.</h2></div><span id="operator-access-state" class="operator-access-state">VIEW ONLY</span></div>
-      <form id="operator-login-form" class="operator-login-form"><label for="operator-password">Operator password</label><div><input id="operator-password" type="password" autocomplete="current-password" maxlength="512" required placeholder="Enter password" aria-describedby="operator-login-feedback"><button id="operator-login-submit" class="button control-primary" type="submit">Unlock controls</button></div></form>
-      <button id="operator-footer-lock" class="button secondary" hidden>Lock controls</button>
-      <p id="operator-login-feedback" class="operator-login-feedback" role="status" aria-live="polite">Enter the operator password to control runs. Watching is always available.</p>
+    <section class="shared-demo" aria-labelledby="shared-demo-title">
+      <span class="shared-demo-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg></span>
+      <div><span class="eyebrow">SHARED DEMO</span><h2 id="shared-demo-title">Anyone can start a fresh run.</h2><p>Choose New run above to load a clean world and watch the agent play. Previous runs stay in the journal.</p></div>
+      <a class="button secondary" href="#control-start_new">Back to the game ↑</a>
     </section>
     <footer class="site-footer"><span>HoloSpeed <span class="footer-divider">/</span> Intelligence in the wild.</span><span>Observe. Act. Verify.</span></footer>
   </main>

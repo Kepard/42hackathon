@@ -19,7 +19,7 @@ function observerHarness(options = {}) {
   const elements = new Map();
   const timers = [];
   const replacedUrls = [];
-  const stored = new Map();
+  const stored = new Map(options.stored || []);
   const frameCallbacks = [];
   if (options.token) stored.set("holospeed.operator", options.token);
   class Element {
@@ -94,7 +94,7 @@ function observerHarness(options = {}) {
     globalThis.observerTest = {
       set(value, online = true) {envelope = value; reachable = online;},
       updateCapture, renderState, renderControls, submitCommand, refreshCommand, lockControls, pollCapture, renderVideo, trackVideoFrame,
-      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun, renderMilestones, unlockControls, renderLogin, renderLaunch,
+      renderMission, renderEngineering, handleEngineeringCommand, openEngineering, selectEngineeringRun, renderMilestones, renderLaunch,
       queueVoice, sendNextVoice, sendTypedVoice, toggleVoice, renderVoice,
       command(value) {operatorCommand = value;},
       engineering(runId, value) {engineeringRun = runId; if (value) engineeringByRun.set(runId, value);},
@@ -297,7 +297,7 @@ test("public, stale, disconnected, and pending states cannot issue unintended co
   const ui = observerHarness({token: "valid-stored-operator-capability-32-characters", hash: "#control=invalid"});
   ui.renderControls();
   assert.equal(ui.stored.has("holospeed.operator"), false);
-  assert.equal(ui.element("operator-status").textContent, "View only");
+  assert.equal(ui.element("operator-status").textContent, "Shared demo");
   assert.equal(ui.element("control-start_new").disabled, true);
 });
 
@@ -406,7 +406,7 @@ test("locking controls during an in-flight POST ignores its late feedback", asyn
   ui.lockControls("Controls locked by the operator.");
   complete({ok: true, json: async () => ({command: {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", status: "completed", detail: "Paused."}})});
   await pending;
-  assert.equal(ui.element("operator-status").textContent, "View only");
+  assert.equal(ui.element("operator-status").textContent, "Shared demo");
   assert.equal(ui.element("control-feedback").textContent, "Controls locked by the operator.");
   assert.equal(ui.element("control-pause").disabled, true);
   assert.equal(ui.stored.has("holospeed.operator"), false);
@@ -628,71 +628,6 @@ test("the visual route switches by current-run metadata and marks only matching 
   assert.ok(!ui.element("milestones").nodes.some((node) => node.dataset.milestone === "portal_built"));
 });
 
-test("password unlock clears the input and grants only this tab's existing operator capability", async () => {
-  const token = "fictional-password-login-token-with-32-characters";
-  const password = "test-only-password";
-  const requests = [];
-  const ui = observerHarness({fetch: async (url, options) => {
-    requests.push({url, options});
-    return {ok: true, json: async () => ({token})};
-  }});
-  ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
-  ui.renderControls();
-  assert.equal(ui.element("control-resume").disabled, true);
-  ui.element("operator-password").value = password;
-  await ui.unlockControls();
-  assert.equal(ui.element("operator-password").value, "");
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, "/api/operator/login");
-  assert.equal(requests[0].options.method, "POST");
-  assert.equal(requests[0].options.cache, "no-store");
-  assert.equal(requests[0].options.redirect, "error");
-  assert.deepEqual(JSON.parse(requests[0].options.body), {password});
-  assert.equal(ui.stored.get("holospeed.operator"), token);
-  assert.ok(![...ui.stored.values()].includes(password));
-  assert.equal(ui.element("operator-login-form").hidden, true);
-  assert.equal(ui.element("operator-footer-lock").hidden, false);
-  assert.equal(ui.element("control-resume").disabled, false);
-  assert.ok(!ui.element("operator-login-feedback").textContent.includes(token));
-  ui.lockControls();
-  assert.equal(ui.stored.has("holospeed.operator"), false);
-  assert.equal(ui.element("operator-login-form").hidden, false);
-  assert.equal(ui.element("operator-footer-lock").hidden, true);
-  assert.equal(ui.element("control-resume").disabled, true);
-});
-
-test("failed password attempts and malformed tokens cannot unlock controls or expose server messages", async () => {
-  for (const result of [{ok: false, status: 401}, {ok: false, status: 429}, {ok: false, status: 503}, {ok: true, json: async () => ({token: "invalid"})}]) {
-    const ui = observerHarness({fetch: async () => result});
-    ui.set({updated_at: NOW, feed_status: "online", state: {status: "paused", connected: true, run_id: "run-1"}});
-    ui.element("operator-password").value = "test-only-password";
-    await ui.unlockControls();
-    assert.equal(ui.element("operator-password").value, "");
-    assert.equal(ui.element("operator-status").textContent, "View only");
-    assert.equal(ui.element("control-resume").disabled, true);
-    assert.equal(ui.stored.has("holospeed.operator"), false);
-    assert.equal(ui.element("operator-login-submit").disabled, false);
-  }
-});
-
-test("a locked or superseded password request cannot restore operator access", async () => {
-  let finish;
-  let calls = 0;
-  const ui = observerHarness({fetch: () => {calls++; return new Promise((resolve) => {finish = resolve;});}});
-  ui.element("operator-password").value = "test-only-password";
-  const pending = ui.unlockControls();
-  assert.equal(ui.element("operator-password").value, "");
-  assert.equal(ui.element("operator-login-submit").disabled, true);
-  await ui.unlockControls();
-  assert.equal(calls, 1);
-  ui.lockControls();
-  finish({ok: true, json: async () => ({token: "fictional-password-login-token-with-32-characters"})});
-  await pending;
-  assert.equal(ui.stored.has("holospeed.operator"), false);
-  assert.equal(ui.element("operator-login-form").hidden, false);
-  assert.equal(ui.element("operator-status").textContent, "View only");
-});
-
 test("typed voice instructions use the current run and immutable command protocol", async () => {
   const requests = [];
   const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: async (url, options) => {
@@ -778,7 +713,7 @@ test("locking controls stops the microphone before callbacks can dispatch queued
   recording.options.onFinal({text: "pause", session_id: "test", utterance_id: "late"});
   await ui.sendNextVoice();
   assert.equal(ui.element("voice-toggle").disabled, true);
-  assert.equal(ui.element("operator-status").textContent, "View only");
+  assert.equal(ui.element("operator-status").textContent, "Shared demo");
 });
 
 test("public voice captions pair the latest instruction with its own asynchronous reply", () => {
@@ -998,27 +933,195 @@ test("definitive New run rejection or expiration clears the pending launch prese
   }
 });
 
-test("locking during a pending New run cannot strand an unconfirmed launch after unlock", async () => {
+test("leaving operator mode preserves public New run reconciliation and cannot strand a rejected launch", async () => {
   let finish;
   const token = "test-operator-capability-with-at-least-32-characters";
-  const ui = observerHarness({token, fetch: (url) => {
-    if (url === "/api/operator/login") return Promise.resolve({ok: true, json: async () => ({token})});
-    return new Promise((resolve) => {finish = resolve;});
-  }});
+  const ui = observerHarness({token, fetch: () => new Promise((resolve) => {finish = resolve;})});
   ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {status: "idle", connected: true, run_id: null, launch: null}});
   ui.renderControls();
   const pending = ui.submitCommand("start_new");
+  ui.lockControls();
   assert.equal(ui.element("launch-heading").textContent, "Requesting a fresh run");
-  ui.lockControls("Controls locked by the operator.");
-  assert.equal(ui.element("run-launch").hidden, true, "Lock discards an expectation that can no longer be reconciled by command polling");
-  assert.equal(ui.element("route-panel").hidden, false);
+  assert.equal(ui.element("operator-status").textContent, "Shared demo");
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+  assert.equal(ui.element("control-start_new").disabled, true, "A public pending command remains tracked after leaving private mode");
   finish({ok: false, status: 409, json: async () => ({error: "The request was not accepted."})});
   await pending;
-  assert.equal(ui.element("control-feedback").textContent, "Controls locked by the operator.");
   assert.equal(ui.stored.has("holospeed.command"), false);
-  ui.element("operator-password").value = "test-password";
-  await ui.unlockControls();
-  assert.equal(ui.element("operator-status").textContent, "Operator access");
   assert.equal(ui.element("control-start_new").disabled, false);
   assert.equal(ui.element("run-launch").hidden, true);
+});
+
+test("everyone can start a fresh run while all other controls remain private", async () => {
+  let requests = 0;
+  const ui = observerHarness({fetch: () => {requests++; throw new Error("Private command must not be sent");}});
+  const state = {status: "paused", connected: true, run_id: "recorded-run", launch: null};
+  ui.set({updated_at: NOW, feed_status: "online", state}); ui.renderControls();
+  assert.equal(ui.element("operator-status").textContent, "Shared demo");
+  assert.equal(ui.element("control-start_new").disabled, false);
+  for (const action of ["resume", "pause", "stop"]) {
+    assert.equal(ui.element(`control-${action}`).disabled, true);
+    await ui.submitCommand(action);
+  }
+  assert.equal(requests, 0);
+  assert.equal(ui.element("voice-toggle").disabled, true);
+  assert.equal(ui.element("voice-send").disabled, true);
+  ui.lockControls();
+  assert.equal(ui.element("control-start_new").disabled, false, "Leaving private operator mode does not remove public launch access");
+  for (const changed of [{...state, connected: false}, {...state, launch: {status: "preparing", stage: "loading"}}]) {
+    assert.equal(Object.values(helpers.controlAvailability(changed, true, false, false)).some(Boolean), false);
+  }
+  assert.equal(Object.values(helpers.controlAvailability(state, false, false, false)).some(Boolean), false);
+  assert.equal(Object.values(helpers.controlAvailability(state, true, false, true)).some(Boolean), false);
+});
+
+test("public New run submits and polls without exposing an operator credential", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  for (const token of [undefined, "test-operator-capability-with-at-least-32-characters"]) {
+    const requests = [];
+    const ui = observerHarness({token, fetch: async (url, options) => {
+      requests.push({url, options});
+      return {ok: true, json: async () => ({command: {id, action: "start_new", status: options.method === "POST" ? "pending" : "completed", detail: "Preparation accepted."}})};
+    }});
+    const state = {status: "idle", connected: true, run_id: null, launch: null};
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state}); ui.renderControls();
+    await ui.submitCommand("start_new");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(requests.map(({options}) => options.method), ["POST", "GET"]);
+    assert.deepEqual(JSON.parse(requests[0].options.body), {id, action: "start_new"});
+    assert.equal(requests[1].url, `/api/commands/${id}`);
+    for (const {options} of requests) {
+      assert.equal(Object.hasOwn(options.headers, "Authorization"), false);
+      assert.equal(options.credentials, "same-origin");
+    }
+    if (token) assert.ok(!JSON.stringify(requests).includes(token));
+    else assert.equal(ui.stored.has("holospeed.operator"), false, "Public launch does not create an operator token");
+    const saved = JSON.parse(ui.stored.get("holospeed.command"));
+    assert.equal(saved.action, "start_new");
+    assert.equal(saved.launch_accepted, true);
+    assert.equal(ui.element("launch-state").textContent, "ACCEPTED");
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {...state, launch: {id, status: "preparing", stage: "loading"}}}); ui.renderState();
+    assert.equal(ui.stored.has("holospeed.command"), false, "A confirmed terminal command is retired once its launch is visible");
+  }
+});
+
+test("reloading a pending or accepted public launch only reconciles the original ID", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  for (const accepted of [false, true]) {
+    let finish;
+    const requests = [];
+    const saved = JSON.stringify({id, action: "start_new", submitted_at: NOW - 2000, await_launch: true, launch_accepted: accepted});
+    const ui = observerHarness({stored: [["holospeed.command", saved]], fetch: (url, options) => {
+      requests.push({url, options});
+      return new Promise((resolve) => {finish = resolve;});
+    }});
+    const state = {status: "idle", connected: true, run_id: null, launch: {id: "old", status: "failed", stage: "failed", detail: "Old failure."}};
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state}); ui.renderState();
+    assert.equal(ui.element("launch-state").textContent, accepted ? "ACCEPTED" : "REQUESTED");
+    assert.equal(ui.element("control-start_new").disabled, true);
+    assert.deepEqual(requests.map(({options}) => options.method), ["GET"]);
+    assert.equal(requests[0].url, `/api/commands/${id}`);
+    assert.equal(Object.hasOwn(requests[0].options.headers, "Authorization"), false);
+    finish({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed"}})});
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(ui.element("launch-state").textContent, "ACCEPTED");
+    ui.set({updated_at: NOW, feed_status: "online", runs: [], state: {...state, launch: {id, status: "failed", stage: "failed", detail: "This attempt failed."}}}); ui.renderState();
+    assert.equal(ui.element("launch-detail").textContent, "This attempt failed.");
+    assert.equal(ui.stored.has("holospeed.command"), false);
+    assert.equal(ui.element("control-start_new").disabled, false);
+    assert.equal(requests.length, 1, "Restoring a command must never POST a replacement");
+  }
+});
+
+test("public reloads do not request private or malformed saved commands", () => {
+  for (const saved of [
+    {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "investigate", submitted_at: NOW},
+    {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", submitted_at: NOW},
+    {id: "invalid", action: "start_new", submitted_at: NOW},
+    {id: "ad67598a-6d1f-4e66-8730-0e2e76c1cd28", action: "start_new"},
+  ]) {
+    let requests = 0;
+    const ui = observerHarness({stored: [["holospeed.command", JSON.stringify(saved)]], fetch: () => {requests++;}});
+    ui.set({updated_at: NOW, feed_status: "online", state: {status: "idle", connected: true, run_id: null, launch: null}}); ui.renderControls();
+    assert.equal(requests, 0);
+    assert.equal(ui.element("control-start_new").disabled, false);
+  }
+});
+
+test("uncertain public submission keeps one ID and the existing 404 deadline without authorization", async () => {
+  const requests = [];
+  const ui = observerHarness({fetch: async (_url, options) => {
+    requests.push(options);
+    if (options.method === "POST") throw new Error("The response was lost after dispatch");
+    return {ok: false, status: 404, json: async () => ({error: "Command not found."})};
+  }});
+  const state = {status: "idle", connected: true, run_id: null, launch: null};
+  ui.set({updated_at: NOW, feed_status: "online", state}); ui.renderControls();
+  await ui.submitCommand("start_new"); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map(({method}) => method), ["POST", "GET"]);
+  assert.equal(ui.element("control-start_new").disabled, true);
+  ui.setNow(NOW + 45001); ui.set({updated_at: NOW + 45001, feed_status: "online", state}); await ui.refreshCommand();
+  assert.deepEqual(requests.map(({method}) => method), ["POST", "GET", "GET"]);
+  assert.ok(requests.every(({headers}) => !Object.hasOwn(headers, "Authorization")));
+  assert.equal(ui.element("control-start_new").disabled, false);
+  assert.equal(ui.stored.has("holospeed.command"), false);
+});
+
+test("public launch completion after leaving operator mode remains observable", async () => {
+  let finish;
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  const ui = observerHarness({token: "test-operator-capability-with-at-least-32-characters", fetch: () => new Promise((resolve) => {finish = resolve;})});
+  ui.set({updated_at: NOW, feed_status: "online", state: {status: "idle", connected: true, run_id: null, launch: null}}); ui.renderControls();
+  const pending = ui.submitCommand("start_new"); ui.lockControls();
+  finish({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", detail: "Preparation accepted."}})}); await pending;
+  assert.equal(ui.element("launch-state").textContent, "ACCEPTED");
+  assert.equal(ui.element("control-start_new").disabled, true);
+  assert.equal(ui.element("control-pause").disabled, true);
+  assert.equal(ui.element("launch-cancel-note").hidden, true);
+  assert.equal(ui.stored.has("holospeed.operator"), false);
+});
+
+test("the shared demo has no password form, login request, or password-unlock links", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
+  assert.match(html, /Anyone can start a fresh run/);
+  assert.ok(!html.includes('type="password"'));
+  assert.ok(!html.includes("operator-login"));
+  assert.ok(!html.includes("operator-unlock-link"));
+  assert.ok(!source.includes("/api/operator/login"));
+  assert.ok(!source.includes("unlockControls"));
+  assert.ok(!source.includes("Unlock controls at the bottom"));
+});
+
+test("a restored launch yields to a fresh explicitly newer shared launch without replaying the old command", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  const saved = JSON.stringify({id, action: "start_new", submitted_at: NOW - 30000, await_launch: true, launch_accepted: true});
+  const requests = [];
+  const ui = observerHarness({stored: [["holospeed.command", saved]], fetch: async (url, options) => {
+    requests.push({url, options});
+    return {ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", created_at: new Date(NOW - 30000).toISOString(), completed_at: new Date(NOW - 28000).toISOString()}})};
+  }});
+  const state = {status: "idle", connected: true, run_id: null, launch: {id: "another-viewer-launch", status: "running", stage: "running", started_at: new Date(NOW - 10000).toISOString()}};
+  ui.set({updated_at: NOW, feed_status: "online", runs: [], state}); ui.renderState();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map(({options}) => options.method), ["GET"]);
+  assert.equal(requests[0].url, `/api/commands/${id}`);
+  assert.equal(ui.element("launch-heading").textContent, "Fresh run started");
+  assert.equal(ui.element("route-panel").hidden, false);
+  assert.equal(ui.element("control-start_new").disabled, false);
+  assert.equal(ui.stored.has("holospeed.command"), false);
+  assert.match(ui.element("control-feedback").textContent, /newer shared run/);
+});
+
+test("older, un-timestamped, and stale launch records cannot supersede an accepted request", async () => {
+  const id = "ad67598a-6d1f-4e66-8730-0e2e76c1cd28";
+  for (const [startedAt, fresh] of [[NOW - 40000, true], [null, true], [NOW - 10000, false]]) {
+    const saved = JSON.stringify({id, action: "start_new", submitted_at: NOW - 30000, await_launch: true, launch_accepted: true});
+    const ui = observerHarness({stored: [["holospeed.command", saved]], fetch: async () => ({ok: true, json: async () => ({command: {id, action: "start_new", status: "completed", created_at: new Date(NOW - 30000).toISOString()}})})});
+    ui.set({updated_at: fresh ? NOW : NOW - 60000, feed_status: "online", runs: [], state: {status: "idle", connected: true, run_id: null, launch: {id: "different-launch", status: "failed", stage: "failed", started_at: startedAt == null ? null : new Date(startedAt).toISOString()}}});
+    ui.renderState(); await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(ui.element("launch-heading").textContent, "Fresh run accepted");
+    assert.equal(ui.element("route-panel").hidden, true);
+    assert.equal(ui.element("control-start_new").disabled, true);
+    assert.equal(ui.stored.has("holospeed.command"), true);
+  }
 });

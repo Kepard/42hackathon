@@ -7,7 +7,8 @@ suggests minimal improvements. Gameplay never waits for its response.
 ## Use the dashboard
 
 Open **Devin engineering**, select a recorded run, and choose **Prepare
-investigation**. Operator access is required for this action. The controller
+investigation**. A private `#control=<CONTROL_TOKEN>` operator link is required;
+public New run access does not enable engineering actions. The controller
 prepares and persists the exact redacted prompt; the dashboard displays that
 prompt, its SHA-256 digest, and the fixed **2-ACU cap**. Review the brief and
 confirm **Create investigation** to submit it. The browser sends only the run ID

@@ -138,17 +138,19 @@ H Company-inspired interface, Minecraft inventory and progression visuals, and
   measured browser playback FPS. Video runs independently of model inference.
 - **ON A MISSION:** actual Holo4 → Jev → local skill activity, each model’s input
   source, latest decision, measured latency, and expandable technical evidence.
-- **Operator controls:** unlock at the page footer; New run copies the prepared
-  empty-inventory world, then reports **Save → Copy → Load → Verify → Start**.
-  Gameplay timing begins after loading. Pause, Resume, and End run remain beside
-  the feed; previous worlds and recordings are preserved.
+- **Run controls:** anyone can choose **New run** without a password. It copies
+  the prepared empty-inventory world and reports **Save → Copy → Load → Verify
+  → Start**. Gameplay timing begins after loading; previous worlds and recordings
+  are preserved. **Pause**, **Resume**, and **End run** require a private operator
+  link, as do voice steering and Devin investigations.
 - **Run inspector:** health, hunger, inventory, live inputs, fourteen checkpoint
   splits, searchable events, previous runs, and downloadable sanitized journals.
 
 ### Gladia: voice in the control loop
 
-Click **Speak** in **Talk to HoloSpeed** beside the camera to open a Gladia v2 live
-transcription session. The browser streams 16 kHz mono PCM audio to Gladia and
+With a private operator link, click **Speak** in **Talk to HoloSpeed** beside the
+camera to open a Gladia v2 live transcription session. The browser streams
+16 kHz mono PCM audio to Gladia and
 shows partial captions. Only final utterances enter the authenticated, run-bound
 command queue:
 

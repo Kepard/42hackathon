@@ -63,16 +63,18 @@ VALIDATE_HOLO_PLANS=true
 ```
 
 Restart the controller after configuring the paths. Keep Minecraft and its
-Fabric bridge connected; the title screen is sufficient. Unlock the dashboard
-controls and choose **New run**. The launcher saves and unloads the previous
+Fabric bridge connected; the title screen is sufficient. Choose the public
+dashboard's **New run** button; no password or token is required. The launcher
+saves and unloads the previous
 world, copies the template into a unique `holospeed-demo-<UUID>` directory under
 `MINECRAFT_SAVES_DIR`, and loads that save through Minecraft's normal world-loading
 API. It verifies the loaded seed, Survival mode, empty inventory, full health and
 hunger, and released controls before arming and starting the agent.
 
 The dashboard reports saving, copying, loading, verifying, and starting stages.
-Loading time is separate from the new run timer. **Pause**, **End run**, or **F8**
-cancels an active launch. Previous worlds and logs remain intact; any new copy
+Loading time is separate from the new run timer. Operator **Pause** or **End run**
+through a private control link, or local **F8**, cancels an active launch.
+Previous worlds and logs remain intact; any new copy
 already created is preserved on failure or cancellation, and another **New run**
 uses a distinct destination. The local `POST /api/new-run` endpoint accepts
 `{"command_id":"<UUID>"}` and returns `202` when preparation is accepted; follow

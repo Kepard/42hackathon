@@ -203,12 +203,12 @@
   }
   function controlAvailability(state, fresh, unlocked, pending, awaitingLaunch = false) {
     const preparing = awaitingLaunch || state?.launch?.status === "preparing";
-    const ready = Boolean(unlocked && fresh && !pending && (preparing || state?.status !== "unavailable"));
+    const ready = Boolean(fresh && !pending && (preparing || state?.status !== "unavailable"));
     return {
       start_new: ready && !preparing && Object.hasOwn(state || {}, "launch") && state?.connected === true,
-      resume: ready && !preparing && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
-      pause: ready && (preparing || state?.status === "running"),
-      stop: ready && (preparing || Boolean(state?.run_id)),
+      resume: ready && unlocked && !preparing && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
+      pause: ready && unlocked && (preparing || state?.status === "running"),
+      stop: ready && unlocked && (preparing || Boolean(state?.run_id)),
     };
   }
   function launchProgress(value) {
@@ -299,9 +299,6 @@
   let commandChecking = false;
   let commandLastChecked = 0;
   let commandMessage = "";
-  let loginBusy = false;
-  let loginAttempt = 0;
-  let loginMessage = "";
   let voiceSession = null;
   let voicePhase = "idle";
   let voiceRunId = null;
@@ -317,11 +314,20 @@
   const voiceQueue = [];
   try {
     const saved = storage?.getItem("holospeed.command");
-    if (operatorToken && saved) {
+    if (saved) {
       const value = JSON.parse(saved);
-      if (/^[0-9a-f-]{36}$/i.test(value.id)) operatorCommand = {id: value.id, status: "pending", submitted_at: value.submitted_at};
+      if (/^[0-9a-f-]{36}$/i.test(value.id) && (value.action === "start_new" || operatorToken) && Number.isFinite(value.submitted_at)) {
+        operatorCommand = {id: value.id, action: value.action, status: "pending", submitted_at: value.submitted_at};
+        if (value.action === "start_new" && value.await_launch !== false) requestedLaunch = {id: value.id, accepted: value.launch_accepted === true, commandAt: timestamp(value.launch_command_at)};
+      }
     }
   } catch { /* An invalid local history must not trigger commands. */ }
+  function rememberCommand() {
+    try {
+      if (!operatorCommand || (operatorCommand.action === "start_new" && operatorCommand.status !== "pending" && requestedLaunch?.id !== operatorCommand.id)) storage?.removeItem("holospeed.command");
+      else storage?.setItem("holospeed.command", JSON.stringify({id: operatorCommand.id, action: operatorCommand.action, submitted_at: operatorCommand.submitted_at, await_launch: requestedLaunch?.id === operatorCommand.id, launch_accepted: requestedLaunch?.accepted === true, launch_command_at: requestedLaunch?.commandAt ?? null}));
+    } catch { /* Keep tracking in this page when storage is unavailable. */ }
+  }
 
   async function get(path, timeout = 10000) {
     const controller = new AbortController();
@@ -556,11 +562,9 @@
     const launch = launchForDisplay(state);
     const availability = controlAvailability(state, telemetry.fresh, Boolean(operatorToken), pending, launch?.awaiting);
     for (const action of ["start_new", "resume", "pause", "stop"]) $(`control-${action}`).disabled = !availability[action];
-    text("operator-status", operatorToken ? "Operator access" : "View only");
+    text("operator-status", operatorToken ? "Operator access" : "Shared demo");
     $("operator-status").classList.toggle("unlocked", Boolean(operatorToken));
     $("lock-controls").hidden = !operatorToken;
-    $("operator-unlock-link").hidden = Boolean(operatorToken);
-    renderLogin();
     renderVoice();
     renderLaunch(state, telemetry, launch);
     text("operator-world-note", !launchSupported ? "Launcher not connected" : launch?.awaiting ? "Waiting for launch status" : state.connected !== true && !launch?.active ? "Waiting for Minecraft" : "Fresh world · Automatic start");
@@ -570,11 +574,19 @@
       const remaining = Math.max(0, Math.ceil((Date.parse(operatorCommand.expires_at) - Date.now()) / 1000));
       feedback = remaining ? `Command accepted · waiting for the local agent (${remaining}s remaining).` : "Waiting for the final command result…";
     }
-    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : launch?.awaiting ? launch.detail : launch?.active ? "Preparing a clean world. Pause or End run cancels this launch." : "New run loads a clean world copy and starts the agent. Previous runs stay in the journal."));
-    if (operatorToken && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
+    text("control-feedback", feedback || (!telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : launch?.awaiting ? launch.detail : launch?.active ? operatorToken ? "Preparing a clean world. Pause or End run cancels this launch." : "Preparing a clean world. Gameplay starts automatically after verification." : "Anyone can start a fresh run. Previous runs stay in the journal."));
+    if ((operatorToken || operatorCommand?.action === "start_new") && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
   }
   function launchForDisplay(state) {
-    if (requestedLaunch && state.launch?.id === requestedLaunch.id) requestedLaunch = null;
+    const startedAt = timestamp(state.launch?.started_at);
+    // A different viewer may have launched again while this tab was closed.
+    // Only fresh, explicitly newer server records supersede the expected ID;
+    // never infer that from local elapsed time or an old terminal snapshot.
+    const superseded = requestedLaunch?.accepted && requestedLaunch.commandAt != null && startedAt != null && startedAt > requestedLaunch.commandAt && state.launch?.id && state.launch.id !== requestedLaunch.id && launchProgress(state.launch) && telemetryState(envelope, Date.now(), reachable).fresh;
+    if (requestedLaunch && (state.launch?.id === requestedLaunch.id || superseded)) {
+      requestedLaunch = null; rememberCommand();
+      if (superseded) commandMessage = "A newer shared run is now being shown.";
+    }
     if (!requestedLaunch) return launchProgress(state.launch);
     const accepted = requestedLaunch.accepted;
     return {active: true, awaiting: true, accepted, status: accepted ? "accepted" : "requested", stage: null,
@@ -584,7 +596,10 @@
   }
   function handleLaunchCommand(command) {
     if (requestedLaunch?.id !== command?.id) return;
-    if (command.status === "completed") requestedLaunch.accepted = true;
+    if (command.status === "completed") {
+      requestedLaunch.accepted = true;
+      requestedLaunch.commandAt = timestamp(command.completed_at) ?? timestamp(command.created_at) ?? requestedLaunch.commandAt;
+    }
     else if (["failed", "expired"].includes(command.status)) requestedLaunch = null;
   }
   function renderLaunch(state, telemetry, launch = launchForDisplay(state)) {
@@ -604,81 +619,37 @@
     $("launch-run").hidden = !launch.runId;
     text("launch-run", launch.runId ? `Recording ${launch.runId}` : "");
     $("launch-stages").hidden = !launch.active || Boolean(launch.awaiting);
-    $("launch-cancel-note").hidden = !launch.active || Boolean(launch.awaiting && !launch.accepted);
+    $("launch-cancel-note").hidden = !operatorToken || !launch.active || Boolean(launch.awaiting && !launch.accepted);
     document.querySelectorAll("[data-launch-stage]").forEach((element) => {
       const current = element.dataset.launchStage === launch.stage;
       element.classList.toggle("current", current);
       if (current) element.setAttribute("aria-current", "step"); else element.removeAttribute?.("aria-current");
     });
   }
-  function lockControls(message = "Controls locked. Public viewing remains available.") {
+  function lockControls(message = "Operator access ended. Anyone can start a fresh run.") {
     operatorToken = "";
     const changesLaunch = Boolean(requestedLaunch);
-    requestedLaunch = null;
+    const publicCommand = operatorCommand?.action === "start_new";
+    if (!publicCommand) requestedLaunch = null;
     voiceSession?.cancel();
     voiceQueue.length = 0;
     voicePartial = "";
-    voiceMessage = "Microphone off. Unlock controls to speak or send a message.";
-    loginAttempt++;
-    loginBusy = false;
-    loginMessage = "Controls locked. You can continue watching.";
-    $("operator-password").value = "";
-    try { storage?.removeItem("holospeed.operator"); storage?.removeItem("holospeed.command"); } catch { /* Memory is cleared regardless. */ }
+    voiceMessage = "Microphone off. A private operator link is required to speak or send a message.";
+    try { storage?.removeItem("holospeed.operator"); } catch { /* Memory is cleared regardless. */ }
     commandMessage = message;
-    operatorCommand = null;
+    if (!publicCommand) operatorCommand = null;
+    rememberCommand();
     engineeringPreview = null;
     $("devin-confirm").checked = false;
     if (changesLaunch) renderState(); else renderControls();
     renderEngineering();
   }
-  function renderLogin() {
-    $("operator-login-form").hidden = Boolean(operatorToken);
-    $("operator-footer-lock").hidden = !operatorToken;
-    $("operator-password").disabled = loginBusy;
-    $("operator-login-submit").disabled = loginBusy;
-    text("operator-login-submit", loginBusy ? "Unlocking…" : "Unlock controls");
-    text("operator-access-state", operatorToken ? "UNLOCKED IN THIS TAB" : "VIEW ONLY");
-    $("operator-access-state").classList.toggle("unlocked", Boolean(operatorToken));
-    text("operator-login-feedback", loginMessage || (operatorToken ? "Run controls and Devin investigations are available in this tab." : "Enter the operator password to control runs. Watching is always available."));
-  }
-  async function unlockControls(event) {
-    event?.preventDefault();
-    if (loginBusy || operatorToken) return;
-    const password = $("operator-password").value;
-    $("operator-password").value = "";
-    if (!password || password.length > 512) {loginMessage = "Enter the operator password."; renderLogin(); return;}
-    const attempt = ++loginAttempt;
-    loginBusy = true; loginMessage = "Checking operator access…"; renderLogin();
+  async function commandRequest(path, body, publicCommand = false) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch("/api/operator/login", {method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal, headers: {"Content-Type": "application/json"}, body: JSON.stringify({password})});
-      if (attempt !== loginAttempt || operatorToken) return;
-      if (!response.ok) {
-        loginMessage = ({400: "Enter a valid operator password.", 401: "That password did not unlock the controls.", 403: "Operator access must be requested from this dashboard.", 429: "Too many attempts. Wait a minute before trying again.", 503: "Password access is not configured yet. Please try again later."})[response.status] || "Controls could not be unlocked. Please try again.";
-        return;
-      }
-      const result = await response.json();
-      if (attempt !== loginAttempt || operatorToken) return;
-      if (typeof result.token !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(result.token)) {loginMessage = "The server did not return valid operator access."; return;}
-      operatorToken = result.token;
-      try {storage?.setItem("holospeed.operator", operatorToken);} catch { /* Access remains available in this page only. */ }
-      loginMessage = "Controls unlocked in this tab. Choose a run action above.";
-      commandMessage = "Operator access unlocked. Run controls are ready when the agent is connected.";
-    } catch (error) {
-      if (attempt !== loginAttempt) return;
-      loginMessage = error.name === "AbortError" ? "The unlock request timed out. Please try again." : "Operator access could not be reached. Please try again.";
-    } finally {
-      clearTimeout(timer);
-      if (attempt === loginAttempt) {loginBusy = false; renderControls(); renderEngineering();}
-    }
-  }
-  async function commandRequest(path, body) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const response = await fetch(path, {method: body ? "POST" : "GET", cache: "no-store", signal: controller.signal,
-        headers: {Authorization: `Bearer ${operatorToken}`, ...(body ? {"Content-Type": "application/json"} : {})}, ...(body ? {body: JSON.stringify(body)} : {})});
+      const response = await fetch(path, {method: body ? "POST" : "GET", credentials: "same-origin", cache: "no-store", signal: controller.signal,
+        headers: {...(!publicCommand ? {Authorization: `Bearer ${operatorToken}`} : {}), ...(body ? {"Content-Type": "application/json"} : {})}, ...(body ? {body: JSON.stringify(body)} : {})});
       const result = await response.json();
       if (!response.ok) {
         const error = new Error(result.error || `Command request failed (${response.status}).`);
@@ -689,59 +660,61 @@
     } finally { clearTimeout(timer); }
   }
   async function submitCommand(action, payload = {}) {
+    const publicCommand = action === "start_new";
     const engineering = ["prepare_investigation", "investigate"].includes(action);
     if (engineering) {
       renderEngineering();
       if ($(action === "prepare_investigation" ? "devin-prepare" : "devin-submit").disabled || payload.run_id !== engineeringRun) return;
       if (action === "investigate" && (!engineeringPreview || payload.digest_hash !== engineeringPreview.digest_hash)) return;
     } else if ($(`control-${action}`).disabled) return;
-    if (!operatorToken || commandBusy) return;
+    if ((!publicCommand && !operatorToken) || commandBusy) return;
     const id = crypto.randomUUID();
     operatorCommand = {id, action, status: "pending", submitted_at: Date.now()};
     if (action === "start_new") requestedLaunch = {id, accepted: false};
-    try { storage?.setItem("holospeed.command", JSON.stringify({id, submitted_at: operatorCommand.submitted_at})); } catch { /* Still track within this page. */ }
+    rememberCommand();
     commandBusy = true; commandMessage = "Sending command…";
     if (engineering) { engineeringMessage = action === "prepare_investigation" ? "Preparing the exact redacted brief…" : "Requesting one capped Devin investigation…"; renderEngineering(); }
     if (action === "start_new") renderState(); else renderControls();
     const submittedAt = operatorCommand.submitted_at;
     const submittedToken = operatorToken;
     try {
-      const result = await commandRequest("/api/commands", {id, action, ...(engineering ? payload : {})});
-      if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
+      const result = await commandRequest("/api/commands", {id, action, ...(engineering ? payload : {})}, publicCommand);
+      if ((!publicCommand && operatorToken !== submittedToken) || operatorCommand?.id !== id) return;
       operatorCommand = {...result, action: result.action || action, submitted_at: submittedAt};
       handleLaunchCommand(operatorCommand);
       commandMessage = operatorCommand.status === "pending" ? "Command accepted; waiting for the local agent." : operatorCommand.detail || `Command ${operatorCommand.status}.`;
       handleEngineeringCommand(operatorCommand);
       handleVoiceCommand(operatorCommand);
     } catch (error) {
-      if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
-      if (requestedLaunch?.id === id && error.status && (error.status < 500 || error.status === 503)) requestedLaunch = null;
-      if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
+      if ((!publicCommand && operatorToken !== submittedToken) || operatorCommand?.id !== id) return;
+      if (requestedLaunch?.id === id && error.status && error.status < 500) requestedLaunch = null;
+      if (!publicCommand && (error.status === 401 || error.status === 503)) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status && error.status < 500) { operatorCommand = null; commandMessage = error.message; }
       else commandMessage = "Acceptance is unconfirmed. Checking this command ID; it will not be resubmitted.";
       if (engineering) engineeringMessage = commandMessage;
-    } finally { commandBusy = false; if (action === "start_new") renderState(); else renderControls(); renderEngineering(); }
+    } finally { commandBusy = false; rememberCommand(); if (action === "start_new") renderState(); else renderControls(); renderEngineering(); }
   }
   async function refreshCommand() {
-    if (!operatorCommand || !operatorToken || commandChecking) return;
+    if (!operatorCommand || (!operatorToken && operatorCommand.action !== "start_new") || commandChecking) return;
     const id = operatorCommand.id;
+    const publicCommand = operatorCommand.action === "start_new";
     const changesLaunch = requestedLaunch?.id === id;
     commandChecking = true; commandLastChecked = Date.now();
     try {
-      const result = await commandRequest(`/api/commands/${encodeURIComponent(id)}`);
+      const result = await commandRequest(`/api/commands/${encodeURIComponent(id)}`, undefined, publicCommand);
       if (operatorCommand?.id !== id) return;
-      operatorCommand = {...result, submitted_at: operatorCommand.submitted_at};
+      operatorCommand = {...result, action: result.action || operatorCommand.action, submitted_at: operatorCommand.submitted_at};
       handleLaunchCommand(operatorCommand);
       commandMessage = result.status === "completed" ? result.detail || "Command completed." : result.status === "failed" ? `Command failed · ${result.detail || "Inspect the agent status."}` : result.status === "expired" ? "Command expired without a confirmed result. Check the current agent state." : "Command accepted; waiting for the local agent.";
       handleEngineeringCommand(operatorCommand);
       handleVoiceCommand(operatorCommand);
     } catch (error) {
-      if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
+      if (!publicCommand && (error.status === 401 || error.status === 503)) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status === 404 && operatorCommand?.id === id && Date.now() - n(operatorCommand.submitted_at) > 45000) {
         if (requestedLaunch?.id === id) requestedLaunch = null;
         operatorCommand = null; commandMessage = "No command acceptance was confirmed. Check the current agent state before retrying.";
       } else commandMessage = "Command result is unavailable; checking again automatically.";
-    } finally { commandChecking = false; if (changesLaunch) renderState(); else renderControls(); renderEngineering(); }
+    } finally { commandChecking = false; rememberCommand(); if (changesLaunch) renderState(); else renderControls(); renderEngineering(); }
   }
   function voiceAvailable() {
     return Boolean(operatorToken && telemetryState(envelope, Date.now(), reachable).fresh);
@@ -756,7 +729,7 @@
       const response = await fetch("/api/voice/session", {method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: JSON.stringify({id: crypto.randomUUID()})});
       if (!response.ok) {
         const error = new Error("Voice session unavailable");
-        error.voiceMessage = ({401: "Unlock operator controls before using the microphone.", 409: "That speech session was already requested. Click the microphone to start a new one.", 429: "Please wait a few seconds before starting another recording.", 503: "Voice is not configured yet. You can still use the text field.", 504: "The speech provider timed out. No automatic retry was made."})[response.status] || "The speech service could not start. Use text or try the microphone again.";
+        error.voiceMessage = ({401: "A private operator link is required to use the microphone.", 409: "That speech session was already requested. Click the microphone to start a new one.", 429: "Please wait a few seconds before starting another recording.", 503: "Voice is not configured yet. You can still use the text field.", 504: "The speech provider timed out. No automatic retry was made."})[response.status] || "The speech service could not start. Use text or try the microphone again.";
         throw error;
       }
       const result = await response.json();
@@ -832,7 +805,7 @@
         operatorCommand = null;
         voiceQueue.unshift(item); voiceRetryAt = Date.now() + 1000;
         voiceMessage = "Another command is finishing. This instruction is waiting.";
-      } else if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Unlock controls again when the agent is ready.");
+      } else if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link when the agent is ready.");
       else if (error.status && error.status < 500) {operatorCommand = null; voiceMessage = "The instruction was not accepted. Please check the current run and try again.";}
       else {voiceMessage = "Delivery is unconfirmed. Checking this instruction ID without sending it again."; commandMessage = voiceMessage;}
     } finally {commandBusy = false; renderControls(); renderEngineering();}
@@ -865,7 +838,7 @@
     $("voice-caption").hidden = !voicePartial;
     $("voice-text").disabled = !available;
     $("voice-send").disabled = !available || voiceQueue.length >= 5;
-    text("voice-feedback", voiceMessage || (!operatorToken ? "Unlock controls below to speak or send a message." : !available ? "Waiting for the agent connection. Text and voice will be available when it returns." : "Try “pause”, “collect more wood”, or “what are you doing?”"));
+    text("voice-feedback", voiceMessage || (!operatorToken ? "A private operator link is required to speak or send a message." : !available ? "Waiting for the agent connection. Text and voice will be available when it returns." : "Try “pause”, “collect more wood”, or “what are you doing?”"));
     const events = envelope?.state?.events || [];
     const received = latestEvent(events, "voice_received");
     if (received && n(received.seq) > voiceSeenReceivedSeq) {
@@ -1051,7 +1024,7 @@
     $("devin-confirmation").hidden = !preview?.can_submit;
     text("devin-prompt", preview?.prompt || "");
     text("devin-digest", preview ? `SHA-256 ${preview.digest_hash}` : "");
-    text("devin-feedback", engineeringMessage || (!operatorToken ? "Unlock controls at the bottom of the page to prepare an investigation. Existing findings remain viewable." : engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
+    text("devin-feedback", engineeringMessage || (!operatorToken ? "A private operator link is required to prepare an investigation. Existing findings remain viewable." : engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
     text("devin-session-status", engineeringStatus(value));
     text("devin-session-detail", value?.status_detail ? `Reported state: ${value.status_detail}${value.updated_at ? ` · updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : ""}` : value?.updated_at ? `Updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : "No session has been recorded for this run.");
     const sessionUrl = devinSessionUrl(value?.url);
@@ -1226,8 +1199,6 @@
   $("voice-toggle").addEventListener("click", toggleVoice);
   $("voice-form").addEventListener("submit", sendTypedVoice);
   globalThis.addEventListener?.("pagehide", () => {voiceQueue.length = 0; voiceSession?.cancel();});
-  $("operator-login-form").addEventListener("submit", unlockControls);
-  $("operator-footer-lock").addEventListener("click", () => lockControls());
   $("devin-open").addEventListener("click", openEngineering);
   $("devin-open-journal").addEventListener("click", openEngineering);
   $("devin-close").addEventListener("click", closeEngineering);

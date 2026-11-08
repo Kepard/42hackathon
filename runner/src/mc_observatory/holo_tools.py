@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import time
+from time import perf_counter
 
 from .session import KEYS, keycode
 from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls, lava_sound_nearby, crafting_controls, crafting_slot, filtered_recipe_icons, stack_count, matching_hotbar_slots
@@ -157,6 +158,7 @@ class ToolExecutor:
         self.jev, self.visibility_threshold = jev, visibility_threshold
         self.hold_tasks, self.hold_timers = {}, set()
         self.vertical_mining = []
+        self.screenshot_ms, self.pixel_analysis_ms, self.screenshot_count = 0., 0., 0
 
     def begin_step(self, png=None):
         self.actions, self.results, self.frames = [], [], []
@@ -166,10 +168,22 @@ class ToolExecutor:
         self.current_frame = png
 
     async def observe(self):
-        png = await self.client.screenshot()
+        started = perf_counter()
+        try:
+            png = await self.client.screenshot()
+        finally:
+            self.screenshot_ms += (perf_counter() - started) * 1000
+            self.screenshot_count += 1
         self.frames.append(png)
         self.current_frame = png
         return png
+
+    def pixels(self, function, *args):
+        started = perf_counter()
+        try:
+            return function(*args)
+        finally:
+            self.pixel_analysis_ms += (perf_counter() - started) * 1000
 
     async def set_pitch(self, degrees):
         await self.primitive("mouse", dx=0, dy=180 / .15)
@@ -185,8 +199,8 @@ class ToolExecutor:
                 await self.click(ms=(min(10,max(.1,break_s))+.35)*1000)
                 await self.primitive("wait",ms=200)
                 after = await self.observe()
-                delta = changes(before,after)
-                pickup = hotbar_change(before,after)
+                delta = self.pixels(changes, before,after)
+                pickup = self.pixels(hotbar_change, before,after)
                 broke = delta["frame_change"] >= .08 or (delta["center_changed_fraction"] >= .7 and delta["center_change"] >= .08)
                 changed |= delta["frame_change"] >= .002
                 self.vertical_mining.append({"block":block,"attempt":attempt,"break_s":break_s,"margin_s":.35,
@@ -203,7 +217,7 @@ class ToolExecutor:
         walked = any(a.get("action")=="key" and a.get("key")=="w" and a.get("pressed") for a in self.actions[approach_start:])
         if walked: await self.primitive("wait",ms=350)
         reference = await self.observe() if self.jev is not None or walked else self.current_frame or await self.observe()
-        probe = {"used": self.jev is not None and not outline(reference), "succeeded": None}
+        probe = {"used": self.jev is not None and not self.pixels(outline, reference), "succeeded": None}
         probe["reference_settle_ms"] = 350 if walked else 0
         target_box = self.close_checks[-1].get("box") if probe["used"] and self.close_checks else None
         if target_box is not None:
@@ -212,10 +226,10 @@ class ToolExecutor:
         if probe["used"] and seconds <= 0:
             probe.update(succeeded=False, error="no_time_budget")
             return "not_in_reach"
-        caption = broken_caption(reference) if probe["used"] else 0
+        caption = self.pixels(broken_caption, reference) if probe["used"] else 0
         def target_broke(frame, delta):
             return (delta["center_changed_fraction"] >= .7 and delta["center_change"] >= .08) or (
-                delta["center_changed_fraction"] > .3 and delta["center_change"] > .04 and broken_caption(frame) > caption + 8)
+                delta["center_changed_fraction"] > .3 and delta["center_change"] > .04 and self.pixels(broken_caption, frame) > caption + 8)
         deadline = time.monotonic() + seconds
         scene_changed = False
         center_progress = 0
@@ -225,13 +239,13 @@ class ToolExecutor:
                 await self.primitive("wait", ms=min(.6, max(0, deadline - time.monotonic() - .1)) * 1000)
                 try:
                     frame = await asyncio.wait_for(self.observe(), max(.001, min(.2, deadline - time.monotonic())))
-                    observed = changes(reference, frame)
+                    observed = self.pixels(changes, reference, frame)
                     center_progress = observed["center_change"]
                     probe.update(succeeded=center_progress >= .002 and observed["center_changed_fraction"] >= .01,
                                  center_change=center_progress, center_changed_fraction=observed["center_changed_fraction"],
                                  frame_index=len(self.frames) - 1, broke_pixel_cue=target_broke(frame, observed))
                     if target_box is not None:
-                        target = changes(reference, frame, target_box)
+                        target = self.pixels(changes, reference, frame, target_box)
                         probe.update(target_center_change=target["center_change"], target_changed_fraction=target["center_changed_fraction"])
                         probe["succeeded"] |= target["center_change"] >= .002 and target["center_changed_fraction"] >= .01
                         probe["broke_pixel_cue"] |= target_broke(frame,target)
@@ -246,25 +260,25 @@ class ToolExecutor:
                     frame = await asyncio.wait_for(self.observe(), max(.001, deadline - time.monotonic()))
                 except asyncio.TimeoutError:
                     break
-                observed = changes(reference, frame)
+                observed = self.pixels(changes, reference, frame)
                 center_progress = max(center_progress, observed["center_change"])
                 scene_changed |= observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08
                 if probe["used"]:
                     probe["broke_pixel_cue"] = target_broke(frame, observed)
                     if target_box is not None:
-                        probe["broke_pixel_cue"] |= target_broke(frame,changes(reference,frame,target_box))
+                        probe["broke_pixel_cue"] |= target_broke(frame,self.pixels(changes, reference,frame,target_box))
         finally:
             await self.button(0, False)
         if probe["used"] and probe["succeeded"] is True:
             await self.primitive("wait",ms=350)
         settled_frame = await self.observe()
-        settled = changes(reference, settled_frame)
+        settled = self.pixels(changes, reference, settled_frame)
         if probe["used"]:
             probe["candidate_break"] = probe.get("broke_pixel_cue",False)
             probe["broke_pixel_cue"] = target_broke(settled_frame,settled)
             probe.update(settled_center_change=settled["center_change"],settled_changed_fraction=settled["center_changed_fraction"])
             if target_box is not None:
-                target = changes(reference,settled_frame,target_box)
+                target = self.pixels(changes, reference,settled_frame,target_box)
                 probe["broke_pixel_cue"] |= target_broke(settled_frame,target)
                 probe.update(settled_target_center_change=target["center_change"],settled_target_changed_fraction=target["center_changed_fraction"])
         center_progress = max(center_progress, settled["center_change"])
@@ -291,7 +305,7 @@ class ToolExecutor:
             tick = time.monotonic()
             frame = await self.observe()
             try:
-                if movement_danger(frame):
+                if self.pixels(movement_danger, frame):
                     return "danger"
                 async with asyncio.timeout(max(.001, deadline - time.monotonic())):
                     decision = await self.jev.ask(frame, target)
@@ -307,18 +321,18 @@ class ToolExecutor:
             x, y = (l + r) / 2, (t + b) / 2
             centered = abs(x - .5) <= min(.035, (r - l) * .2) and abs(y - .5) <= min(.04, (b - t) * .2)
             near_face = (r - l) * self.width >= 180 * self.height / 480
-            previous_miss = self.failed_mining_frame is not None and changes(self.failed_mining_frame, frame)["center_change"] < .01
+            previous_miss = self.failed_mining_frame is not None and self.pixels(changes, self.failed_mining_frame, frame)["center_change"] < .01
             if previous_miss and centered and near_face:
                 decision.update(decision="stuck", reason="unchanged_mining_target_too_close")
                 return "stuck"
-            if not previous_miss and close_face(decision["box"], self.width, self.height) and outline(frame, decision["box"]):
+            if not previous_miss and self.pixels(close_face, decision["box"], self.width, self.height) and self.pixels(outline, frame, decision["box"]):
                 await self.primitive("wait", ms=min(100, max(0, deadline - time.monotonic()) * 1000))
-                if outline(await self.observe(), decision["box"]):
+                if self.pixels(outline, await self.observe(), decision["box"]):
                     decision["decision"] = "in_reach"
                     return "in_reach"
                 decision["reach_unconfirmed"] = True
                 continue
-            if not previous_miss and close_face(decision["box"], self.width, self.height):
+            if not previous_miss and self.pixels(close_face, decision["box"], self.width, self.height):
                 decision.update(decision="close_unconfirmed", walking=False)
                 return "close_unconfirmed"
             focal = self.height / 2 / math.tan(math.radians(35))
@@ -329,7 +343,7 @@ class ToolExecutor:
             decision.update(decision="steer", yaw_deg=yaw, pitch_deg=pitch, walking=walking)
             await self.primitive("mouse", dx=yaw / .15, dy=pitch / .15)
             if walking:
-                if walking_since is None or changes(anchor, frame)["frame_change"] >= .002:
+                if walking_since is None or self.pixels(changes, anchor, frame)["frame_change"] >= .002:
                     anchor, walking_since = frame, time.monotonic()
                 elif time.monotonic() - walking_since >= 1:
                     decision["decision"] = "stuck"
@@ -350,7 +364,7 @@ class ToolExecutor:
         try:
             while (remaining := deadline - time.monotonic()) > 0:
                 frame = await asyncio.wait_for(self.observe(), remaining)
-                danger = movement_danger(frame)
+                danger = self.pixels(movement_danger, frame)
                 if danger:
                     self.close_checks.append({"decision": "not_close", "reason": danger})
                     return False
@@ -359,8 +373,8 @@ class ToolExecutor:
                     decision.update(decision="close_check", frame_index=len(self.frames) - 1)
                     box = decision.get("box") if decision.get("noul", 0) >= self.visibility_threshold else None
                 else:
-                    box = outline_box(frame) or large_face_box(frame)
-                close = close_face(box, self.width, self.height)
+                    box = self.pixels(outline_box, frame) or self.pixels(large_face_box, frame)
+                close = self.pixels(close_face, box, self.width, self.height)
                 check = {"box": box, "close": close, "decision": "close" if close else "approach"}
                 self.close_checks.append(check)
                 if close:
@@ -376,7 +390,7 @@ class ToolExecutor:
                 if owns_w:
                     await self.key("w", False)
                 after = await self.observe()
-                still = still + .2 if changes(frame, after)["frame_change"] < .002 else 0
+                still = still + .2 if self.pixels(changes, frame, after)["frame_change"] < .002 else 0
                 if still >= .8:
                     check.update(decision="not_close", reason="stuck")
                     return False
@@ -390,8 +404,8 @@ class ToolExecutor:
     async def reflex(self, name, seconds, sprint=False):
         reference = self.current_frame or await self.observe()
         previous, unchanged = reference, 0
-        caption = broken_caption(reference) if name == "mine" else 0
-        if name == "approach_until_outline" and outline(reference):
+        caption = self.pixels(broken_caption, reference) if name == "mine" else 0
+        if name == "approach_until_outline" and self.pixels(outline, reference):
             return "outline_pixel_cue"
         started = time.monotonic()
         try:
@@ -407,21 +421,21 @@ class ToolExecutor:
                     frame = await asyncio.wait_for(self.observe(), max(.25, seconds - (time.monotonic() - started)))
                 except asyncio.TimeoutError:
                     return "timeout"
-                delta = changes(reference, frame)
+                delta = self.pixels(changes, reference, frame)
                 if name == "mine":
-                    current = broken_caption(frame)
+                    current = self.pixels(broken_caption, frame)
                     if current > caption + 8 and delta["center_changed_fraction"] > .3 and delta["center_change"] > .04:
                         return "block_gone_pixel_cue"
                     caption = current
                     if time.monotonic() - started >= .8 and delta["center_change"] < .0008:
                         return "no_progress_cue"
                 elif name == "collect":
-                    if hotbar_change(reference, frame):
+                    if self.pixels(hotbar_change, reference, frame):
                         return "hotbar_changed"
                 else:
-                    if outline(frame):
+                    if self.pixels(outline, frame):
                         return "outline_pixel_cue"
-                    unchanged = unchanged + 1 if changes(previous, frame)["frame_change"] < .002 else 0
+                    unchanged = unchanged + 1 if self.pixels(changes, previous, frame)["frame_change"] < .002 else 0
                     if unchanged >= 2:
                         return "stuck"
                 previous = frame
@@ -531,6 +545,7 @@ class ToolExecutor:
             await self.button(button, True)
 
     async def execute(self, call, tier):
+        capture_start, pixel_start, count_start = self.screenshot_ms, self.pixel_analysis_ms, self.screenshot_count
         probe_start = len(self.mining_probes)
         vertical_start = len(self.vertical_mining)
         if tier == "raw":
@@ -538,7 +553,7 @@ class ToolExecutor:
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
         after = self.current_frame if call["name"] in ("craft", "search_recipe", "seek", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "mine", "collect") else await self.observe()
-        delta = changes(before, after)
+        delta = self.pixels(changes, before, after)
         moving = call["name"] in ("move", "reposition")
         if moving:
             self.unchanged_moves = self.unchanged_moves + 1 if delta["frame_change"] < .002 else 0
@@ -588,6 +603,9 @@ class ToolExecutor:
                 result["hotbar_item_advisory"] = {"error": "vision_error", "not_collection_proof": True}
         if call["name"] == "aim_at" and call["arguments"]["x"] >= 700 and call["arguments"]["y"] >= 700:
             result["warning"] = "Aim point overlaps the usual held-item corner, not necessarily a world block. Select an EMPTY hotbar slot to check whether the object disappears before aiming again."
+        result["timings"] = {"screenshot_ms": self.screenshot_ms - capture_start,
+                             "pixel_analysis_ms": self.pixel_analysis_ms - pixel_start,
+                             "screenshot_count": self.screenshot_count - count_start}
         self.results.append(result)
         return result
 
@@ -596,7 +614,7 @@ class ToolExecutor:
         if name == "search_recipe":
             return await self.search_recipe(args["query"])
         if tier == "skills" and name in ("click_at", "shift_click_at", "mouse_click", "mouse_down", "attack", "use") and self.current_frame:
-            controls = recipe_book_controls(self.current_frame)
+            controls = self.pixels(recipe_book_controls, self.current_frame)
             if controls and not (controls["craftable_only"] and controls["query_present"]):
                 left,top,right,bottom = controls["results"]
                 point = (round(args["x"]*(self.width-1)/1000),round(args["y"]*(self.height-1)/1000)) if "x" in args else self.cursor_position
@@ -609,7 +627,7 @@ class ToolExecutor:
             return await self.execute_inputs({"name": "move", "arguments": args}, tier)
         blind = (name == "move" and args["direction"] != "forward") or (name in ("key_down","key_press") and args["key"] in ("a","s","d"))
         select_all = args.get("key") == "a" and (args.get("ctrl") or any(keycode(k) in (341,345) for k in self.held_keys))
-        if tier == "skills" and blind and not select_all and self.current_frame and lava_sound_nearby(self.current_frame):
+        if tier == "skills" and blind and not select_all and self.current_frame and self.pixels(lava_sound_nearby, self.current_frame):
             return "lava_sound_nearby"
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
@@ -703,7 +721,7 @@ class ToolExecutor:
     async def craft(self, item, count):
         self.craft_report = {"item":item,"requested_count":count,"items_taken":0,"hotbar_slots":[]}
         if self.held_keys or self.held_buttons: return "release_inputs_before_crafting"
-        layout = crafting_controls(self.current_frame or await self.observe())
+        layout = self.pixels(crafting_controls, self.current_frame or await self.observe())
         if layout is None: return "open_inventory_or_table_first"
         async def click_point(point,shift=False):
             owned = shift and not any(keycode(k) in (340,344) for k in self.held_keys)
@@ -722,36 +740,36 @@ class ToolExecutor:
         status = await self.search_recipe(item)
         if status != "recipe_search_ready": return status
         while self.craft_report["items_taken"] < count:
-            layout = crafting_controls(self.current_frame)
+            layout = self.pixels(crafting_controls, self.current_frame)
             if layout is None: return "crafting_gui_unconfirmed"
-            if any(crafting_slot(self.current_frame,p,layout["scale"])["occupied"] for p in layout["inputs"]+[layout["output"]]):
+            if any(self.pixels(crafting_slot, self.current_frame,p,layout["scale"])["occupied"] for p in layout["inputs"]+[layout["output"]]):
                 return "craft_grid_not_empty"
-            icons = filtered_recipe_icons(self.current_frame)
+            icons = self.pixels(filtered_recipe_icons, self.current_frame)
             if len(icons) != 1: return "recipe_result_missing_or_ambiguous"
             if not icons[0]["occupied"] or icons[0]["ghost"]: return "recipe_result_empty_or_ghost"
             await click_point(icons[0]["center"])
             await self.observe()
-            if crafting_controls(self.current_frame) != layout: return "crafting_gui_changed"
-            output = crafting_slot(self.current_frame,layout["output"],layout["scale"])
+            if self.pixels(crafting_controls, self.current_frame) != layout: return "crafting_gui_changed"
+            output = self.pixels(crafting_slot, self.current_frame,layout["output"],layout["scale"])
             if not output["occupied"] or output["ghost"]: return "craft_output_empty_or_ghost"
-            ingredients = [p for p in layout["inputs"] if crafting_slot(self.current_frame,p,layout["scale"])["occupied"]]
-            if not ingredients or any(crafting_slot(self.current_frame,p,layout["scale"])["ghost"] or stack_count(self.current_frame,p,layout["scale"]) != 1 for p in ingredients):
+            ingredients = [p for p in layout["inputs"] if self.pixels(crafting_slot, self.current_frame,p,layout["scale"])["occupied"]]
+            if not ingredients or any(self.pixels(crafting_slot, self.current_frame,p,layout["scale"])["ghost"] or self.pixels(stack_count, self.current_frame,p,layout["scale"]) != 1 for p in ingredients):
                 return "craft_input_batch_unconfirmed"
             output_frame = self.current_frame
-            batch = stack_count(output_frame,layout["output"],layout["scale"])
+            batch = self.pixels(stack_count, output_frame,layout["output"],layout["scale"])
             if not 1 <= batch <= 64: return "craft_output_count_unconfirmed"
             await click_point(layout["output"],shift=True)
-            search = recipe_book_controls(output_frame)["search"]
+            search = self.pixels(recipe_book_controls, output_frame)["search"]
             await self.primitive("mouse",x=search[0],y=search[1])
             await self.observe()
-            if crafting_controls(self.current_frame) != layout: return "crafting_gui_changed"
-            if crafting_slot(self.current_frame,layout["output"],layout["scale"])["occupied"]: return "craft_output_not_taken"
+            if self.pixels(crafting_controls, self.current_frame) != layout: return "crafting_gui_changed"
+            if self.pixels(crafting_slot, self.current_frame,layout["output"],layout["scale"])["occupied"]: return "craft_output_not_taken"
             self.craft_report["items_taken"] += batch
-            self.craft_report["hotbar_slots"] = matching_hotbar_slots(output_frame,layout["output"],self.current_frame,layout)
+            self.craft_report["hotbar_slots"] = self.pixels(matching_hotbar_slots, output_frame,layout["output"],self.current_frame,layout)
         return "crafted"
 
     async def search_recipe(self, query):
-        controls = recipe_book_controls(self.current_frame or await self.observe())
+        controls = self.pixels(recipe_book_controls, self.current_frame or await self.observe())
         if controls is None:
             return "recipe_book_not_visible: open the inventory/table recipe book first"
         async def click_point(point):
@@ -760,12 +778,12 @@ class ToolExecutor:
         if not controls["craftable_only"]:
             await click_point(controls["filter"])
             await self.observe()
-            controls = recipe_book_controls(self.current_frame)
+            controls = self.pixels(recipe_book_controls, self.current_frame)
             if controls is None or not controls["craftable_only"]:
                 return "recipe_filter_unconfirmed"
         await click_point(controls["search"])
         await self.execute_inputs({"name":"key_press","arguments":{"key":"a","ms":100,"ctrl":True}},"skills")
         await self.primitive("type", text=query)
         await self.observe()
-        controls = recipe_book_controls(self.current_frame)
+        controls = self.pixels(recipe_book_controls, self.current_frame)
         return "recipe_search_ready" if controls and controls["craftable_only"] and controls["query_present"] else "recipe_search_unconfirmed"

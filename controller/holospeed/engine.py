@@ -13,7 +13,7 @@ from PIL import Image
 from .bridge import GameBridge
 from .config import Settings
 from .demo import DemoBridge, demo_decision
-from .models import Decision
+from .models import Action, Decision
 from .providers import HoloProvider, JevProvider, ProviderError, ReplanRequired
 from .recording import RunRecorder, redact
 
@@ -33,6 +33,7 @@ class AgentEngine:
         if self.jev:
             self.jev.journal = self.log
         self.generation = 0
+        self.view_recoveries = 0
         self.previous: Decision | None = None
         self.failures: deque = deque(maxlen=8)
         self.recent: deque = deque(maxlen=8)
@@ -103,6 +104,7 @@ class AgentEngine:
                 self.events.clear()
                 self.recent.clear()
                 self.failures.clear()
+                self.view_recoveries = 0
                 if self.settings.mode == "demo":
                     self.bridge = DemoBridge()
                 self.recorder = RunRecorder(
@@ -121,6 +123,8 @@ class AgentEngine:
                         "max_actions": self.settings.max_actions,
                         "max_run_seconds": self.settings.max_run_seconds,
                         "operator_declared_seed": self.settings.declared_seed,
+                        "allow_exploration": self.settings.allow_exploration,
+                        "holo_reasoning_effort": self.settings.holo_reasoning_effort,
                     },
                 )
                 self.state["run_id"] = self.recorder.id
@@ -136,7 +140,7 @@ class AgentEngine:
     async def pause(self, reason: str = "Operator paused") -> None:
         async with self.lock:
             self.generation += 1
-            if self.state["status"] != "idle":
+            if self.state["status"] not in {"idle", "error"}:
                 self.state["status"] = "paused"
             await self.bridge.stop(reason)
             if self.task and not self.task.done() and self.task is not asyncio.current_task():
@@ -144,6 +148,9 @@ class AgentEngine:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self.task
             self.state.update(keys=[], action=None)
+            self.state["expected_effect"] = (
+                "Inputs released; resume starts from a fresh observation."
+            )
             self.previous = None
             self.log("event", {"name": "paused", "detail": reason})
             self.checkpoint()
@@ -154,9 +161,12 @@ class AgentEngine:
         await self.pause("Run ended by operator")
         if self.recorder and not self.recorder.closed:
             self.recorder.finish(
-                "finished", metrics=self.state["metrics"], milestones=self.state["milestones"]
+                "error" if self.state["status"] == "error" else "finished",
+                metrics=self.state["metrics"],
+                milestones=self.state["milestones"],
             )
         self.state["status"] = "idle"
+        self.state["expected_effect"] = "Run ended. Inspect the recorded actions in replay."
         self.broadcast()
 
     def checkpoint(self) -> None:
@@ -247,6 +257,8 @@ class AgentEngine:
         repeated_ticks = 0
         errors = 0
         steps_since_plan = self.settings.planner_interval
+        last_view_recovery_at = -1
+        view_recoveries = self.view_recoveries
         try:
             while self.state["status"] == "running" and generation == self.generation:
                 if (
@@ -300,8 +312,48 @@ class AgentEngine:
                         provider = "holo"
                 if self.settings.mode == "demo":
                     provider = "holo" if self.bridge.step % 4 == 0 else "jev"
+                view_proposal = None
+                recovery_count = self.state["metrics"]["recoveries"]
+                if (
+                    self.settings.mode == "live"
+                    and self.settings.allow_exploration
+                    and self.jev
+                    and self.previous is None
+                    and len(self.failures) >= 2
+                    and view_recoveries < 4
+                    and recovery_count != last_view_recovery_at
+                    and self.failures[-1].get("previous_action") is not None
+                    and self.failures[-1].get("previous_action")
+                    == self.failures[-2].get("previous_action")
+                    and not observation.screen_open
+                ):
+                    yaw, pitch = [(25, 15), (-30, 0), (-25, -15), (30, 0)][view_recoveries]
+                    view_proposal = Decision(
+                        objective="Inspect a new angle before replanning",
+                        strategy="Repeated proposals were rejected. Turn the view without moving or using items.",
+                        expected_effect="Reveal a different view of nearby blocks.",
+                        action=Action(keys=[], duration_ticks=1, yaw_delta=yaw, pitch_delta=pitch),
+                    )
+                    view_recoveries += 1
+                    self.view_recoveries = view_recoveries
+                    last_view_recovery_at = recovery_count
+                    context.update(
+                        previous_decision=view_proposal.model_dump(),
+                        validate_unexecuted_plan=True,
+                        plan_source_frame_id=observation.frame_id,
+                    )
+                    provider = "jev"
+                    self.log(
+                        "recovery_plan",
+                        {
+                            "origin": "local_camera_recovery",
+                            "decision": view_proposal.model_dump(),
+                            "frame_id": observation.frame_id,
+                            "attempt": view_recoveries,
+                        },
+                    )
                 planned_this_step = provider == "holo"
-                proposed: Decision | None = None
+                proposed: Decision | None = view_proposal
                 try:
                     completed = False
                     if self.settings.mode == "demo":
@@ -578,6 +630,9 @@ class AgentEngine:
                         }
                     )
                     errors = 0
+                    if view_proposal:
+                        # A scan is a one-shot recovery; Holo must interpret its new view.
+                        self.previous = None
                 else:
                     self.recovery(f"Action {ack['status']}: {ack.get('reason')}")
                     errors += 1
@@ -605,6 +660,9 @@ class AgentEngine:
             raise
         except Exception as error:  # noqa: BLE001 - every unexpected failure must release game inputs.
             self.state["status"] = "error"
+            self.state["expected_effect"] = (
+                "Inputs released. Review the failure event before resuming."
+            )
             self.state["metrics"]["errors"] += 1
             self.log("error", {"message": str(error), "class": type(error).__name__})
             self.checkpoint()

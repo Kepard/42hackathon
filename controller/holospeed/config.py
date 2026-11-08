@@ -31,6 +31,7 @@ class Settings:
     max_run_seconds: int = 1800
     validate_holo_plans: bool = True
     declared_seed: str = ""
+    allow_exploration: bool = True
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -55,4 +56,5 @@ class Settings:
             max_run_seconds=int(os.getenv("MAX_RUN_SECONDS", "1800")),
             validate_holo_plans=os.getenv("VALIDATE_HOLO_PLANS", "true").lower() == "true",
             declared_seed=os.getenv("MINECRAFT_SEED", ""),
+            allow_exploration=os.getenv("ALLOW_EXPLORATION", "true").lower() == "true",
         )

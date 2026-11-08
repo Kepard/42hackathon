@@ -217,6 +217,9 @@ Distinguish leafy foliage from solid log trunks (brown oak or white birch). If l
 the crosshair, a short attack to clear leaves is valid progress before aiming at the trunk.
 expected_effect describes ONLY the next bounded action: moving approaches a tree, it does
 not collect a log. Do not promise an entire objective from one movement or inventory click.
+When context.allow_exploration is true and progress is uncertain, prefer a safe probe of
+at most 10 ticks over a 20-tick movement. A leaf block at the crosshair: attack for 10 ticks
+to clear it before walking into the foliage. Small look probes stay within yaw 30/pitch 20.
 Call one action tool. Keep strategy at most two short sentences; omit unused optional
 fields. Claim a milestone only with visible evidence. answer stops for review only when the
 entire run_goal is visibly complete, never when a subgoal finishes. No progress is inferred
@@ -385,7 +388,10 @@ class HoloProvider(_Provider):
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "context": context,
+                            "context": {
+                                **context,
+                                "allow_exploration": self.settings.allow_exploration,
+                            },
                             "frame_id": observation.frame_id,
                             "screen_open": observation.screen_open,
                             "image_width": observation.width,
@@ -544,6 +550,17 @@ class JevProvider(_Provider):
             ) from None
         action = prior.action
         validate_proposal = context.get("validate_unexecuted_plan") is True
+        exploration_permitted = (
+            self.settings.allow_exploration
+            and not observation.screen_open
+            and action.duration_ticks <= 10
+            and action.cursor is None
+            and action.hotbar is None
+            and action.scroll == 0
+            and set(action.keys) <= {"forward", "back", "left", "right", "attack"}
+            and abs(action.yaw_delta) <= 30
+            and abs(action.pitch_delta) <= 20
+        )
         if not validate_proposal and (
             observation.screen_open
             or action.cursor is not None
@@ -625,6 +642,29 @@ class JevProvider(_Provider):
                 "Safe intermediate progress is sufficient, not completion of the entire objective. "
                 "Answer no when the target is ambiguous or the image lacks sufficient evidence."
             )
+        if exploration_permitted:
+            criteria["continue"] = (
+                "Execute the exact bounded experiment once: safely test an approach, clear "
+                "a leaf obstruction, or inspect with a small look, even if progress is uncertain."
+            )
+            criteria["replan"] = (
+                "Reject concrete danger, an invalid action target, or repeating the same "
+                "experiment after recorded failure; obtain another plan."
+            )
+            action_question = (
+                "Judge this permitted world action as a safe bounded experiment of at most "
+                "10 ticks, not a promise of progress. A cautious approach or short attack to "
+                "clear leaves can be valid even if the outcome is uncertain. Continue permits "
+                "the exact proposed action once; replan for concrete danger, an invalid target, "
+                "or repetition of the same recorded failed action. Do not demand certainty "
+                "that this experiment will complete a subgoal."
+            )
+            continuation_question = (
+                "Is this short world action an appropriate safe bounded experiment to test "
+                "an approach, clear obstructing leaves, or inspect the scene? Uncertainty "
+                "about progress alone is not a reason to reject. Reject concrete danger, "
+                "an invalid action target, or repetition of the same recorded failed action."
+            )
         reference = str(uuid.uuid4())
         body = {
             "model": self.settings.jev_model,
@@ -632,6 +672,7 @@ class JevProvider(_Provider):
                 "screenshot": reference,
                 "run_goal": context.get("run_goal", "Obtain stone tools"),
                 "evaluation_mode": "unexecuted_plan" if validate_proposal else "continuation",
+                "exploration_permitted": exploration_permitted,
                 "current_frame": {
                     "frame_id": observation.frame_id,
                     "tick": observation.tick,

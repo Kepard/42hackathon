@@ -196,7 +196,15 @@ model-weight training. Provider contracts and trade-offs are documented in
 [providers](docs/providers.md), [gameplay research](docs/gameplay.md), and the
 [bridge protocol](docs/protocol.md).
 
+`ALLOW_EXPLORATION=true` permits short, bounded world-input experiments when
+Jev sees no concrete hazard. After identical rejected proposals, the controller
+can propose a camera-only scan for Jev validation, then ask Holo to inspect the
+new view. Four scans are allowed per run; the stricter mode disables them.
+
 ## Development and current limits
+
+See the [verification report](docs/verification.md) for actual live-run evidence,
+test results, and the distinction between control integration and wood/tool success.
 
 ```sh
 uv run pytest

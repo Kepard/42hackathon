@@ -278,6 +278,50 @@ async def test_close_preserves_terminal_error_in_summary_and_journal(tmp_path):
             await engine.close()
 
 
+@pytest.mark.parametrize("finalize", ["finish", "close"])
+async def test_disconnect_pause_preserves_error_before_finalizing_run(tmp_path, finalize):
+    class BrokenBridge(FakeBridge):
+        async def observe(self):
+            raise BridgeError("Capture failed before the bridge disconnected")
+
+    bridge = BrokenBridge()
+    engine = AgentEngine(Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused"), bridge)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=2)
+        assert engine.state["status"] == "error"
+        assert engine.state["metrics"]["errors"] == 1
+
+        # The app pauses when the websocket disconnects, before shutdown or an
+        # operator ends the run. That cleanup must retain the original failure.
+        await engine.pause("Minecraft bridge disconnected")
+        assert engine.state["status"] == "error"
+        assert engine.state["keys"] == []
+        assert engine.state["action"] is None
+        assert "Minecraft bridge disconnected" in bridge.stops
+        summary_path = engine.recorder.path / "summary.json"
+        assert json.loads(summary_path.read_text())["status"] == "error"
+
+        await getattr(engine, finalize)()
+        assert engine.recorder.closed
+        summary = json.loads(summary_path.read_text())
+        assert summary["status"] == "error"
+        assert summary["metrics"]["errors"] == 1
+        events = read_events(engine.recorder.path / "events.jsonl")
+        errors = [event for event in events if event["type"] == "error"]
+        assert len(errors) == 1
+        assert errors[0]["data"]["message"] == "Capture failed before the bridge disconnected"
+        assert events[-1]["type"] == "run_finished"
+        assert events[-1]["data"]["status"] == "error"
+        assert bridge.executed == []
+        assert not any(event["type"] in {"action", "ack"} for event in events)
+    finally:
+        await engine.close()
+
+    # Finishing explicitly and then shutting down must not rewrite the archive.
+    assert json.loads(summary_path.read_text())["status"] == "error"
+
+
 async def test_holo_plan_executes_only_after_jev_validates_a_fresh_frame(tmp_path, monkeypatch):
     class SequentialBridge(FakeBridge):
         def __init__(self):
@@ -395,6 +439,7 @@ async def test_jev_rejection_prevents_all_actions_and_exhausts_recovery_budget(
             jev_api_key="unused-jev",
             max_actions=1,
             validate_holo_plans=True,
+            allow_exploration=False,
         ),
         bridge,
     )
@@ -444,12 +489,119 @@ async def test_jev_rejection_prevents_all_actions_and_exhausts_recovery_budget(
         assert engine.state["keys"] == [] and engine.state["action"] is None
         events = read_events(engine.recorder.path / "events.jsonl")
         assert not any(event["type"] in {"action", "ack"} for event in events)
+        assert not any(event["type"] == "recovery_plan" for event in events)
         assert len([event for event in events if event["type"] == "recovery"]) == 8
         assert any(
             event["type"] == "error" and "Repeated model abstentions" in event["data"]["message"]
             for event in events
         )
         assert bridge.stops[-1] == "Agent loop stopped"
+    finally:
+        await engine.close()
+
+
+async def test_repeated_rejections_require_jev_approval_before_one_shot_camera_scan(
+    tmp_path, monkeypatch
+):
+    class SequentialBridge(FakeBridge):
+        def __init__(self):
+            super().__init__()
+            self.observed = []
+
+        async def observe(self):
+            observation = frame(f"frame-{len(self.observed) + 1}")
+            self.observed.append(observation.frame_id)
+            return observation
+
+    bridge = SequentialBridge()
+    engine = AgentEngine(
+        Settings(
+            mode="live",
+            runs_dir=tmp_path,
+            holo_api_key="unused-holo",
+            jev_api_key="unused-jev",
+            max_actions=1,
+            validate_holo_plans=True,
+            allow_exploration=True,
+        ),
+        bridge,
+    )
+    holo_frames, jev_calls = [], []
+    blocked_plan = Decision(
+        objective="Approach the trunk",
+        strategy="Walk toward the visible tree",
+        expected_effect="The tree becomes closer",
+        action=Action(keys=["forward"], duration_ticks=10),
+    )
+
+    async def holo_decide(observation, context):
+        holo_frames.append(observation.frame_id)
+        return ModelResult(
+            decision=blocked_plan,
+            request={"frame_id": observation.frame_id},
+            response={"plan": True},
+            latency_ms=10,
+            model="fake-holo",
+        )
+
+    async def jev_decide(observation, context):
+        jev_calls.append((observation.frame_id, json.loads(json.dumps(context))))
+        assert context["validate_unexecuted_plan"] is True
+        assert bridge.executed == []
+        proposal = Decision.model_validate(context["previous_decision"])
+        if len(jev_calls) <= 2:
+            assert proposal == blocked_plan
+            raise ReplanRequired(
+                "The proposed forward step is visibly blocked",
+                provider="jev",
+                latency_ms=3,
+                request={"frame_id": observation.frame_id},
+                response={"replan": True},
+            )
+        assert proposal.action == Action(keys=[], duration_ticks=1, yaw_delta=25, pitch_delta=15)
+        return ModelResult(
+            decision=proposal,
+            request={"frame_id": observation.frame_id},
+            response={"validated": True},
+            latency_ms=4,
+            model="fake-jev",
+        )
+
+    monkeypatch.setattr(engine.holo, "decide", holo_decide)
+    monkeypatch.setattr(engine.jev, "decide", jev_decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(engine.task, timeout=5)
+        assert holo_frames == ["frame-1", "frame-3"]
+        assert [call[0] for call in jev_calls] == ["frame-2", "frame-4", "frame-5"]
+        assert bridge.observed == [f"frame-{index}" for index in range(1, 6)]
+        assert bridge.executed == [
+            (
+                Action(keys=[], duration_ticks=1, yaw_delta=25, pitch_delta=15),
+                "frame-5",
+                engine.settings.frame_ttl_ms,
+            )
+        ]
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 1
+        assert engine.state["metrics"]["recoveries"] == 2
+        assert engine.state["metrics"]["errors"] == 0
+        assert engine.state["keys"] == [] and engine.state["action"] is None
+        assert engine.previous is None  # A scan must force Holo to interpret the next view.
+        events = read_events(engine.recorder.path / "events.jsonl")
+        recovery_plans = [event for event in events if event["type"] == "recovery_plan"]
+        assert len(recovery_plans) == 1
+        assert recovery_plans[0]["data"]["origin"] == "local_camera_recovery"
+        assert recovery_plans[0]["data"]["frame_id"] == "frame-5"
+        assert recovery_plans[0]["data"]["attempt"] == 1
+        assert len([event for event in events if event["type"] == "plan"]) == 2
+        assert [event["data"]["frame_id"] for event in events if event["type"] == "action"] == [
+            "frame-5"
+        ]
+        assert any(
+            event["type"] == "event" and event["data"].get("name") == "run_budget_reached"
+            for event in events
+        )
     finally:
         await engine.close()
 

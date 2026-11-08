@@ -77,6 +77,7 @@ function eventDescription(event) {
   const data = event.data || {};
   if (event.type === "decision") return `${String(data.provider || "agent").toUpperCase()} · ${data.decision?.objective || data.objective || "Decision recorded"}${data.latency_ms != null ? ` · ${Math.round(data.latency_ms)} ms` : ""}`;
   if (event.type === "plan") return `${String(data.provider || "holo").toUpperCase()} · Plan: ${data.decision?.objective || data.objective || "Visual plan recorded"} · awaiting fresh Jev validation`;
+  if (event.type === "recovery_plan") return `Inspect another angle · attempt ${number(data.attempt)} · awaiting Jev validation`;
   if (event.type === "inference_metrics") {
     const usage = data.usage || {};
     const input = usage.input_tokens ?? usage.prompt_tokens;
@@ -432,11 +433,11 @@ function replaySnapshot() {
     if (event.type === "observation") {
       state.frame_url = data.frame_url || state.frame_url;
       state.metrics.observations++;
-    } else if (event.type === "decision" || event.type === "plan") {
+    } else if (event.type === "decision" || event.type === "plan" || event.type === "recovery_plan") {
       const decision = data.decision || data;
       state.objective = decision.objective || state.objective;
       state.strategy = decision.strategy || state.strategy;
-      if (event.type === "plan") {
+      if (event.type === "plan" || event.type === "recovery_plan") {
         state.expected_effect = "Jev is validating this plan on a fresh screenshot";
         state.keys = [];
         state.action = null;

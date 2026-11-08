@@ -110,6 +110,16 @@ milestones and does not relax the ban on
 repeating GUI actions during ordinary continuation. The caller owns one-time
 execution and must retain the fresh observation's action deadline.
 
+`ALLOW_EXPLORATION=true` permits Jev to evaluate small world actions as bounded
+experiments rather than demanding certainty of progress. This profile applies
+only to actions of at most 10 ticks, using movement-direction or attack keys,
+with no GUI, cursor, hotbar, scroll, jump, sprint, or use; yaw is at most 30° and
+pitch at most 20°. A short leaf-clearing attack or cautious approach can be useful
+even when its outcome is uncertain. Concrete danger, invalid targets, and repeated
+failed actions still require replanning. Probability thresholds and explicit
+replan decisions remain unchanged. Longer mining and GUI actions keep strict
+validation. Set `ALLOW_EXPLORATION=false` to restore strict evaluation everywhere.
+
 A batched blocker question makes abstentions useful to the next Holo plan:
 obstruction, mismatched target, danger, completed goal, or uncertainty. Clearing
 leaves is valid intermediate progress; the next bounded action need not finish

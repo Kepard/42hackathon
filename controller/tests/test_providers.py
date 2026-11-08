@@ -796,3 +796,106 @@ async def test_jev_revalidation_rejects_gui_action_after_screen_closed(
                     "validate_unexecuted_plan": True,
                 },
             )
+
+
+@pytest.mark.parametrize(
+    "action,screen_open,enabled,expected",
+    [
+        (Action(keys=["attack"], duration_ticks=10), False, True, True),
+        (
+            Action(keys=["forward"], duration_ticks=10, yaw_delta=30, pitch_delta=20),
+            False,
+            True,
+            True,
+        ),
+        (Action(keys=["forward", "attack"], duration_ticks=10), False, True, True),
+        (Action(keys=["forward"], duration_ticks=11), False, True, False),
+        (Action(keys=["forward"], duration_ticks=10, yaw_delta=31), False, True, False),
+        (Action(keys=["forward"], duration_ticks=10, pitch_delta=21), False, True, False),
+        (Action(keys=["jump"], duration_ticks=5), False, True, False),
+        (Action(keys=["sprint"], duration_ticks=5), False, True, False),
+        (Action(keys=["use"], duration_ticks=1), False, True, False),
+        (Action(keys=[], duration_ticks=1, hotbar=2), False, True, False),
+        (Action(keys=[], duration_ticks=1, scroll=1), False, True, False),
+        (Action(keys=[], duration_ticks=1, cursor={"x": 0.5, "y": 0.5}), True, True, False),
+        (Action(keys=["attack"], duration_ticks=80), False, True, False),
+        (Action(keys=["attack"], duration_ticks=10), True, True, False),
+        (Action(keys=["attack"], duration_ticks=10), False, False, False),
+    ],
+)
+async def test_exploration_profile_only_applies_to_bounded_world_actions(
+    settings,
+    observation,
+    decision,
+    action,
+    screen_open,
+    enabled,
+    expected,
+):
+    settings.allow_exploration = enabled
+    observation.screen_open = screen_open
+    decision.action = action
+
+    def handle(request):
+        body = json.loads(request.content)
+        assert body["state"]["exploration_permitted"] is expected
+        instructions = body["questions"]["action"]["instructions"]
+        if expected:
+            assert "safe bounded experiment" in instructions
+            assert "same recorded failed action" in instructions
+        else:
+            assert "NOT been executed" in instructions
+        payload = jev_response()
+        payload["answers"]["action"].update(
+            choice="continue",
+            probabilities={"continue": 0.95, "replan": 0.05},
+        )
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result = await JevProvider(settings, client).decide(
+            observation,
+            {
+                "previous_decision": decision.model_dump(),
+                "validate_unexecuted_plan": True,
+            },
+        )
+    assert result.decision.action == action
+
+
+@pytest.mark.parametrize("rejection", ["probability", "danger", "continuation", "replan"])
+async def test_exploration_preserves_probability_and_danger_gates(
+    settings,
+    observation,
+    decision,
+    rejection,
+):
+    settings.allow_exploration = True
+    decision.action = Action(keys=["attack"], duration_ticks=10)
+    payload = jev_response()
+    payload["answers"]["action"].update(
+        choice="continue",
+        probabilities={"continue": 0.95, "replan": 0.05},
+    )
+    if rejection == "probability":
+        payload["answers"]["action"]["probabilities"] = {"continue": 0.64, "replan": 0.36}
+    elif rejection == "danger":
+        payload["answers"]["danger"]["noul"] = 0.35
+    elif rejection == "continuation":
+        payload["answers"]["can_continue"]["noul"] = 0.69
+    else:
+        payload["answers"]["action"].update(
+            choice="replan",
+            probabilities={"continue": 0.01, "replan": 0.99},
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as client:
+        with pytest.raises(ReplanRequired):
+            await JevProvider(settings, client).decide(
+                observation,
+                {
+                    "previous_decision": decision.model_dump(),
+                    "validate_unexecuted_plan": True,
+                },
+            )

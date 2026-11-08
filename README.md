@@ -15,6 +15,17 @@ mission is **empty inventory → tools → smelted iron → bucket-cast portal �
 *The live dashboard: Minecraft gameplay alongside Holo4’s strategy, Jev’s fresh-state
 checks, measured model latency, and local skill execution.*
 
+## How do I test your product live
+
+1. Open the **[live dashboard](https://holospeed-live-kepard.kepard.chatgpt.site/)** — no installation, account, or password needed.
+2. Click **New run**. A fresh world loads with an empty inventory, then autonomous gameplay starts automatically.
+3. Watch the **Live camera** and **ON A MISSION** panel: Holo4 chooses objectives, Jev validates actions, and local skills execute them. Follow model latency, inventory, and progression milestones.
+4. Open **Run journal** to inspect recorded decisions, actions, and outcomes.
+
+The demo is shared: **New run** restarts it for all viewers. Ask the team for a
+private operator link to use **Gladia voice steering**, **pause/resume**, or start
+a **Devin failure investigation**.
+
 ## How Holo4 and Jev drive the run
 
 | Component | Input | Responsibility |

@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from mc_observatory.holo import HoloAgent, HoloConfig, PRIMER
 from mc_observatory.holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
@@ -40,6 +40,54 @@ def test_pixel_transforms_and_errors():
         changes(a, PNG)
     with pytest.raises(OSError):
         center_crop(b"not a picture")
+
+
+def test_real_seam_cracks_are_inside_target_but_outside_screen_center():
+    fixtures = Path(__file__).parent / "fixtures"
+    before = (fixtures / "mining_seam_before_442_15.png").read_bytes()
+    after = (fixtures / "mining_seam_progress_442_15.png").read_bytes()
+    box = [.37,.41,.63,.80]
+    assert changes(before,after)["center_change"] == 0
+    cue = changes(before,after,box)
+    assert cue["center_change"] > .002
+    assert cue["center_changed_fraction"] > .01
+    assert changes(before,before,box)["center_change"] == 0
+    for invalid in ((0,0,0,0),(-1,0,1,1),(0,0,.00001,.00001)):
+        with pytest.raises(ValueError): changes(before,after,invalid)
+
+
+@pytest.mark.parametrize("cracks,breaks",[(False,False),(True,False),(True,True)])
+async def test_probe_holds_for_real_off_center_cracks_without_new_jev_questions(monkeypatch,cracks,breaks):
+    fixtures = Path(__file__).parent / "fixtures"
+    before = (fixtures / "mining_seam_before_442_15.png").read_bytes()
+    progress = (fixtures / "mining_seam_progress_442_15.png").read_bytes()
+    im = Image.open(io.BytesIO(progress)).convert("RGB")
+    ImageDraw.Draw(im).rectangle((315,196,539,383),fill=(25,140,30))
+    out = io.BytesIO();im.save(out,format="PNG")
+    clock = [0.0]
+    monkeypatch.setattr("mc_observatory.holo_tools.time.monotonic",lambda:clock[0])
+    monkeypatch.setattr("mc_observatory.holo_tools.outline",lambda _:False)
+    class Client(PixelClient):
+        async def screenshot(self):
+            if clock[0] >= .9 and breaks: return out.getvalue()
+            return progress if clock[0] >= .6 and cracks else before
+    class NoQuestions:
+        async def ask(self,*args,**kwargs): raise AssertionError("Probe must not ask Jev")
+    class Executor(ToolExecutor):
+        async def primitive(self,kind,**args):
+            if kind=="wait": clock[0] += args["ms"]/1000
+            else: await super().primitive(kind,**args)
+    ex = Executor(Client(),854,480,jev=NoQuestions())
+    ex.begin_step(before)
+    ex.close_checks.append({"box":[.37,.41,.63,.80],"close":True})
+    result = await ex.execute(parsed("attack_until_broken",max_s=3.5),"skills")
+    probe = result["mining_probes"][0]
+    assert probe["succeeded"] is cracks
+    assert probe["center_change"] == 0
+    assert (probe["target_center_change"] >= .002) is cracks
+    assert clock[0] == pytest.approx(.6 if not cracks else .95 if breaks else 3.5)
+    assert not ex.held_buttons
+    assert result["outcome"] == ("scene_changed" if cracks else "not_in_reach")
 
 
 def test_hotbar_rows_are_only_nearest_scaled_current_pixels():

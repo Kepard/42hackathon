@@ -200,6 +200,9 @@ class ToolExecutor:
             return "not_close"
         reference = await self.observe() if self.jev is not None else self.current_frame or await self.observe()
         probe = {"used": self.jev is not None and not outline(reference), "succeeded": None}
+        target_box = self.close_checks[-1].get("box") if probe["used"] and self.close_checks else None
+        if target_box is not None:
+            probe["target_box"] = target_box
         self.mining_probes.append(probe)
         if probe["used"] and seconds <= 0:
             probe.update(succeeded=False, error="no_time_budget")
@@ -222,6 +225,11 @@ class ToolExecutor:
                     probe.update(succeeded=center_progress >= .002 and observed["center_changed_fraction"] >= .01,
                                  center_change=center_progress, center_changed_fraction=observed["center_changed_fraction"],
                                  frame_index=len(self.frames) - 1, broke_pixel_cue=target_broke(frame, observed))
+                    if target_box is not None:
+                        target = changes(reference, frame, target_box)
+                        probe.update(target_center_change=target["center_change"], target_changed_fraction=target["center_changed_fraction"])
+                        probe["succeeded"] |= target["center_change"] >= .002 and target["center_changed_fraction"] >= .01
+                        probe["broke_pixel_cue"] |= target_broke(frame,target)
                 except asyncio.TimeoutError:
                     probe.update(succeeded=False, error="capture_timeout")
             while probe["succeeded"] is not False and not probe.get("broke_pixel_cue") and (remaining := deadline - time.monotonic()) > 0:
@@ -238,6 +246,8 @@ class ToolExecutor:
                 scene_changed |= observed["center_changed_fraction"] >= .7 and observed["center_change"] >= .08
                 if probe["used"]:
                     probe["broke_pixel_cue"] = target_broke(frame, observed)
+                    if target_box is not None:
+                        probe["broke_pixel_cue"] |= target_broke(frame,changes(reference,frame,target_box))
         finally:
             await self.button(0, False)
         settled = changes(reference, await self.observe())

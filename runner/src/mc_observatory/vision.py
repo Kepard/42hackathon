@@ -90,12 +90,22 @@ def recipe_book_controls(png):
     return None
 
 
-def changes(before, after):
+def changes(before, after, target_box=None):
     a, b = image(before), image(after)
     if a.size != b.size:
         raise ValueError("Screenshot dimensions changed during action")
     full = ImageChops.difference(a.resize((128, 72)), b.resize((128, 72)))
-    patch = ImageChops.difference(center(a, 64, 64), center(b, 64, 64))
+    if target_box is None:
+        patch = ImageChops.difference(center(a, 64, 64), center(b, 64, 64))
+    else:
+        l,t,r,bottom = target_box
+        if not (0 <= l < r <= 1 and 0 <= t < bottom <= 1):
+            raise ValueError("Invalid normalized target box")
+        dx,dy = (r-l)*.2, (bottom-t)*.2
+        bounds = (round((l+dx)*a.width),round((t+dy)*a.height),round((r-dx)*a.width),round((bottom-dy)*a.height))
+        if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+            raise ValueError("Target box is smaller than a pixel")
+        patch = ImageChops.difference(a.crop(bounds),b.crop(bounds))
     r, g, bl = patch.split()
     histogram = ImageChops.lighter(ImageChops.lighter(r, g), bl).histogram()
     return {"frame_change": sum(ImageStat.Stat(full).mean) / (3 * 255),

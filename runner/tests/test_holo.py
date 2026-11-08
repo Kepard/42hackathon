@@ -81,7 +81,9 @@ def test_nether_route_requires_stone_iron_and_hostile_kill_before_portal():
     assert "ONLY AFTER iron gear and a hostile mob kill, visit ruined portal" in goal
     assert "BEFORE digging for iron" not in goal
     assert "not mandatory if loot" not in goal
-    assert goal.index("mine at least14 cobblestone") < goal.index("Mine/smelt at least7 iron") < goal.index("Find a hostile") < goal.index("visit ruined portal")
+    assert goal.index("mine3 cobblestone") < goal.index("immediately craft stone pick") < goal.index("Mine/smelt at least7 iron") < goal.index("Find a hostile") < goal.index("visit ruined portal")
+    assert "Then8 more for furnace (11 total)" in goal
+    assert "Do NOT keep mining to14 before crafting" in goal
     assert PRIMER.index("4 cobblestone") < PRIMER.index("8 ingot") < PRIMER.index("9 hostile kill") < PRIMER.index("12 portal") < PRIMER.index("Portal: purple tears")
 
 

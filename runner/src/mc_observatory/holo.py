@@ -238,9 +238,9 @@ ROUTE / VISIBLE CHECKLIST (don't skip prerequisites):
 Prefer craft(item,count) in an OPEN inventory/table; atomic search/select/take, pixels-only.
 Craft: use search_recipe(query) to ensure craftable-only filter (GREEN check, not red X) and type the item name FIRST. Blank results mean check item name/grid or missing ingredients. Then click the matching filtered result; unsearched recipe clicks are blocked.
 Observe the output slot: shift-click ONLY if visibly nonempty AND NOT a red-tinted ghost. Red ghost ingredients/output are NOT owned/craftable items. If empty/red, obtain missing ingredients first; never repeat empty-output clicks.
-2 table icon, place/use it -> 3 wooden pickaxe icon (3 planks + 2 sticks).
-4 cobblestone count: mine gray stone WITH pickaxe; 3 cobble -> 5 stone pickaxe icon.
-Gather >=11 more cobble -> 6 furnace icon (8 ring), sword, blocks.
+2 table, place/use -> 3 wooden pickaxe. Break/collect table before leaving.
+4 cobblestone: mine3 WITH pickaxe -> immediately craft5 stone pickaxe.
+Then8 more -> 6 furnace (11 total);2 extra for sword. Don't wait for14.
 7 raw iron icon: cliffs/caves, tan-speckled iron, not copper; mine with
 stone pick. Staircase toward Y16, never straight down; ~7 iron.
 8 ingot icon: furnace raw iron + coal/planks fuel; take output. Iron:

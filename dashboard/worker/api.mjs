@@ -5,8 +5,13 @@ import {handleVideo} from "./video.mjs";
 const STATE_KEY = "observer/state.json";
 const COMMAND_QUEUE_KEY = "observer/commands/current.json";
 const COMMAND_TTL = 30_000;
+const LOGIN_ATTEMPTS_KEY = "observer/operator/attempts.json";
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_CLIENT_LIMIT = 8;
+const LOGIN_GLOBAL_LIMIT = 60;
+const VOICE_CREATE_KEY = "observer/voice/current.json";
 const COMMAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const COMMAND_ACTIONS = new Set(["start_new", "resume", "pause", "stop", "prepare_investigation", "investigate"]);
+const COMMAND_ACTIONS = new Set(["start_new", "resume", "pause", "stop", "prepare_investigation", "investigate", "voice"]);
 const ENGINEERING_ACTIONS = new Set(["prepare_investigation", "investigate"]);
 const ENGINEERING_STATUSES = new Set(["submitting", "unknown", "failed", "new", "claimed", "running", "exit", "error", "suspended", "resuming", "created"]);
 const DIGEST_HASH = /^[a-f0-9]{64}$/;
@@ -17,7 +22,8 @@ const MAX_METADATA = 256 * 1024;
 const MAX_RUN = 8 * 1024 * 1024;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 const FEED_STATUSES = new Set(["online", "stale", "offline", "controller-offline"]);
-const STATE_FIELDS = new Set(["mode", "status", "connected", "run_id", "elapsed_ms", "objective", "strategy", "expected_effect", "keys", "action", "holo_latency_ms", "jev_latency_ms", "metrics", "milestones", "events", "frame_url", "latency_history"]);
+const ROUTES = new Set(["from_scratch", "ruined_portal"]);
+const STATE_FIELDS = new Set(["mode", "route", "launch", "status", "connected", "run_id", "elapsed_ms", "objective", "strategy", "expected_effect", "keys", "action", "holo_latency_ms", "jev_latency_ms", "metrics", "milestones", "events", "frame_url", "latency_history"]);
 const SUMMARY_FIELDS = new Set(["id", "mode", "started_at", "status", "duration_ms", "metrics", "milestones", "config", "protocol", "updated_at"]);
 const ENVELOPE_FIELDS = new Set(["state", "runs", "updated_at", "captured_at", "capture_seq", "feed_status", "source"]);
 const EVENT_FIELDS = new Set(["seq", "type", "elapsed_ms", "timestamp", "data"]);
@@ -27,7 +33,7 @@ const SECRET_TEXT = /(?:\bBearer\s+[^\s,;"']+|\b(?:hk-|cog_|apikey_|sk[-_])[A-Za
 const ASSIGNMENT_TEXT = /\b(?:[A-Za-z_]*api[_-]?key|(?:access_|refresh_|bridge_|ingest_)?token|password|authorization|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
 
 class ApiError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, headers = {}) { super(message); this.status = status; this.headers = headers; }
 }
 
 function json(value, status = 200, extraHeaders = {}) {
@@ -145,7 +151,12 @@ function engineering(value, env, runId, findings = true) {
   }
   return redactBoth(value, env);
 }
-function commandParameters(body) {
+function commandParameters(body, env) {
+  if (body.action === "voice") {
+    knownFields(body, new Set(["id", "action", "text", "session_id", "utterance_id", "run_id"]), "voice command");
+    if (typeof body.text !== "string" || !body.text.trim() || body.text.length > 1000 || typeof body.session_id !== "string" || (body.session_id !== "typed" && !COMMAND_ID.test(body.session_id)) || typeof body.utterance_id !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.utterance_id) || (body.run_id !== null && (typeof body.run_id !== "string" || !RUN_ID.test(body.run_id)))) throw new ApiError(400, "Invalid voice command");
+    return {text: redactBoth(body.text, env), session_id: body.session_id.toLowerCase(), utterance_id: body.utterance_id, run_id: body.run_id};
+  }
   if (!ENGINEERING_ACTIONS.has(body.action)) {
     knownFields(body, new Set(["id", "action"]), "command");
     return {};
@@ -156,6 +167,12 @@ function commandParameters(body) {
   return {run_id: body.run_id, ...(body.action === "investigate" ? {digest_hash: body.digest_hash} : {})};
 }
 async function commandData(value, command, env) {
+  if (command.action === "voice") {
+    knownFields(value, new Set(["intent", "reply", "guidance_id"]), "voice result");
+    if (!["pause", "stop", "resume", "guidance", "question"].includes(value.intent) || typeof value.reply !== "string" || value.reply.length > 2000) throw new ApiError(400, "Invalid voice result");
+    if (value.guidance_id !== undefined) commandId(value.guidance_id);
+    return redactBoth(value, env);
+  }
   if (!ENGINEERING_ACTIONS.has(command.action)) throw new ApiError(400, "This command cannot return investigation data");
   boundedJson(value, MAX_COMMAND_DATA, "Command data");
   if (command.action === "investigate") {
@@ -196,13 +213,34 @@ function summary(value, token, expectedId) {
   if (value.duration_ms !== undefined) finiteNumber(value.duration_ms, "run duration");
   if (value.metrics !== undefined) metrics(value.metrics);
   if (value.milestones !== undefined && (!Array.isArray(value.milestones) || value.milestones.length > 100)) throw new ApiError(400, "Invalid milestones");
+  if (value.config?.route !== undefined && !ROUTES.has(value.config.route)) throw new ApiError(400, "Invalid run route");
   return sanitize(value, token);
+}
+
+function launchState(value) {
+  if (value === null) return;
+  const fields = new Set(["id", "status", "stage", "started_at", "updated_at", "world_name", "run_id", "detail"]);
+  knownFields(value, fields, "launch state");
+  if ([...fields].some((key) => !Object.hasOwn(value, key))) throw new ApiError(400, "Incomplete launch state");
+  commandId(value.id);
+  if (!["preparing", "running", "failed", "cancelled", "interrupted"].includes(value.status) || !["saving", "copying", "loading", "verifying", "starting", "running", "failed", "cancelled", "interrupted"].includes(value.stage)) throw new ApiError(400, "Invalid launch stage");
+  timestamp(value.started_at, "launch timestamp");
+  timestamp(value.updated_at, "launch update timestamp");
+  if (Date.parse(value.updated_at) < Date.parse(value.started_at)) throw new ApiError(400, "Invalid launch timestamp order");
+  if (value.world_name !== null && (typeof value.world_name !== "string" || !value.world_name.trim() || value.world_name.length > 160 || /[/\\\u0000-\u001f]/.test(value.world_name))) throw new ApiError(400, "Invalid public world name");
+  if (value.run_id !== null && (typeof value.run_id !== "string" || !RUN_ID.test(value.run_id))) throw new ApiError(400, "Invalid launch run identity");
+  boundedText(value.detail, 300, "launch detail");
+  // This public payload is presentation state, never an execution plan or
+  // private save location. The launcher supplies generic, user-facing errors.
+  if (/(?:^|\s)(?:\/(?:workspace|home|tmp|var|Users|mnt)\/|[A-Za-z]:\\)/.test(value.detail)) throw new ApiError(400, "Launch detail must not contain private paths");
 }
 
 function state(value, token) {
   if (value === null) return null;
   knownFields(value, STATE_FIELDS, "state");
   if (!["demo", "live"].includes(value.mode)) throw new ApiError(400, "Invalid state mode");
+  if (value.route !== undefined && !ROUTES.has(value.route)) throw new ApiError(400, "Invalid state route");
+  if (value.launch !== undefined) launchState(value.launch);
   if (!["idle", "running", "paused", "error", "unavailable"].includes(value.status)) throw new ApiError(400, "Invalid state status");
   if (value.connected !== undefined && typeof value.connected !== "boolean") throw new ApiError(400, "Invalid connection state");
   for (const key of ["objective", "strategy", "expected_effect"]) if (value[key] !== undefined && (typeof value[key] !== "string" || value[key].length > 5000)) throw new ApiError(400, "Invalid state text");
@@ -275,6 +313,112 @@ async function commandBody(request, maximum = 4096) {
   const raw = await bytes(request, maximum);
   return parseJson(new TextDecoder().decode(raw));
 }
+
+async function admitLogin(request, env) {
+  // Cloudflare supplies this header. Never trust an arbitrary forwarded-for
+  // chain; deployments without a trusted client address share the stricter cap.
+  const address = (request.headers.get("CF-Connecting-IP") || "unknown").slice(0, 128);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${env.CONTROL_TOKEN}\n${address}`));
+  const client = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  // One bounded object, at most 60 hashed clients. A failed conditional write
+  // never grants an uncounted password guess, even across Worker instances.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const stored = await env.BUCKET.get(LOGIN_ATTEMPTS_KEY);
+    const previous = stored ? await stored.json() : null;
+    const now = Date.now();
+    const current = previous && now >= previous.started_at && now < previous.started_at + LOGIN_WINDOW_MS ? previous : {started_at: now, total: 0, clients: {}};
+    const retryAfter = String(Math.max(1, Math.ceil((current.started_at + LOGIN_WINDOW_MS - now) / 1000)));
+    if (current.total >= LOGIN_GLOBAL_LIMIT || (current.clients[client] || 0) >= LOGIN_CLIENT_LIMIT) throw new ApiError(429, "Too many login attempts. Try again shortly.", {"Retry-After": retryAfter});
+    const next = {started_at: current.started_at, total: current.total + 1, clients: {...current.clients, [client]: (current.clients[client] || 0) + 1}};
+    const committed = await env.BUCKET.put(LOGIN_ATTEMPTS_KEY, JSON.stringify(next), {
+      httpMetadata: {contentType: "application/json", cacheControl: "no-store"},
+      onlyIf: stored ? {etagMatches: stored.etag} : {etagDoesNotMatch: "*"},
+    });
+    if (committed) return;
+  }
+  throw new ApiError(429, "Login is busy. Try again shortly.", {"Retry-After": "2"});
+}
+
+async function operatorLogin(request, env) {
+  const origin = new URL(request.url).origin;
+  const site = request.headers.get("Sec-Fetch-Site");
+  if (request.headers.get("Origin") !== origin || (site && site !== "same-origin")) throw new ApiError(403, "Operator login requires a same-origin request");
+  if (typeof env.OPERATOR_PASSWORD_SHA256 !== "string" || !DIGEST_HASH.test(env.OPERATOR_PASSWORD_SHA256) || typeof env.CONTROL_TOKEN !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(env.CONTROL_TOKEN) || env.CONTROL_TOKEN === env.INGEST_TOKEN) throw new ApiError(503, "Operator login is not configured");
+  const body = await commandBody(request, 2048);
+  knownFields(body, new Set(["password"]), "login");
+  if (typeof body.password !== "string" || !body.password.length || new TextEncoder().encode(body.password).byteLength > 1024) throw new ApiError(400, "Invalid password input");
+  await admitLogin(request, env);
+  const actual = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body.password)));
+  const expected = new Uint8Array(env.OPERATOR_PASSWORD_SHA256.match(/../g).map((byte) => parseInt(byte, 16)));
+  let difference = 0;
+  for (let index = 0; index < 32; index++) difference |= actual[index] ^ expected[index];
+  if (difference !== 0) throw new ApiError(401, "Incorrect operator password");
+  return json({token: env.CONTROL_TOKEN});
+}
+
+async function voiceSession(request, env) {
+  await authorized(request, env, true);
+  const site = request.headers.get("Sec-Fetch-Site");
+  if (request.headers.get("Origin") !== new URL(request.url).origin || (site && site !== "same-origin")) throw new ApiError(403, "Voice access requires a same-origin request");
+  if (typeof env.GLADIA_API_KEY !== "string" || env.GLADIA_API_KEY.length < 16) throw new ApiError(503, "Voice transcription is not configured");
+  const body = await commandBody(request, 1024);
+  knownFields(body, new Set(["id"]), "voice session request");
+  const id = commandId(body.id);
+  const key = `observer/voice/requests/${id}.json`;
+  if (await env.BUCKET.get(key)) throw new ApiError(409, "This voice session was already requested. Do not retry it automatically.");
+  const previous = await env.BUCKET.get(VOICE_CREATE_KEY);
+  const active = previous ? await previous.json() : null;
+  const now = Date.now();
+  if (active && now < active.expires_at) throw new ApiError(429, "Voice session creation is busy. Try again shortly.", {"Retry-After": String(Math.max(1, Math.ceil((active.expires_at - now) / 1000)))});
+  const lease = {id, status: "requested", created_at: now, expires_at: now + 30_000};
+  const metadata = {httpMetadata: {contentType: "application/json", cacheControl: "no-store"}};
+  const admitted = await env.BUCKET.put(VOICE_CREATE_KEY, JSON.stringify(lease), {...metadata, onlyIf: previous ? {etagMatches: previous.etag} : {etagDoesNotMatch: "*"}});
+  if (!admitted) throw new ApiError(409, "Another voice session request was accepted first");
+  // Persist the claim before the billable call. A timeout, restart, or failed
+  // response delivery cannot cause this request ID to create another session.
+  const receipt = await env.BUCKET.put(key, JSON.stringify(lease), {...metadata, onlyIf: {etagDoesNotMatch: "*"}});
+  if (!receipt) throw new ApiError(409, "This voice session was already requested");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  let result, failure;
+  let stage = "provider_fetch", providerStatus = null, diagnostic = null;
+  try {
+    // Workers rejects redirect:"error" before sending a request. Manual mode
+    // preserves the same credential boundary: every 3xx is rejected below.
+    const response = await fetch("https://api.gladia.io/v2/live", {method: "POST", redirect: "manual", signal: controller.signal, headers: {"Content-Type": "application/json", "x-gladia-key": env.GLADIA_API_KEY}, body: JSON.stringify({
+      encoding: "wav/pcm", bit_depth: 16, sample_rate: 16000, channels: 1, model: "solaria-1", endpointing: 0.3, maximum_duration_without_endpointing: 5,
+      messages_config: {receive_partial_transcripts: true, receive_final_transcripts: true, receive_lifecycle_events: true, receive_errors: true},
+    })});
+    providerStatus = response.status;
+    stage = "provider_http";
+    if (!response.ok) throw new Error("Transcription provider rejected session creation");
+    stage = "provider_body";
+    const raw = await bytes(response, 64 * 1024);
+    stage = "provider_json";
+    const data = parseJson(new TextDecoder().decode(raw));
+    stage = "provider_id";
+    if (!COMMAND_ID.test(data.id || "")) throw new Error("Invalid transcription session identity");
+    stage = "provider_url";
+    const url = typeof data.url === "string" && data.url.length <= 4096 ? new URL(data.url) : null;
+    if (!url || url.protocol !== "wss:" || (url.hostname !== "gladia.io" && !url.hostname.endsWith(".gladia.io")) || url.username || url.password || url.port || url.hash) throw new Error("Invalid transcription session response");
+    stage = "provider_url_credentials";
+    if (data.url.includes(env.GLADIA_API_KEY) || data.url.includes(env.CONTROL_TOKEN)) throw new Error("Transcription URL contains a permanent credential");
+    result = {id: data.id.toLowerCase(), url: url.href, sample_rate: 16000};
+  } catch {
+    const code = controller.signal.aborted ? "provider_timeout" : stage === "provider_http" ? `provider_http_${providerStatus}` : stage;
+    diagnostic = {stage: code, provider_status: providerStatus};
+    // Only allowlisted stages and numeric status leave this catch. Provider
+    // response bodies, exception messages, headers, and URLs can hold secrets.
+    console.warn("voice_session_unconfirmed", JSON.stringify(diagnostic));
+    failure = new ApiError(controller.signal.aborted ? 504 : 502, `Voice session creation was not confirmed (${code}). It will not be retried automatically.`);
+  } finally { clearTimeout(timer); }
+  // No WebSocket URL, API key, raw provider payload, or audio is persisted.
+  const completed = {...lease, status: result ? "created" : "unconfirmed", completed_at: Date.now(), expires_at: Date.now() + 10_000, ...(diagnostic ? {diagnostic} : {})};
+  await env.BUCKET.put(key, JSON.stringify(completed), {...metadata, onlyIf: {etagMatches: receipt.etag}});
+  await env.BUCKET.put(VOICE_CREATE_KEY, JSON.stringify(completed), {...metadata, onlyIf: {etagMatches: admitted.etag}});
+  if (failure) throw failure;
+  return json(result);
+}
 async function saveCommand(env, command, item) {
   return env.BUCKET.put(`observer/commands/${command.id}.json`, JSON.stringify(command), {
     httpMetadata: {contentType: "application/json", cacheControl: "no-store"},
@@ -287,7 +431,7 @@ async function createCommand(request, env) {
   object(body, "command");
   const id = commandId(body.id);
   if (!COMMAND_ACTIONS.has(body.action)) throw new ApiError(400, "Invalid command action");
-  const parameters = commandParameters(body);
+  const parameters = commandParameters(body, env);
   const existing = await commandRecord(env, id);
   if (existing.command) {
     if (existing.command.action !== body.action || Object.entries(parameters).some(([key, value]) => existing.command[key] !== value)) throw new ApiError(409, "Command ID already belongs to another action or parameters");
@@ -336,9 +480,11 @@ async function commandResult(request, env, id) {
   if (!command) throw new ApiError(404, "Command is unavailable");
   if (ENGINEERING_ACTIONS.has(command.action) && body.run_id != null && body.run_id !== command.run_id) throw new ApiError(400, "Investigation result belongs to another run");
   if (ENGINEERING_ACTIONS.has(command.action) && body.status === "completed" && body.data == null) throw new ApiError(400, "Completed investigation command requires result data");
+  if (command.action === "voice" && body.run_id !== undefined && body.run_id !== command.run_id) throw new ApiError(400, "Voice result belongs to another run");
+  if (command.action === "voice" && body.status === "completed" && body.data == null) throw new ApiError(400, "Completed voice command requires result data");
   const data = body.data === undefined ? undefined : await commandData(body.data, command, env);
   const detail = safeText(body.detail, env.INGEST_TOKEN).split(env.CONTROL_TOKEN || "\u0000").join("[REDACTED]");
-  const run_id = ENGINEERING_ACTIONS.has(command.action) ? command.run_id : body.run_id ?? null;
+  const run_id = ENGINEERING_ACTIONS.has(command.action) || command.action === "voice" ? command.run_id : body.run_id ?? null;
   if (["completed", "failed"].includes(command.status)) {
     if (command.status !== body.status || command.detail !== detail || command.run_id !== run_id || canonical(command.data) !== canonical(data)) throw new ApiError(409, "A command result is immutable");
     return json({ok: true, command});
@@ -482,11 +628,13 @@ export async function handleApi(request, env) {
   if (path.startsWith("/api/live/")) return handleVideo(request, env);
   const runMatch = path.match(/^\/api\/runs\/([^/]+)$/);
   const commandMatch = path.match(/^\/api\/commands\/([^/]+)(\/result)?$/);
-  if (!["/api/state", "/api/capture", "/api/frame.jpg", "/api/ingest", "/api/commands", "/api/commands/next"].includes(path) && !runMatch && !commandMatch) return null;
-  const allowed = ["/api/ingest", "/api/commands"].includes(path) || commandMatch?.[2] ? ["POST"] : runMatch ? ["GET", "POST"] : ["GET"];
+  if (!["/api/state", "/api/capture", "/api/frame.jpg", "/api/ingest", "/api/commands", "/api/commands/next", "/api/operator/login", "/api/voice/session"].includes(path) && !runMatch && !commandMatch) return null;
+  const allowed = ["/api/ingest", "/api/commands", "/api/operator/login", "/api/voice/session"].includes(path) || commandMatch?.[2] ? ["POST"] : runMatch ? ["GET", "POST"] : ["GET"];
   if (!allowed.includes(request.method)) return json({ error: "Method not allowed" }, 405, { Allow: allowed.join(", ") });
   try {
     if (!env.BUCKET) throw new ApiError(503, "Observer storage is unavailable");
+    if (path === "/api/operator/login") return await operatorLogin(request, env);
+    if (path === "/api/voice/session") return await voiceSession(request, env);
     if (path === "/api/state") return json(publicState((await storedState(env.BUCKET)).value));
     if (path === "/api/capture") {
       const value = publicState((await storedState(env.BUCKET)).value);
@@ -501,6 +649,6 @@ export async function handleApi(request, env) {
     try { id = decodeURIComponent(runMatch[1]); } catch { throw new ApiError(400, "Invalid run ID"); }
     return await run(request, env, id);
   } catch (error) {
-    return json({ error: error instanceof ApiError ? error.message : "Observer request failed" }, error instanceof ApiError ? error.status : 500);
+    return json({ error: error instanceof ApiError ? error.message : "Observer request failed" }, error instanceof ApiError ? error.status : 500, error instanceof ApiError ? error.headers : {});
   }
 }

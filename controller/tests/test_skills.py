@@ -83,6 +83,23 @@ def set_inventory(value, items):
     ]
 
 
+def test_first_log_candidate_advertises_navigation_without_inventing_a_valid_path():
+    value = fixture()
+    value["nearby_blocks"] = [cell(7, 65, 0, "oak_log", True)]
+    value["local_blocks"] = [
+        cell(**block["position"]) if block["id"] == "minecraft:oak_log" else block
+        for block in value["local_blocks"]
+    ]
+    candidate = next_skills(GameState.model_validate(value))[0]
+    assert candidate["skill"] == "mine"
+    assert candidate["nearest_target"]["distance"] > value["player"]["block_interaction_range"]
+    assert candidate["execution_mode"] == "navigate_mine_collect"
+    assert candidate["navigation_included"] is True
+    assert candidate["initial_target_reach_required"] is False
+    assert candidate["path_validated"] is False
+    assert candidate["tool_requirement"] == "none"
+
+
 def candidates(items=None):
     return next_skills(GameState.model_validate(fixture(items)))
 
@@ -460,7 +477,8 @@ def test_nether_goal_requires_actual_ready_live_player_in_nether_dimension():
 
 def test_new_goal_preserves_early_prerequisites_and_never_invents_unimplemented_skills():
     state = GameState.model_validate(fixture())
-    assert next_skills(state, goal="nether") == next_skills(state, goal="early_game")
+    assert next_skills(state, goal="nether")[0]["item"] == "minecraft:oak_log"
+    assert next_skills(state, goal="nether")[0]["target_count"] == 3
     finished_early = GameState.model_validate(fixture({"stone_pickaxe": 1, "stone_axe": 1}))
     assert next_skills(finished_early, goal="nether") == []  # Await advertised new capabilities.
     assert not goal_reached(finished_early, "nether")
@@ -489,7 +507,9 @@ def portal_state(items=None, *, baritone_available=True, capabilities=None):
 def test_verified_capability_and_matching_seed_prioritize_direct_nether_route_without_tools():
     state = GameState.model_validate(portal_state())
     before = copy.deepcopy(state.model_dump())
-    options = next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED)
+    options = next_skills(
+        state, goal="nether", declared_seed=PORTAL_ROUTE_SEED, route="ruined_portal"
+    )
     assert len(options) == 1
     candidate = options[0]
     assert candidate["skill"] == "portal"
@@ -513,7 +533,7 @@ def test_verified_capability_and_matching_seed_prioritize_direct_nether_route_wi
 @pytest.mark.parametrize("seed", [None, "", "42", "-1950884254474434484"])
 def test_portal_seed_route_is_never_assumed_for_unknown_or_other_seed(seed):
     state = GameState.model_validate(portal_state({"stone_pickaxe": 1, "stone_axe": 1}))
-    assert next_skills(state, goal="nether", declared_seed=seed) == []
+    assert next_skills(state, goal="nether", declared_seed=seed, route="ruined_portal") == []
 
 
 @pytest.mark.parametrize(
@@ -523,7 +543,10 @@ def test_portal_route_requires_the_exact_advertised_capability(capabilities):
     state = GameState.model_validate(
         portal_state({"stone_pickaxe": 1, "stone_axe": 1}, capabilities=capabilities)
     )
-    assert next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED) == []
+    assert (
+        next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED, route="ruined_portal")
+        == []
+    )
 
 
 def test_portal_route_does_not_override_early_goal_or_missing_pathfinder():
@@ -534,13 +557,18 @@ def test_portal_route_does_not_override_early_goal_or_missing_pathfinder():
     state = GameState.model_validate(
         portal_state({"stone_pickaxe": 1, "stone_axe": 1}, baritone_available=False)
     )
-    assert next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED) == []
+    assert (
+        next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED, route="ruined_portal")
+        == []
+    )
 
 
 def test_owned_portal_supplies_are_evidence_but_never_prove_entry():
     value = portal_state({"obsidian": 1, "fire_charge": 2})
     state = GameState.model_validate(value)
-    candidate = next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED)[0]
+    candidate = next_skills(
+        state, goal="nether", declared_seed=PORTAL_ROUTE_SEED, route="ruined_portal"
+    )[0]
     assert "required_chest_supplies_unverified" not in candidate["risks"]
     assert "seed_route_requires_in_game_verification" in candidate["risks"]
     assert not goal_reached(state, "nether")
@@ -555,7 +583,10 @@ def test_owned_portal_supplies_are_evidence_but_never_prove_entry():
     value["dimension"] = "minecraft:the_nether"
     state = GameState.model_validate(value)
     assert goal_reached(state, "nether")
-    assert next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED) == []
+    assert (
+        next_skills(state, goal="nether", declared_seed=PORTAL_ROUTE_SEED, route="ruined_portal")
+        == []
+    )
 
 
 def test_portal_verified_steps_remain_confirmed_after_materials_are_consumed():

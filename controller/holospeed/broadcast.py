@@ -416,9 +416,9 @@ ENGINEERING_PUBLIC_FIELDS = frozenset(
         "structured_output",
     }
 )
-COMMAND_ACTIONS = frozenset({"start_new", "resume", "pause", "stop"}) | ENGINEERING_ACTIONS
+COMMAND_ACTIONS = frozenset({"start_new", "resume", "pause", "stop", "voice"}) | ENGINEERING_ACTIONS
 COMMAND_STEPS = {
-    "start_new": ("finish", "start"),
+    "start_new": ("new-run",),
     "resume": ("start",),
     "pause": ("pause",),
     "stop": ("finish",),
@@ -576,6 +576,23 @@ class CommandConsumer:
         if not created <= now < expires or not 0 < expires - created <= 30.001:
             raise ValueError("Command is expired, future-dated, or exceeds its maximum lifetime")
         result = {key: value[key] for key in ("id", "action", "created_at", "expires_at")}
+        if value["action"] == "voice":
+            from .voice import validate_command
+
+            voice = validate_command(
+                {
+                    "command_id": identifier,
+                    **{
+                        key: value.get(key)
+                        for key in ("text", "run_id", "session_id", "utterance_id")
+                    },
+                }
+            )
+            if "run_id" not in value:
+                raise ValueError("Voice commands require an explicit run identity")
+            result.update(
+                {key: voice[key] for key in ("text", "run_id", "session_id", "utterance_id")}
+            )
         if value["action"] in ENGINEERING_ACTIONS:
             run_id = value.get("run_id")
             if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
@@ -643,12 +660,17 @@ class CommandConsumer:
         completed_steps = []
         detail = ""
         engineering = record["action"] in ENGINEERING_ACTIONS
+        voice = record["action"] == "voice"
         steps = (
-            (
-                f"devin/{record['run_id']}/{'brief' if record['action'] == 'prepare_investigation' else 'investigate'}",
+            ("voice",)
+            if voice
+            else (
+                (
+                    f"devin/{record['run_id']}/{'brief' if record['action'] == 'prepare_investigation' else 'investigate'}",
+                )
+                if engineering
+                else COMMAND_STEPS[record["action"]]
             )
-            if engineering
-            else COMMAND_STEPS[record["action"]]
         )
         for step in steps:
             remaining = self._timestamp(record["expires_at"]) - time.time()
@@ -671,9 +693,21 @@ class CommandConsumer:
                     **(
                         {"json": {"digest_hash": record["digest_hash"]}}
                         if record["action"] == "investigate"
+                        else {
+                            "json": {
+                                "command_id": record["id"],
+                                **{
+                                    key: record[key]
+                                    for key in ("text", "run_id", "session_id", "utterance_id")
+                                },
+                            }
+                        }
+                        if voice
+                        else {"json": {"command_id": record["id"]}}
+                        if record["action"] == "start_new"
                         else {}
                     ),
-                    timeout=min(5, remaining),
+                    timeout=min(8 if voice else 5, remaining),
                     follow_redirects=False,
                 )
                 if not 200 <= response.status_code < 300:
@@ -709,7 +743,24 @@ class CommandConsumer:
                     elif safe.get("digest_hash") != record["digest_hash"]:
                         raise ValueError("Investigation digest mismatch")
                     record["data"] = safe
-            except (httpx.HTTPError, ValueError, AttributeError):
+                elif voice:
+                    data = response.json().get("data")
+                    if (
+                        not isinstance(data, dict)
+                        or set(data) - {"intent", "reply", "guidance_id"}
+                        or data.get("intent")
+                        not in {"pause", "stop", "resume", "guidance", "question"}
+                        or not isinstance(data.get("reply"), str)
+                        or not 1 <= len(data["reply"]) <= 2000
+                    ):
+                        raise ValueError("Invalid voice command result")
+                    if (
+                        "guidance_id" in data
+                        and str(uuid.UUID(data["guidance_id"])) != data["guidance_id"]
+                    ):
+                        raise ValueError("Invalid guidance identity")
+                    record["data"] = sanitize(data, self.secrets)
+            except (httpx.HTTPError, ValueError, AttributeError, TypeError):
                 detail = "Controller response unavailable; the command may have applied. Inspect the run before retrying."
                 break
             completed_steps.append(step)
@@ -721,16 +772,17 @@ class CommandConsumer:
             record.update(
                 status="completed",
                 detail={
-                    "start_new": "Started a new recorded run in the current Minecraft world.",
+                    "start_new": "Fresh-world preparation accepted. Watch launch progress before gameplay starts.",
                     "resume": "Resumed the current recorded run.",
                     "pause": "Paused gameplay and released agent controls.",
                     "stop": "Stopped and archived the current recorded run.",
                     "prepare_investigation": "Prepared the exact redacted investigation brief. Review it before creating a 2-ACU session.",
                     "investigate": "Investigation submission recorded. Session status and findings appear in this run's engineering panel.",
+                    "voice": "Voice command processed. See its recorded response.",
                 }[record["action"]],
             )
-        if not engineering:
-            record["run_id"] = await self._run_id()
+        if not engineering and not voice:
+            record["run_id"] = None if record["action"] == "start_new" else await self._run_id()
         record["reported"] = False
         self.ledger.write(commands)
 
@@ -750,6 +802,7 @@ class CommandConsumer:
                             reported=False,
                             run_id=record.get("run_id")
                             if record["action"] in ENGINEERING_ACTIONS
+                            or record["action"] == "voice"
                             else None,
                             detail="Previous execution may have applied before interruption. Inspect the run and send a new command; it was not replayed.",
                         )

@@ -80,7 +80,7 @@ class Peer:
         if request.method == "GET" and request.url.path == "/api/state":
             return httpx.Response(200, json={"run_id": RUN_ID, "status": "running"})
         assert request.method == "POST"
-        assert request.url.path in {"/api/start", "/api/pause", "/api/finish"}
+        assert request.url.path in {"/api/start", "/api/pause", "/api/finish", "/api/new-run"}
         if self.local_handler:
             return await self.local_handler(request)
         return httpx.Response(200, json={"ok": True})
@@ -95,7 +95,7 @@ def consumer(client, directory, *, secrets=()):
 @pytest.mark.parametrize(
     ("action", "paths"),
     [
-        ("start_new", ["/api/finish", "/api/start"]),
+        ("start_new", ["/api/new-run"]),
         ("resume", ["/api/start"]),
         ("pause", ["/api/pause"]),
         ("stop", ["/api/finish"]),
@@ -110,7 +110,10 @@ async def test_commands_map_to_local_endpoints_with_cloud_auth_kept_remote(
         await value.poll_once()
     assert [request.url.path for request in peer.mutations] == paths
     assert peer.results[-1]["status"] == "completed"
-    assert peer.results[-1].get("run_id") == RUN_ID
+    assert peer.results[-1].get("run_id") == (None if action == "start_new" else RUN_ID)
+    if action == "start_new":
+        assert json.loads(peer.mutations[0].content) == {"command_id": COMMAND_ID}
+        assert "preparation accepted" in peer.results[-1]["detail"]
     assert isinstance(peer.results[-1]["detail"], str)
     assert len(peer.results[-1]["detail"]) <= 300
     persisted = (tmp_path / ".broadcast-command-state.json").read_text()
@@ -132,7 +135,7 @@ async def test_command_claim_is_atomically_persisted_before_any_local_action(tmp
     async with httpx.AsyncClient(transport=httpx.MockTransport(peer.handle)) as client:
         value, _ = consumer(client, tmp_path)
         await value.poll_once()
-    assert len(peer.mutations) == 2
+    assert len(peer.mutations) == 1
 
 
 @pytest.mark.parametrize(
@@ -225,20 +228,22 @@ async def test_restart_after_uncertain_local_execution_reports_failure_without_r
     assert peer.results[-1]["detail"]
 
 
-async def test_start_new_expiry_after_finish_never_starts_a_new_run(tmp_path, clock):
+async def test_start_new_is_one_idempotent_launch_request_even_when_ack_arrives_at_expiry(
+    tmp_path, clock
+):
     peer = Peer(command("start_new"))
 
-    async def expire_after_finish(request):
-        assert request.url.path == "/api/finish"
+    async def expire_after_acceptance(request):
+        assert request.url.path == "/api/new-run"
         clock[0] = NOW + 30
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(202, json={"ok": True})
 
-    peer.local_handler = expire_after_finish
+    peer.local_handler = expire_after_acceptance
     async with httpx.AsyncClient(transport=httpx.MockTransport(peer.handle)) as client:
         value, _ = consumer(client, tmp_path)
         await value.poll_once()
-    assert [request.url.path for request in peer.mutations] == ["/api/finish"]
-    assert peer.results[-1]["status"] == "failed"
+    assert [request.url.path for request in peer.mutations] == ["/api/new-run"]
+    assert peer.results[-1]["status"] == "completed"
 
 
 async def test_local_http_failure_is_sanitized_persisted_and_never_retried(tmp_path, clock):

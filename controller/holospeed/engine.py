@@ -10,7 +10,7 @@ from collections import deque
 
 from PIL import Image
 
-from .bridge import GameBridge
+from .bridge import BridgeError, GameBridge
 from .config import Settings
 from .demo import DemoBridge, demo_decision
 from .models import Action, Decision
@@ -18,6 +18,8 @@ from .providers import HoloProvider, JevProvider, ProviderError, ReplanRequired
 from .recording import RunRecorder, redact
 from .recovery import shape_recovery_context
 from .strategy import StrategyProvider
+
+_ANY_RUN = object()
 
 
 class RunBudgetReached(RuntimeError):
@@ -45,17 +47,26 @@ class AgentEngine:
         self.previous: Decision | None = None
         self.failures: deque = deque(maxlen=8)
         self.recent: deque = deque(maxlen=8)
+        self.operator_guidance: deque = deque(maxlen=6)
+        self.completed_cast_proof: dict | None = None
         self.events: deque = deque(maxlen=80)
+        self.launcher = None
         self.state = self.initial_state()
 
     def initial_state(self) -> dict:
         return {
             "mode": self.settings.mode,
+            **({"route": self.settings.nether_route} if self.settings.run_goal == "nether" else {}),
             "status": "idle",
             "connected": self.bridge.connected,
             "run_id": None,
+            "launch": self.launcher.snapshot() if self.launcher else None,
             "elapsed_ms": 0,
-            "objective": "Ready for an early-game run",
+            "objective": "Ready to gather, craft, and build a Nether portal"
+            if self.settings.run_goal == "nether" and self.settings.nether_route == "from_scratch"
+            else "Ready for a Nether run"
+            if self.settings.run_goal == "nether"
+            else "Ready for an early-game run",
             "strategy": "Observe, plan, act, verify.",
             "expected_effect": "",
             "keys": [],
@@ -79,7 +90,7 @@ class AgentEngine:
     def snapshot(self) -> dict:
         self.state["connected"] = self.bridge.connected
         if self.recorder:
-            self.state["elapsed_ms"] = self.recorder.elapsed_ms
+            self.state["elapsed_ms"] = self.recorder.duration_ms
         self.state["events"] = list(self.events)
         return json.loads(json.dumps(self.state))
 
@@ -90,6 +101,13 @@ class AgentEngine:
                 queue.get_nowait()
             queue.put_nowait(state)
 
+    def freeze_timer(self, reason: str) -> None:
+        if self.recorder and not self.recorder.closed:
+            # A full disk must not prevent the subsequent control release.
+            with contextlib.suppress(OSError):
+                self.recorder.freeze_duration(reason)
+            self.state["elapsed_ms"] = self.recorder.duration_ms
+
     def log(self, kind: str, data: dict) -> dict | None:
         if self.recorder and not self.recorder.closed:
             event = self.recorder.log(kind, data)
@@ -99,18 +117,40 @@ class AgentEngine:
             return event
         return None
 
-    async def start(self) -> None:
+    def _require_run(self, expected_run_id: object) -> None:
+        if expected_run_id is not _ANY_RUN and self.state.get("run_id") != expected_run_id:
+            raise ValueError("The run changed before this command acquired control; speak again")
+
+    async def start(
+        self,
+        *,
+        expected_run_id: object = _ANY_RUN,
+        arm: bool = False,
+        resume_only: bool = False,
+        launch_id: str | None = None,
+    ) -> None:
         async with self.lock:
+            self._require_run(expected_run_id)
+            if self.launcher:
+                self.launcher.guard_start(launch_id)
+            if resume_only and (self.recorder is None or self.recorder.closed):
+                raise ValueError(
+                    "The recording ended before resume acquired control; start a new run explicitly"
+                )
             if self.task and not self.task.done():
                 return
             if not self.bridge.connected:
                 raise ValueError("Connect the Fabric mod before starting a live run")
             if self.settings.mode == "live" and not self.settings.holo_api_key:
                 raise ValueError("HCOMPANY_API_KEY is required for live mode")
+            if arm and self.settings.mode == "live":
+                await self.bridge.arm()
             if self.recorder is None or self.recorder.closed:
                 self.state = self.initial_state()
                 self.events.clear()
                 self.recent.clear()
+                self.operator_guidance.clear()
+                self.completed_cast_proof = None
                 self.failures.clear()
                 self.view_recoveries = 0
                 if self.settings.mode == "demo":
@@ -129,6 +169,8 @@ class AgentEngine:
                         "planner_interval": self.settings.planner_interval,
                         "minecraft": "1.21.1",
                         "goal": self.settings.run_goal,
+                        "route": self.settings.nether_route,
+                        "route_target": self.settings.route_target,
                         "validate_holo_plans": self.settings.validate_holo_plans,
                         "model_timeout_s": self.settings.model_timeout_s,
                         "max_actions": self.settings.max_actions,
@@ -140,6 +182,7 @@ class AgentEngine:
                     },
                 )
                 self.state["run_id"] = self.recorder.id
+            self.recorder.resume_duration()
             self.previous = None  # Resume always replans from a fresh observation.
             self.generation += 1
             self.state["status"] = "running"
@@ -149,37 +192,73 @@ class AgentEngine:
             self.task = asyncio.create_task(self.run(), name="holospeed-run")
             self.broadcast()
 
-    async def pause(self, reason: str = "Operator paused") -> None:
-        async with self.lock:
-            self.generation += 1
-            if self.state["status"] not in {"idle", "error"}:
-                self.state["status"] = "paused"
-            await self.bridge.stop(reason)
-            if self.task and not self.task.done() and self.task is not asyncio.current_task():
-                self.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self.task
-            self.state.update(keys=[], action=None)
-            self.state["expected_effect"] = (
-                "Inputs released; resume starts from a fresh observation."
-            )
-            self.previous = None
-            self.log("event", {"name": "paused", "detail": reason})
-            self.checkpoint()
-            await self.hud()
-            self.broadcast()
-
-    async def finish(self) -> None:
-        await self.pause("Run ended by operator")
-        if self.recorder and not self.recorder.closed:
-            self.recorder.finish(
-                "error" if self.state["status"] == "error" else "finished",
-                metrics=self.state["metrics"],
-                milestones=self.state["milestones"],
-            )
-        self.state["status"] = "idle"
-        self.state["expected_effect"] = "Run ended. Inspect the recorded actions in replay."
+    async def _pause_locked(self, reason: str) -> None:
+        self.generation += 1
+        if self.state["status"] not in {"idle", "error"}:
+            self.state["status"] = "paused"
+        await self.bridge.stop(reason)
+        if self.task and not self.task.done() and self.task is not asyncio.current_task():
+            self.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.task
+        self.state.update(keys=[], action=None)
+        self.state["expected_effect"] = "Inputs released; resume starts from a fresh observation."
+        self.previous = None
+        self.log("event", {"name": "paused", "detail": reason})
+        self.checkpoint()
+        await self.hud()
         self.broadcast()
+
+    async def _pause_world_locked(self) -> bool:
+        if self.settings.mode == "live" and hasattr(self.bridge, "pause_game"):
+            try:
+                return await self.bridge.pause_game()
+            except BridgeError:
+                pass  # Agent inputs are already released when no pausable local world exists.
+        return False
+
+    async def pause(
+        self,
+        reason: str = "Operator paused",
+        *,
+        expected_run_id: object = _ANY_RUN,
+        pause_world: bool = False,
+    ) -> bool:
+        # Invalidate a launch before waiting for the start/arm lock. Otherwise
+        # an operator pause could wait behind the very arm request it must cancel.
+        self._require_run(expected_run_id)
+        if self.launcher:
+            self.launcher.interrupt(reason)
+        async with self.lock:
+            self._require_run(expected_run_id)
+            await self._pause_locked(reason)
+            return await self._pause_world_locked() if pause_world else False
+
+    async def finish(
+        self,
+        *,
+        expected_run_id: object = _ANY_RUN,
+        pause_world: bool = False,
+        launch_id: str | None = None,
+    ) -> None:
+        self._require_run(expected_run_id)
+        if self.launcher:
+            self.launcher.interrupt("Run ended by operator", launch_id=launch_id)
+        async with self.lock:
+            self._require_run(expected_run_id)
+            self.freeze_timer("operator_finished")
+            await self._pause_locked("Run ended by operator")
+            if self.recorder and not self.recorder.closed:
+                self.recorder.finish(
+                    "error" if self.state["status"] == "error" else "finished",
+                    metrics=self.state["metrics"],
+                    milestones=self.state["milestones"],
+                )
+            self.state["status"] = "idle"
+            self.state["expected_effect"] = "Run ended. Inspect the recorded actions in replay."
+            if pause_world:
+                await self._pause_world_locked()
+            self.broadcast()
 
     def checkpoint(self) -> None:
         if self.recorder and not self.recorder.closed:
@@ -667,6 +746,7 @@ class AgentEngine:
                     m["id"] == "stone_tools" for m in self.state["milestones"]
                 ):
                     self.state["status"] = "paused"
+                    self.freeze_timer("goal_reached")
                     self.log(
                         "event",
                         {
@@ -734,6 +814,7 @@ class AgentEngine:
                 self.broadcast()
                 if any(m["id"] == "stone_tools" for m in self.state["milestones"]):
                     self.state["status"] = "paused"
+                    self.freeze_timer("goal_reached")
                     self.log(
                         "event",
                         {
@@ -748,6 +829,7 @@ class AgentEngine:
             self.state.update(
                 status="paused", expected_effect="Run time budget reached; inputs released."
             )
+            self.freeze_timer("run_budget_reached")
             self.log("event", {"name": "run_budget_reached", "detail": str(error)})
             self.checkpoint()
         except asyncio.CancelledError:
@@ -758,6 +840,7 @@ class AgentEngine:
             raise
         except Exception as error:  # noqa: BLE001 - every unexpected failure must release game inputs.
             self.state["status"] = "error"
+            self.freeze_timer("error")
             self.state["expected_effect"] = (
                 "Inputs released. Review the failure event before resuming."
             )
@@ -772,6 +855,7 @@ class AgentEngine:
 
     async def close(self) -> None:
         terminal_status = "error" if self.state["status"] == "error" else "interrupted"
+        self.freeze_timer(terminal_status)
         await self.pause("Controller shutting down")
         if self.recorder and not self.recorder.closed:
             self.recorder.finish(

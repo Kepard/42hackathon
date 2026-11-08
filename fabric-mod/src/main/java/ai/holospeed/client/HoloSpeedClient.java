@@ -51,6 +51,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
     private BridgeConfig config;
     private BridgeTransport bridge;
     private SkillController skills;
+    private WorldSessionController worlds;
     private KeyBinding emergency;
     private KeyBinding startKey;
     private Map<String, KeyBinding> bindings;
@@ -71,6 +72,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
     private Object skillWorld;
     private long skillDeadline;
     private String pendingArm;
+    private String operatorArmId;
     private long armDeadline;
     private Object armWorld;
     private Object armPlayer;
@@ -100,12 +102,14 @@ public final class HoloSpeedClient implements ClientModInitializer {
         skills = new SkillController(client);
         bridge = new BridgeTransport(config, message -> client.execute(() -> receive(message)),
             () -> client.execute(() -> { cancel("bridge disconnected"); pendingObservation = null; frameId = null; }));
+        worlds = new WorldSessionController(client, bridge::send);
         instance = this;
     }
 
     public static void renderTail() {
         HoloSpeedClient self = instance;
         if (self == null) return;
+        self.worlds.poll();
         self.pollArm();
         self.watchdog();
         // Full vanilla frame, including inventory screens, but no HoloSpeed overlay.
@@ -130,6 +134,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
 
     private void onTick() {
         tick++;
+        worlds.poll();
         pollArm();
         watchdog();
         boolean skillWasActive = skills.active();
@@ -153,10 +158,18 @@ public final class HoloSpeedClient implements ClientModInitializer {
             self.frameId = null;
             self.event("emergency_stop", "F8 pressed");
         } else if (self.startKey.matchesKey(key, scancode)) {
-            self.enabled = true;
-            self.cancel("F9 start requested");
-            self.frameId = null;
-            self.event("start_requested", "F9 pressed");
+            if (self.worlds.active()) {
+                self.enabled = false;
+                self.cancel("F9 pressed during world lifecycle; launch cancelled");
+                self.event("emergency_stop", "world loading must finish before starting controls");
+                return;
+            }
+            // Resume only after the same focused, healthy-world checks used by
+            // dashboard Start, including the render pass that clears isPaused.
+            JsonObject request = new JsonObject();
+            self.operatorArmId = "keyboard-" + UUID.randomUUID();
+            request.addProperty("id", self.operatorArmId);
+            self.arm(request);
         }
     }
 
@@ -194,6 +207,26 @@ public final class HoloSpeedClient implements ClientModInitializer {
                 }
                 case "skill" -> startSkill(message);
                 case "arm" -> arm(message);
+                case "world_unload", "world_load", "world_cancel" -> {
+                    enabled = false;
+                    cancel("world lifecycle requested");
+                    pendingObservation = null;
+                    frameId = null;
+                    gameState.invalidate();
+                    worlds.receive(message, !skills.active() && actionId == null);
+                }
+                case "pause_game" -> {
+                    cancel("completed run: pause world");
+                    JsonObject response = new JsonObject();
+                    response.addProperty("type", "pause_game_ack");
+                    response.addProperty("id", GameStateCache.requestId(message));
+                    boolean local = client.isInSingleplayer() && client.getServer() != null
+                        && !client.getServer().isRemote() && client.player != null && client.world != null;
+                    if (local) client.setScreen(new HoloPauseScreen());
+                    gameState.invalidate();
+                    response.addProperty("status", local ? "paused" : "unavailable");
+                    bridge.send(response);
+                }
                 case "stop" -> { cancel("controller stop"); pendingObservation = null; frameId = null; }
                 case "status" -> status = message.deepCopy();
                 default -> event("protocol_error", "unknown message type");
@@ -318,6 +351,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         try {
             id = GameStateCache.requestId(message);
             if (id.isBlank() || id.length() > 128) throw new IllegalArgumentException("invalid arm request id");
+            if (worlds.active()) throw new IllegalArgumentException("world lifecycle or cancelled-load cleanup is pending");
             cancel("operator start requested");
             enabled = false;
             pendingObservation = null;
@@ -378,6 +412,12 @@ public final class HoloSpeedClient implements ClientModInitializer {
     }
 
     private void armAck(String id, String result, String reason) {
+        if (id.equals(operatorArmId)) {
+            operatorArmId = null;
+            if (result.equals("ready")) event("start_requested", "F9 pressed; controls ready");
+            else event("start_rejected", reason == null ? "controls could not resume" : reason);
+            return;
+        }
         JsonObject response = new JsonObject();
         response.addProperty("type", "arm_ack");
         response.addProperty("id", id);
@@ -405,6 +445,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         JsonObject skill = skills.snapshot();
         if (skills.active() && (skill.get("kind").getAsString().equals("mine")
             || skill.get("kind").getAsString().equals("portal")
+            || skill.get("kind").getAsString().equals("cast_portal")
             || skill.get("phase").getAsString().equals("returning_table"))) {
             Set<String> forced = skillInputs.read();
             if (forced == null) return null;
@@ -439,6 +480,7 @@ public final class HoloSpeedClient implements ClientModInitializer {
         release(); actionId = null;
         rejectPendingArm(reason);
         if (skills != null) skills.cancel(reason);
+        if (worlds != null) worlds.cancel(reason);
         if (id != null) ack(id, "cancelled", start, reason);
     }
 

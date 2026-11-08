@@ -16,8 +16,6 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.RaycastContext;
@@ -61,6 +59,12 @@ public final class FurnaceController {
 
     static boolean ironInput(String registryId) { return registryId != null && IRON_INPUTS.contains(registryId); }
 
+    /** Local slot predictions cannot prove a completed smelt without a newer server sync. */
+    static boolean confirmedInventory(long requestedAfter, long observedSequence, int target, int inventory) {
+        validateBounds(target, 20);
+        return requestedAfter >= 0 && observedSequence > requestedAfter && inventory >= target;
+    }
+
     /** Deliberately excludes wooden tools, sticks, workstations, and nonflammable Nether wood. */
     static int fuelRank(String registryId) {
         if ("minecraft:coal".equals(registryId)) return 0;
@@ -71,27 +75,45 @@ public final class FurnaceController {
     }
 
     private final MinecraftClient client;
+    private final WorkstationPlacement placementHelper;
     private String status = "idle", phase = "idle", reason;
     private int target, maxTicks, elapsed, phaseAt, inventoryCount;
     private int lastClickAt, lastProgressAt, previousTotal, stableCount, stableSince;
     private float previousCook;
     private long deadline;
-    private Object world, player;
+    private Object world, player, connection;
     private FurnaceScreenHandler handler;
-    private boolean openedScreen;
+    private FurnaceScreenHandler ownedHandler;
+    private boolean confirmingInventory;
+    private long furnaceSyncAfter;
     private int originalSelectedSlot = -1;
     private Hand furnaceHand = Hand.MAIN_HAND;
     private BlockPos placedFurnace;
+    private Object furnaceWorld;
+    private BlockPos ownedFurnace;
     private int transferSource = -1, transferBefore;
     private Item transferItem;
 
-    public FurnaceController(MinecraftClient client) { this.client = client; }
+    public FurnaceController(MinecraftClient client) {
+        this.client = client; this.placementHelper = new WorkstationPlacement(client);
+    }
 
     public boolean active() { return status.equals("running"); }
     public String status() { return status; }
     public String phase() { return phase; }
     public String reason() { return reason; }
     public int inventoryCount() { return inventoryCount; }
+
+    /** Only a furnace placed and observed by this executor is an eligible workstation. */
+    public BlockPos knownFurnace() {
+        if (client.world == null || furnaceWorld != client.world) {
+            furnaceWorld = client.world; ownedFurnace = null; ownedHandler = null;
+        }
+        if (ownedFurnace != null && loaded(ownedFurnace) && !client.world.getBlockState(ownedFurnace).isOf(Blocks.FURNACE)) {
+            ownedFurnace = null; ownedHandler = null;
+        }
+        return ownedFurnace;
+    }
 
     /** Target is total ingots in the player's inventory, not a number to add. */
     public void start(int targetCount, int maximumTicks) {
@@ -100,11 +122,17 @@ public final class FurnaceController {
         if (!client.isOnThread() || !ready()) throw new IllegalStateException("a focused, unpaused survival client is required");
         if (client.currentScreen != null && !(client.currentScreen instanceof FurnaceScreen)) throw new IllegalStateException("close the unrelated screen before smelting");
         if (client.currentScreen == null && client.player.currentScreenHandler != client.player.playerScreenHandler) throw new IllegalStateException("wait for the previous container to close before smelting");
+        knownFurnace();
+        if (client.currentScreen instanceof FurnaceScreen
+            && (ownedFurnace == null || client.player.currentScreenHandler != ownedHandler)) {
+            throw new IllegalStateException("only the agent's placed furnace may be used; unrelated contents were preserved");
+        }
         requireEmptyCursor();
         target = targetCount; maxTicks = maximumTicks; elapsed = 0;
-        world = client.world; player = client.player;
+        world = client.world; player = client.player; connection = client.getNetworkHandler();
         deadline = System.nanoTime() + (long) (maximumTicks * 50_000_000L) + 2_000_000_000L;
-        handler = null; openedScreen = false; placedFurnace = null; originalSelectedSlot = -1;
+        handler = null; placedFurnace = null; originalSelectedSlot = -1;
+        confirmingInventory = false; furnaceSyncAfter = ServerInventorySync.INSTANCE.latest(connection);
         transferSource = -1; transferItem = null;
         lastClickAt = 0; lastProgressAt = 0; previousTotal = -1; previousCook = -1;
         stableCount = -1; stableSince = 0;
@@ -112,7 +140,11 @@ public final class FurnaceController {
         status = "running"; reason = null; setPhase("await_furnace");
         try {
             if (inventoryCount >= target) { finish("completed", "inventory target already satisfied"); return; }
-            if (client.currentScreen instanceof FurnaceScreen) return;
+            if (client.currentScreen instanceof FurnaceScreen) {
+                // Resume only through another server-issued inventory snapshot.
+                client.player.closeHandledScreen();
+                ownedHandler = null;
+            }
             BlockHitResult hit = reachableFurnace();
             if (hit != null) openFurnace(hit);
             else preparePlacement();
@@ -140,7 +172,7 @@ public final class FurnaceController {
     public void tick() {
         if (!active()) return;
         elapsed++;
-        if (!ready() || world != client.world || player != client.player) { cancel("world, player, focus or pause changed"); return; }
+        if (!ready() || world != client.world || player != client.player || connection != client.getNetworkHandler()) { cancel("world, player, connection, focus or pause changed"); return; }
         if (elapsed >= maxTicks || System.nanoTime() >= deadline) { finish("failed", "smelting deadline reached"); return; }
         inventoryCount = countIngots();
         try {
@@ -153,6 +185,22 @@ public final class FurnaceController {
             }
             if (handler != null && handler != current) throw new IllegalStateException("furnace screen changed during smelting");
             handler = current;
+            if (phase.equals("await_furnace")) {
+                long observed = ServerInventorySync.INSTANCE.sequence(connection, handler.syncId);
+                if (observed <= furnaceSyncAfter) {
+                    if (elapsed - phaseAt >= 40) throw new IllegalStateException("server furnace inventory did not synchronize");
+                    return;
+                }
+                ownedHandler = handler;
+                if (confirmingInventory) {
+                    if (!confirmedInventory(furnaceSyncAfter, observed, target, inventoryCount)) {
+                        throw new IllegalStateException("server-confirmed inventory lacks the requested iron ingots");
+                    }
+                    client.player.closeHandledScreen();
+                    finish("completed", "iron inventory target verified by a fresh server inventory update");
+                    return;
+                }
+            }
             validateContents();
             if (phase.equals("await_transfer")) {
                 if (elapsed - phaseAt < 10) return;
@@ -165,8 +213,7 @@ public final class FurnaceController {
                 if (inventoryCount <= transferBefore) throw new IllegalStateException("iron output did not reach inventory; check inventory space");
                 setPhase("smelting");
             } else if (phase.equals("await_furnace")) {
-                // Do not act on a screen before its first server slot updates arrive.
-                if (elapsed - phaseAt < 5) return;
+                // The opening server inventory packet above is authoritative.
                 setPhase("smelting");
             }
             int input = count(handler.getSlot(INPUT).getStack());
@@ -177,8 +224,11 @@ public final class FurnaceController {
                 if (stableCount != inventoryCount) { stableCount = inventoryCount; stableSince = elapsed; }
                 setPhaseIfNeeded("verify_inventory");
                 if (elapsed - lastClickAt >= 10 && elapsed - stableSince >= 3) {
-                    if (openedScreen) client.player.closeHandledScreen();
-                    finish("completed", "iron inventory target verified after synchronization");
+                    client.player.closeHandledScreen();
+                    handler = null; ownedHandler = null; confirmingInventory = true;
+                    BlockHitResult hit = reachableFurnace();
+                    if (hit == null) throw new IllegalStateException("owned furnace is unreachable for server inventory confirmation");
+                    openFurnace(hit);
                 }
                 return;
             }
@@ -290,18 +340,20 @@ public final class FurnaceController {
 
     private void openFurnace(BlockHitResult hit) {
         if (client.player.isSneaking()) throw new IllegalStateException("release sneak before opening the furnace");
+        furnaceSyncAfter = ServerInventorySync.INSTANCE.latest(connection);
         if (!client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hit).isAccepted()) throw new IllegalStateException("furnace interaction was rejected");
-        openedScreen = true; setPhase("await_furnace");
+        setPhase("await_furnace");
     }
 
     private void preparePlacement() {
+        placementHelper.reset();
         if (placement() == null) throw new IllegalStateException("no reachable safe furnace placement space");
         var inventory = client.player.getInventory();
         int slot = -1;
         for (int index = 0; index < 36; index++) if (inventory.getStack(index).isOf(Items.FURNACE)) { slot = index; break; }
         furnaceHand = Hand.MAIN_HAND;
         if (slot < 0) {
-            if (!client.player.getOffHandStack().isOf(Items.FURNACE)) throw new IllegalStateException("a reachable or carried furnace is required");
+            if (!client.player.getOffHandStack().isOf(Items.FURNACE)) throw new IllegalStateException("a carried or previously self-placed furnace is required");
             furnaceHand = Hand.OFF_HAND;
         } else {
             originalSelectedSlot = inventory.selectedSlot;
@@ -317,69 +369,38 @@ public final class FurnaceController {
         setPhase("await_furnace_item");
     }
 
-    private record Placement(BlockHitResult hit, BlockPos position) {}
-
-    private Placement placement() {
-        BlockPos center = client.player.getBlockPos(); Vec3d eye = client.player.getEyePos();
-        double nearest = Math.pow(client.player.getBlockInteractionRange(), 2);
-        Placement chosen = null;
-        for (BlockPos candidate : BlockPos.iterate(center.add(-3, -2, -3), center.add(3, 1, 3))) {
-            BlockPos target = candidate.toImmutable(), floor = target.down();
-            if (!loaded(target) || !loaded(floor)) continue;
-            var state = client.world.getBlockState(floor);
-            if (!client.world.getBlockState(target).isAir() || !state.isFullCube(client.world, floor)
-                || !state.isSideSolidFullSquare(client.world, floor, Direction.UP) || state.hasBlockEntity()
-                || state.isOf(Blocks.CRAFTING_TABLE) || hazardous(floor) || hazardous(target)) continue;
-            Box volume = new Box(target);
-            if (client.player.getBoundingBox().intersects(volume) || !client.world.getOtherEntities(client.player, volume).isEmpty()) continue;
-            boolean unsafe = false;
-            for (Direction direction : Direction.values()) if (hazardous(target.offset(direction))) { unsafe = true; break; }
-            if (unsafe) continue;
-            Vec3d top = new Vec3d(floor.getX() + .5, floor.getY() + .999, floor.getZ() + .5);
-            if (eye.squaredDistanceTo(top) > nearest) continue;
-            BlockHitResult hit = raycast(eye, top);
-            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(floor) && hit.getSide() == Direction.UP) {
-                nearest = eye.squaredDistanceTo(top); chosen = new Placement(hit, target);
-            }
-        }
-        return chosen;
-    }
+    private WorkstationPlacement.Candidate placement() { return placementHelper.find(); }
 
     private boolean loaded(BlockPos position) { return client.world.isChunkLoaded(position.getX() >> 4, position.getZ() >> 4); }
-    private boolean hazardous(BlockPos position) {
-        if (!loaded(position)) return true;
-        var block = client.world.getBlockState(position);
-        return !block.getFluidState().isEmpty() || block.isOf(Blocks.FIRE) || block.isOf(Blocks.SOUL_FIRE)
-            || block.isOf(Blocks.MAGMA_BLOCK) || block.isOf(Blocks.CAMPFIRE) || block.isOf(Blocks.SOUL_CAMPFIRE)
-            || block.isOf(Blocks.CACTUS) || block.isOf(Blocks.SWEET_BERRY_BUSH) || block.isOf(Blocks.POWDER_SNOW);
-    }
     private BlockHitResult raycast(Vec3d eye, Vec3d target) {
         return client.world.raycast(new RaycastContext(eye, target, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
     }
     private BlockHitResult reachableFurnace() {
-        BlockPos center = client.player.getBlockPos(); Vec3d eye = client.player.getEyePos();
-        double nearest = Math.pow(client.player.getBlockInteractionRange(), 2); BlockHitResult selected = null;
-        for (BlockPos position : BlockPos.iterate(center.add(-4, -4, -4), center.add(4, 4, 4))) {
-            if (!loaded(position) || !client.world.getBlockState(position).isOf(Blocks.FURNACE)) continue;
-            Vec3d target = Vec3d.ofCenter(position);
-            if (eye.squaredDistanceTo(target) > nearest) continue;
-            BlockHitResult hit = raycast(eye, target);
-            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(position)) { nearest = eye.squaredDistanceTo(target); selected = hit; }
-        }
-        return selected;
+        BlockPos position = knownFurnace();
+        if (position == null || !loaded(position)) return null;
+        Vec3d eye = client.player.getEyePos(), target = Vec3d.ofCenter(position);
+        if (eye.squaredDistanceTo(target) > Math.pow(client.player.getBlockInteractionRange(), 2)) return null;
+        BlockHitResult hit = raycast(eye, target);
+        return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(position) ? hit : null;
     }
 
     private boolean tickPlacement() {
-        if (!phase.equals("await_furnace_item") && !phase.equals("await_furnace_placement")) return false;
+        if (!phase.equals("await_furnace_item") && !phase.equals("clearing_furnace_space") && !phase.equals("await_furnace_placement")) return false;
         if (client.currentScreen != null || client.player.currentScreenHandler != client.player.playerScreenHandler) throw new IllegalStateException("screen changed during furnace placement");
-        if (elapsed - phaseAt < 5) return true;
-        if (phase.equals("await_furnace_item")) {
+        if (!phase.equals("clearing_furnace_space") && elapsed - phaseAt < 5) return true;
+        if (phase.equals("await_furnace_item") || phase.equals("clearing_furnace_space")) {
+            if (placementHelper.pending() && !placementHelper.tickClear(elapsed)) return true;
             if (!client.player.getStackInHand(furnaceHand).isOf(Items.FURNACE)) {
                 if (elapsed - phaseAt < 40) return true;
                 throw new IllegalStateException("furnace did not reach the selected hand");
             }
-            Placement target = placement();
+            WorkstationPlacement.Candidate target = placement();
             if (target == null) throw new IllegalStateException("safe furnace placement space changed");
+            if (target.clear() != null) {
+                placementHelper.beginClear(target, elapsed);
+                setPhase("clearing_furnace_space");
+                return true;
+            }
             if (!client.interactionManager.interactBlock(client.player, furnaceHand, target.hit()).isAccepted()) throw new IllegalStateException("furnace placement was rejected");
             placedFurnace = target.position(); setPhase("await_furnace_placement"); return true;
         }
@@ -387,6 +408,7 @@ public final class FurnaceController {
             if (elapsed - phaseAt < 40) return true;
             throw new IllegalStateException("placed furnace was not confirmed in the client world");
         }
+        furnaceWorld = client.world; ownedFurnace = placedFurnace.toImmutable();
         restoreSelectedSlot();
         BlockHitResult hit = reachableFurnace();
         if (hit == null) throw new IllegalStateException("placed furnace is no longer reachable");
@@ -396,6 +418,7 @@ public final class FurnaceController {
     public void cancel(String detail) { if (active()) finish("cancelled", detail); }
 
     private void finish(String result, String detail) {
+        placementHelper.cancel();
         status = result; phase = result;
         reason = detail == null ? result : detail.substring(0, Math.min(300, detail.length()));
         restoreSelectedSlot();

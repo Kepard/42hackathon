@@ -1,11 +1,17 @@
-# Nether-entry route for the demonstration seed
+# Historical ruined-portal route research
 
-Researched on 2026-11-08 for Minecraft Java 1.21.1, seed
-`-1950884254474434485`. The recommended next milestone is a fresh game-state
-snapshot whose dimension is `minecraft:the_nether`. A built frame, a lit portal,
-or a model claim is not completion.
+This document preserves the **previous** Java 1.21.1 route for seed
+`-1950884254474434485`, researched on 2026-11-08. It is not the active demo route.
+The revised goal uses seed `-7131204740862824481`, gathering and mining all
+supplies and casting an entire portal; see [new route research](new-route-research.md)
+and [current setup](demo-seed.md). The active Fabric mod rejects the old `portal`
+command. Keep the earlier results for comparison, not as a from-scratch benchmark.
 
-## Use the nearby ruined portal first
+For both routes, completion requires a fresh actual `minecraft:the_nether`
+dimension with a ready, living player. A frame, a lit portal, or a model claim
+alone is insufficient.
+
+## Previous route: use the nearby ruined portal first
 
 The seed appears in [KenanKardes's verified 1:15.970 set-seed run](https://www.speedrun.com/mc/runs/y9w6v92z)
 (Java 1.21.1, Easy). Its [linked primary video](https://youtu.be/VmXjyTetO70)
@@ -88,7 +94,8 @@ The exact-seed NPC project above is used only as a factual route reference. Its
 current Git tree lacked a license file when checked, despite a distribution page's
 MIT label; no implementation code was copied from it.
 
-A general lava-pool route would require acquiring iron, a bucket, water, ignition,
-and a verified lava source; building/casting each frame block; then validating the
-same complete-frame and dimension postconditions. That is a larger fallback than
-repairing this already-generated portal, so it is not the first demonstration route.
+The subsequent demonstration replaces this shortcut with gathering/mining iron,
+smelting, crafting a bucket and flint and steel, collecting water, and casting all
+ten frame blocks from natural lava. It then verifies the complete frame and the
+same dimension postcondition. The [new route](new-route-research.md) is the active
+implementation target; the preceding ruined-portal sequence is historical.

@@ -22,8 +22,6 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.RaycastContext;
@@ -49,7 +47,7 @@ public final class SkillController {
     private static final String[] WOODS = {"oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove", "cherry"};
     private static final Set<String> MINE_ITEMS = new HashSet<>();
     private static final Set<String> CRAFT_ITEMS = new HashSet<>();
-    private static final Set<String> TABLE_RECIPES = Set.of("minecraft:wooden_pickaxe", "minecraft:stone_pickaxe", "minecraft:stone_axe");
+    private static final Set<String> TABLE_RECIPES = Set.of("minecraft:wooden_pickaxe", "minecraft:stone_pickaxe", "minecraft:stone_axe", "minecraft:furnace", "minecraft:bucket");
     private static final Set<String> TOOL_MATERIALS = Set.of("minecraft:cobblestone", "minecraft:cobbled_deepslate", "minecraft:blackstone");
     private static final Set<String> REQUEST_FIELDS = Set.of("type", "id", "skill", "item", "target_count", "max_ticks", "target");
     static {
@@ -57,8 +55,8 @@ public final class SkillController {
             MINE_ITEMS.add("minecraft:" + wood + "_log");
             CRAFT_ITEMS.add("minecraft:" + wood + "_planks");
         }
-        MINE_ITEMS.addAll(Set.of("minecraft:stone", "minecraft:cobblestone", "minecraft:deepslate", "minecraft:cobbled_deepslate"));
-        CRAFT_ITEMS.addAll(Set.of("minecraft:stick", "minecraft:crafting_table", "minecraft:wooden_pickaxe", "minecraft:stone_pickaxe", "minecraft:stone_axe"));
+        MINE_ITEMS.addAll(Set.of("minecraft:stone", "minecraft:cobblestone", "minecraft:deepslate", "minecraft:cobbled_deepslate", "minecraft:raw_iron", "minecraft:coal", "minecraft:flint", "minecraft:dirt"));
+        CRAFT_ITEMS.addAll(Set.of("minecraft:stick", "minecraft:crafting_table", "minecraft:wooden_pickaxe", "minecraft:stone_pickaxe", "minecraft:stone_axe", "minecraft:furnace", "minecraft:bucket", "minecraft:flint_and_steel"));
     }
 
     record SkillRequest(String kind, String item, int targetCount, int maxTicks, PortalRoute.Point target) {}
@@ -70,19 +68,21 @@ public final class SkillController {
         String kind = string(request, "skill");
         String item = string(request, "item");
         if (!item.contains(":")) item = "minecraft:" + item;
-        if (!Set.of("mine", "craft", "portal").contains(kind)) throw new IllegalArgumentException("unsupported skill");
+        if (!Set.of("mine", "craft", "smelt", "cast_portal").contains(kind)) throw new IllegalArgumentException("unsupported skill");
         PortalRoute.Point target = null;
-        if (kind.equals("portal")) {
+        if (kind.equals("cast_portal")) {
             if (!item.equals("minecraft:nether_portal")) throw new IllegalArgumentException("unsupported portal target");
             if (!request.has("target") || !request.get("target").isJsonObject()) throw new IllegalArgumentException("portal landmark target must be an object");
-            target = PortalRoute.parseTarget(request.getAsJsonObject("target"));
+            target = CastPortalPlan.parseTarget(request.getAsJsonObject("target"));
+        } else if (kind.equals("smelt")) {
+            if (request.has("target") || !item.equals("minecraft:iron_ingot")) throw new IllegalArgumentException("only iron ingot smelting is supported");
         } else {
             if (request.has("target")) throw new IllegalArgumentException("only portal skills accept a landmark target");
             if (!(kind.equals("mine") ? MINE_ITEMS : CRAFT_ITEMS).contains(item)) throw new IllegalArgumentException("unsupported skill target");
         }
         int count = integer(request, "target_count", 1, 1, 64);
         int ticks = integer(request, "max_ticks", 1200, 20, 1800);
-        if (kind.equals("portal") && count != 1) throw new IllegalArgumentException("portal target_count must be1");
+        if (kind.equals("cast_portal") && count != 1) throw new IllegalArgumentException("portal target_count must be1");
         return new SkillRequest(kind, item, count, ticks, target);
     }
 
@@ -139,7 +139,10 @@ public final class SkillController {
     private int stableSince;
     private long wallDeadline;
     private BaritoneAccess baritone;
-    private RuinedPortalSkill portal;
+    private CastPortalSkill portal;
+    private final FurnaceController furnace;
+    private final FlintSkill flint;
+    private final WorkstationPlacement tablePlacementHelper;
     private boolean cancellationPending;
     private ProgressWatch progress;
     private AbstractRecipeScreenHandler<?, ?> craftHandler;
@@ -156,9 +159,12 @@ public final class SkillController {
     public SkillController(MinecraftClient client) {
         this.client = client;
         this.baritoneAvailable = BaritoneAccess.available();
+        this.furnace = new FurnaceController(client);
+        this.flint = new FlintSkill(client);
+        this.tablePlacementHelper = new WorkstationPlacement(client);
     }
 
-    public boolean active() { return status.equals("running") || cancellationPending || portal != null && portal.active(); }
+    public boolean active() { return status.equals("running") || cancellationPending || portal != null && portal.active() || furnace.active() || flint.active(); }
     public boolean permitsWorldTransition() { return portal != null && portal.permitsWorldTransition(); }
 
     public JsonObject start(JsonObject message) {
@@ -184,11 +190,17 @@ public final class SkillController {
                 finish("completed", "inventory target already satisfied");
                 return ack(id, "completed", reason);
             }
-            if (request.kind().equals("portal")) {
+            if (request.kind().equals("cast_portal")) {
                 if (!baritoneAvailable) throw new IllegalArgumentException("Baritone Fabric API1.11.3 is required for portal navigation");
-                portal = new RuinedPortalSkill(client);
-                portal.start(request.maxTicks());
+                portal = new CastPortalSkill(client);
+                portal.start(request.target(), request.maxTicks());
                 phase = portal.phase();
+            } else if (request.kind().equals("smelt")) {
+                furnace.start(request.targetCount(), request.maxTicks()); phase = furnace.phase();
+                if (!furnace.active()) { status = furnace.status(); reason = furnace.reason(); }
+            } else if (request.kind().equals("mine") && request.item().equals("minecraft:flint")) {
+                if (!baritoneAvailable) throw new IllegalArgumentException("Baritone Fabric API1.11.3 is required for gravel mining");
+                flint.start(request.targetCount(), request.maxTicks()); phase = flint.phase();
             } else if (request.kind().equals("mine")) {
                 if (!baritoneAvailable) throw new IllegalArgumentException("Baritone Fabric API 1.11.3 is not installed");
                 beginMining();
@@ -219,7 +231,7 @@ public final class SkillController {
 
     private int countInventory() {
         if (client.player == null || request == null) return 0;
-        if (request.kind().equals("portal")) return 0;
+        if (request.kind().equals("cast_portal")) return 0;
         String item = outputItem(request.item());
         return client.player.getInventory().count(Registries.ITEM.get(Identifier.of(item)));
     }
@@ -233,6 +245,9 @@ public final class SkillController {
         String target = request.item();
         String[] blocks = target.equals("minecraft:cobblestone") ? new String[]{"minecraft:stone", "minecraft:cobblestone"}
             : target.equals("minecraft:cobbled_deepslate") ? new String[]{"minecraft:deepslate", "minecraft:cobbled_deepslate"}
+            : target.equals("minecraft:raw_iron") ? new String[]{"minecraft:iron_ore", "minecraft:deepslate_iron_ore"}
+            : target.equals("minecraft:coal") ? new String[]{"minecraft:coal_ore", "minecraft:deepslate_coal_ore"}
+            : target.equals("minecraft:dirt") ? new String[]{"minecraft:dirt", "minecraft:grass_block"}
             : new String[]{target};
         setPhase("preparing_mining");
         // Baritone 1.11.3's lookup constructor loads drop registries through a
@@ -248,12 +263,13 @@ public final class SkillController {
     private void launchMining(Object lookup) throws ReflectiveOperationException {
         String target = request.item();
         originalSelectedSlot = client.player.getInventory().selectedSlot;
-        if (target.contains("stone") || target.contains("deepslate")) {
+        if (target.contains("stone") || target.contains("deepslate") || target.equals("minecraft:raw_iron") || target.equals("minecraft:coal")) {
+            var requiredBlock = target.equals("minecraft:raw_iron") ? Blocks.IRON_ORE.getDefaultState() : Blocks.STONE.getDefaultState();
             int toolSlot = -1;
             for (int slot = 0; slot < 36; slot++) {
-                if (client.player.getInventory().getStack(slot).isSuitableFor(Blocks.STONE.getDefaultState())) { toolSlot = slot; break; }
+                if (client.player.getInventory().getStack(slot).isSuitableFor(requiredBlock)) { toolSlot = slot; break; }
             }
-            if (toolSlot < 0 && client.player.getOffHandStack().isSuitableFor(Blocks.STONE.getDefaultState())) toolSlot = 40;
+            if (toolSlot < 0 && client.player.getOffHandStack().isSuitableFor(requiredBlock)) toolSlot = 40;
             if (toolSlot < 0) throw new IllegalArgumentException("a suitable pickaxe is required to collect stone drops");
             selectInventoryItem(toolSlot);
         }
@@ -389,6 +405,7 @@ public final class SkillController {
     }
 
     private void prepareTablePlacement() {
+        tablePlacementHelper.reset();
         if (tablePlacement() == null) throw new IllegalArgumentException("no reachable safe table placement space; move to a clear solid floor");
         var inventory = client.player.getInventory();
         int tableSlot = -1;
@@ -419,60 +436,28 @@ public final class SkillController {
         client.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(hotbar));
     }
 
-    private record TablePlacement(BlockHitResult hit, BlockPos position) {}
-
-    private TablePlacement tablePlacement() {
-        BlockPos center = client.player.getBlockPos();
-        Vec3d eye = client.player.getEyePos();
-        double nearest = client.player.getBlockInteractionRange() * client.player.getBlockInteractionRange();
-        TablePlacement selected = null;
-        for (BlockPos candidate : BlockPos.iterate(center.add(-3, -2, -3), center.add(3, 1, 3))) {
-            BlockPos target = candidate.toImmutable();
-            BlockPos floor = target.down();
-            if (!client.world.isChunkLoaded(target.getX() >> 4, target.getZ() >> 4)) continue;
-            var floorState = client.world.getBlockState(floor);
-            if (!client.world.getBlockState(target).isAir() || !floorState.isFullCube(client.world, floor)
-                || !floorState.isSideSolidFullSquare(client.world, floor, Direction.UP)
-                || floorState.hasBlockEntity() || floorState.isOf(Blocks.CRAFTING_TABLE)
-                || hazardous(floor) || hazardous(target)) continue;
-            Box volume = new Box(target);
-            if (client.player.getBoundingBox().intersects(volume) || !client.world.getOtherEntities(client.player, volume).isEmpty()) continue;
-            boolean unsafe = false;
-            for (Direction direction : Direction.values()) if (hazardous(target.offset(direction))) { unsafe = true; break; }
-            if (unsafe) continue;
-            Vec3d top = new Vec3d(floor.getX() + 0.5, floor.getY() + 0.999, floor.getZ() + 0.5);
-            if (eye.squaredDistanceTo(top) > nearest) continue;
-            BlockHitResult hit = client.world.raycast(new RaycastContext(eye, top, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, client.player));
-            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(floor) && hit.getSide() == Direction.UP) {
-                nearest = eye.squaredDistanceTo(top);
-                selected = new TablePlacement(hit, target);
-            }
-        }
-        return selected;
-    }
-
-    private boolean hazardous(BlockPos position) {
-        if (!client.world.isChunkLoaded(position.getX() >> 4, position.getZ() >> 4)) return true;
-        var block = client.world.getBlockState(position);
-        return !block.getFluidState().isEmpty() || block.isOf(Blocks.FIRE) || block.isOf(Blocks.SOUL_FIRE)
-            || block.isOf(Blocks.MAGMA_BLOCK) || block.isOf(Blocks.CAMPFIRE) || block.isOf(Blocks.SOUL_CAMPFIRE)
-            || block.isOf(Blocks.CACTUS) || block.isOf(Blocks.SWEET_BERRY_BUSH) || block.isOf(Blocks.POWDER_SNOW);
-    }
+    private WorkstationPlacement.Candidate tablePlacement() { return tablePlacementHelper.find(); }
 
     private boolean tickTablePlacement() {
-        if ((phase.equals("await_table_item") || phase.equals("await_table_placement"))
+        if ((phase.equals("await_table_item") || phase.equals("clearing_table_space") || phase.equals("await_table_placement"))
             && (client.currentScreen != null || client.player.currentScreenHandler != client.player.playerScreenHandler
                 || !client.player.currentScreenHandler.getCursorStack().isEmpty())) {
             throw new IllegalStateException("screen or cursor changed during table placement");
         }
-        if (phase.equals("await_table_item")) {
-            if (elapsed - phaseAt < 5) return true;
+        if (phase.equals("await_table_item") || phase.equals("clearing_table_space")) {
+            if (phase.equals("await_table_item") && elapsed - phaseAt < 5) return true;
+            if (tablePlacementHelper.pending() && !tablePlacementHelper.tickClear(elapsed)) return true;
             if (!client.player.getStackInHand(tableHand).isOf(Items.CRAFTING_TABLE)) {
                 if (elapsed - phaseAt < 40) return true;
                 throw new IllegalStateException("crafting table did not reach the selected hand");
             }
-            TablePlacement placement = tablePlacement();
+            WorkstationPlacement.Candidate placement = tablePlacement();
             if (placement == null) throw new IllegalStateException("safe table placement space changed");
+            if (placement.clear() != null) {
+                tablePlacementHelper.beginClear(placement, elapsed);
+                setPhase("clearing_table_space");
+                return true;
+            }
             if (!client.interactionManager.interactBlock(client.player, tableHand, placement.hit()).isAccepted()) throw new IllegalStateException("table placement interaction was rejected");
             placedTable = placement.position();
             setPhase("await_table_placement");
@@ -515,11 +500,21 @@ public final class SkillController {
 
     public void tick() {
         clientTicks++;
-        if (portal != null && (portal.active() || status.equals("running") && request.kind().equals("portal"))) {
+        if (portal != null && (portal.active() || status.equals("running") && request.kind().equals("cast_portal"))) {
             elapsed++;
             portal.tick();
             phase = portal.phase();
             if (!portal.active()) { status = portal.status(); reason = portal.reason(); }
+            return;
+        }
+        if (furnace.active() || status.equals("running") && request != null && request.kind().equals("smelt")) {
+            elapsed++; furnace.tick(); phase = furnace.phase(); inventoryCount = furnace.inventoryCount();
+            if (!furnace.active()) { status = furnace.status(); reason = furnace.reason(); }
+            return;
+        }
+        if (flint.active() || status.equals("running") && request != null && request.kind().equals("mine") && request.item().equals("minecraft:flint")) {
+            elapsed++; flint.tick(); phase = flint.phase(); inventoryCount = flint.inventoryCount();
+            if (!flint.active()) { status = flint.status(); reason = flint.reason(); }
             return;
         }
         if (cancellationPending) { releaseBaritone(); return; }
@@ -622,8 +617,10 @@ public final class SkillController {
     }
 
     private void finish(String result, String detail) {
+        tablePlacementHelper.cancel();
         miningPreparation.cancel();
         if (portal != null) portal.cancel(detail);
+        furnace.cancel(detail); flint.cancel(detail);
         status = result;
         reason = bounded(detail);
         phase = result;
@@ -667,11 +664,19 @@ public final class SkillController {
         JsonArray capabilities = new JsonArray();
         MINE_ITEMS.stream().sorted().forEach(item -> capabilities.add("mine:" + item));
         CRAFT_ITEMS.stream().sorted().forEach(item -> capabilities.add("craft:" + item));
-        if (baritoneAvailable) capabilities.add("portal:minecraft:nether_portal");
+        capabilities.add("smelt:minecraft:iron_ingot");
+        if (baritoneAvailable) capabilities.add("cast_portal:minecraft:nether_portal");
         result.add("capabilities", capabilities);
         JsonArray verified = new JsonArray();
         if (portal != null) portal.verifiedSteps().forEach(verified::add);
         result.add("verified_steps", verified);
+        BlockPos knownFurnace = furnace.knownFurnace();
+        if (knownFurnace == null) result.add("known_furnace", JsonNull.INSTANCE);
+        else {
+            JsonObject position = new JsonObject();
+            position.addProperty("x", knownFurnace.getX()); position.addProperty("y", knownFurnace.getY()); position.addProperty("z", knownFurnace.getZ());
+            result.add("known_furnace", position);
+        }
         BlockPos table = knownTable();
         if (table == null) result.add("known_table", JsonNull.INSTANCE);
         else {
@@ -743,6 +748,9 @@ public final class SkillController {
             customGoalApi.getMethod("setGoalAndPath", goalApi).invoke(customGoal, goal);
         }
         void reserveToolMaterials() throws ReflectiveOperationException {
+            reserveItems(TOOL_MATERIALS);
+        }
+        void reserveItems(Set<String> reserved) throws ReflectiveOperationException {
             Class<?> api = Class.forName("baritone.api.BaritoneAPI");
             Method getter = api.getMethod("getSettings");
             Object settings = getter.invoke(null);
@@ -753,7 +761,7 @@ public final class SkillController {
             List<Item> filtered = new ArrayList<>();
             for (Object entry : items) {
                 if (!(entry instanceof Item item)) throw new IllegalStateException("Baritone throwaway items contains an unsupported value");
-                if (!reserveForCrafting(Registries.ITEM.getId(item).toString())) filtered.add(item);
+                if (!reserved.contains(Registries.ITEM.getId(item).toString())) filtered.add(item);
             }
             // Keep the exact previous value for restoration. Never mutate its list.
             throwawaySetting = setting;

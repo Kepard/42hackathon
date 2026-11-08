@@ -6,9 +6,36 @@
   const JOURNAL_REFRESH_MS = 5000;
   const MILESTONES = {
     wood: "Gather wood", crafting_table: "Craft a table", wooden_pickaxe: "Make a pickaxe", stone_tools: "Reach stone tools",
+    stone_pickaxe: "Make a stone pickaxe", furnace: "Make a furnace", iron_mined: "Mine iron", iron_smelted: "Smelt iron",
+    bucket: "Make a bucket", flint_and_steel: "Acquire flint and steel", water_collected: "Collect water", lava_located: "Locate lava", portal_built: "Build the portal frame",
     portal_located: "Locate the portal", chest_looted: "Loot the portal chest", obsidian_acquired: "Acquire obsidian",
     ignition_acquired: "Acquire ignition", portal_repaired: "Repair the portal", portal_lit: "Light the portal", nether: "Nether entry"
   };
+  const ROUTES = {
+    from_scratch: {
+      label: "From scratch to the Nether", preparation: "BUILD THE KIT", journey: "MINE · SMELT · CAST", caption: "Survival resources. A new portal.",
+      groups: [
+        [["wood", "Wood", "log"], ["crafting_table", "Workbench", "table"], ["wooden_pickaxe", "Wood pick", "pickaxe"], ["stone_pickaxe", "Stone pick", "stone-pickaxe"], ["furnace", "Furnace", "furnace"]],
+        [["iron_mined", "Mine iron", "iron-ore"], ["iron_smelted", "Smelt iron", "iron"], ["bucket", "Bucket", "bucket"], ["flint_and_steel", "Flint & steel", "igniter"], ["water_collected", "Water", "water-bucket"], ["lava_located", "Lava", "lava"], ["portal_built", "Cast frame", "frame"], ["portal_lit", "Light portal", "lit-portal"], ["nether", "Enter Nether", "portal"]]
+      ]
+    },
+    ruined_portal: {
+      label: "Ruined portal route", preparation: "PREPARATION", journey: "NETHER ROUTE", caption: "Locate. Repair. Cross.",
+      groups: [
+        [["wood", "Wood", "log"], ["crafting_table", "Crafting table", "table"], ["wooden_pickaxe", "Wooden pickaxe", "pickaxe"], ["stone_tools", "Stone tools", "stone-pickaxe"]],
+        [["portal_located", "Locate portal", "locate"], ["chest_looted", "Loot chest", "chest"], ["obsidian_acquired", "Obsidian", "obsidian"], ["ignition_acquired", "Ignition", "fire"], ["portal_repaired", "Repair frame", "frame"], ["portal_lit", "Light portal", "lit-portal"], ["nether", "Enter Nether", "portal"]]
+      ]
+    }
+  };
+  function routeProgress(state = {}) {
+    // Existing runs without route metadata retain their original checkpoints.
+    const key = Object.hasOwn(ROUTES, state.route) ? state.route : state.run_id ? "ruined_portal" : "from_scratch";
+    const route = ROUTES[key];
+    const ids = route.groups.flat().map(([id]) => id);
+    const claims = Array.isArray(state.milestones) ? state.milestones : [];
+    const recorded = new Set(claims.map((claim) => claim.id).filter((id) => ids.includes(id)));
+    return {key, ...route, ids, completed: recorded.size};
+  }
   const n = (value) => typeof value === "number" && Number.isFinite(value) ? value : 0;
   const count = (value) => n(value).toLocaleString();
   function timestamp(value) {
@@ -101,7 +128,7 @@
     return parts.length > words ? `${parts.slice(0, words).join(" ")}…` : parts.join(" ");
   }
   function inferenceStage(events, provider, state, fresh, now = Date.now()) {
-    const calls = events.filter((event) => event.type === "inference" && event.data?.provider === provider);
+    const calls = events.filter((event) => event.type === "inference" && event.data?.provider === provider && event.data?.decision_role !== "voice_response");
     const latest = latestEvent(calls, "inference");
     const result = latestEvent(calls.filter((event) => event.data?.phase === "complete"), "inference");
     const failed = latestEvent(calls.filter((event) => event.data?.phase === "failed"), "inference");
@@ -126,6 +153,9 @@
   }
   function eventDescription(event) {
     const data = event.data || {};
+    if (event.type === "voice_received") return `${data.source === "gladia" ? "Gladia transcript" : "Operator message"} · ${data.text || "Instruction recorded"}`;
+    if (event.type === "voice_reply") return `${data.provider === "holo" ? "Holo4" : "Agent"} · ${data.reply || "Reply recorded"}`;
+    if (event.type === "voice_guidance") return `Objective guidance · ${data.text || "Guidance recorded"}`;
     if (event.type === "inference") return `${providerName(data.provider)} · ${data.phase || "request"}${data.task ? ` · ${data.task}` : ""}${data.rationale ? ` · ${data.rationale}` : data.reason ? ` · ${data.reason}` : ""}`;
     if (event.type === "state_summary") return `Game state · tick ${data.tick ?? "—"} · ${Object.keys(data.inventory || {}).length} inventory item types`;
     if (event.type === "skill_decision") return `${providerName(data.provider)} · ${actionDescription(data.candidate)}${data.rationale ? ` · ${data.rationale}` : ""}`;
@@ -172,13 +202,22 @@
     return valid(token) ? token : "";
   }
   function controlAvailability(state, fresh, unlocked, pending) {
-    const ready = Boolean(unlocked && fresh && !pending && state?.status !== "unavailable");
+    const preparing = state?.launch?.status === "preparing";
+    const ready = Boolean(unlocked && fresh && !pending && (preparing || state?.status !== "unavailable"));
     return {
-      start_new: ready && state?.connected === true,
-      resume: ready && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
-      pause: ready && state?.status === "running",
-      stop: ready && Boolean(state?.run_id),
+      start_new: ready && !preparing && Object.hasOwn(state || {}, "launch") && state?.connected === true,
+      resume: ready && !preparing && state?.connected === true && Boolean(state?.run_id) && ["paused", "error"].includes(state?.status),
+      pause: ready && (preparing || state?.status === "running"),
+      stop: ready && (preparing || Boolean(state?.run_id)),
     };
+  }
+  function launchProgress(value) {
+    if (!value || !["preparing", "running", "failed", "cancelled", "interrupted"].includes(value.status)) return null;
+    const stages = ["saving", "copying", "loading", "verifying", "starting"];
+    const labels = {saving: "Saving the previous world", copying: "Copying a clean world", loading: "Loading Minecraft", verifying: "Verifying the fresh spawn", starting: "Starting the agent", running: "Fresh run started", failed: "Launch failed", cancelled: "Launch cancelled", interrupted: "Launch interrupted"};
+    const active = value.status === "preparing";
+    const stage = active && stages.includes(value.stage) ? value.stage : active ? null : value.status;
+    return {active, status: value.status, stage, index: stages.indexOf(stage), label: labels[stage] || "Preparing a fresh run", detail: typeof value.detail === "string" ? value.detail : "", world: typeof value.world_name === "string" ? value.world_name : "", runId: typeof value.run_id === "string" ? value.run_id : null};
   }
 
   function investigationPreview(value, runId) {
@@ -199,7 +238,7 @@
   }
   // Pure helpers can be tested in Node without a browser or network.
   if (typeof module === "object" && module.exports) {
-    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl};
+    module.exports = {timestamp, elapsed, ageLabel, latency, captureState, telemetryState, displayedFrameState, videoPlaybackState, milestoneLabel, itemName, latestEvent, skillTelemetry, eventDescription, eventTypeLabel, mergeEvents, operatorCredential, controlAvailability, concise, inferenceStage, investigationPreview, engineeringStatus, devinSessionUrl, routeProgress, launchProgress};
     return;
   }
 
@@ -256,6 +295,22 @@
   let commandChecking = false;
   let commandLastChecked = 0;
   let commandMessage = "";
+  let loginBusy = false;
+  let loginAttempt = 0;
+  let loginMessage = "";
+  let voiceSession = null;
+  let voicePhase = "idle";
+  let voiceRunId = null;
+  let voiceStartedAt = null;
+  let voicePartial = "";
+  let voiceTranscript = "";
+  let voiceReply = "";
+  let voiceMessage = "";
+  let voiceCurrentCommandId = null;
+  let voiceDisplayRunId;
+  let voiceSeenReceivedSeq = -1;
+  let voiceRetryAt = 0;
+  const voiceQueue = [];
   try {
     const saved = storage?.getItem("holospeed.command");
     if (operatorToken && saved) {
@@ -406,13 +461,17 @@
     }
   }
   function renderState() {
-    const state = envelope?.state || {};
+    const recordedState = envelope?.state || {};
+    const launch = launchProgress(recordedState.launch);
+    // Preparation is not a new gameplay recording. Keep its predecessor in
+    // the journal instead of presenting old progress as the freshly loaded run.
+    const state = launch?.active ? {...recordedState, run_id: null, status: "preparing", action: null, keys: [], metrics: {}, milestones: [], events: [], holo_latency_ms: null, jev_latency_ms: null, objective: "Preparing a fresh Minecraft world.", strategy: launch.detail || "Copy the clean template, load it, and verify the starting state.", expected_effect: "Autonomous gameplay starts after the world is verified."} : recordedState;
     const mode = state.mode;
     const telemetry = telemetryState(envelope, Date.now(), reachable);
-    renderControls(state, telemetry);
-    const label = !telemetry.fresh ? telemetry.label : ({running: "Agent running", paused: "Agent paused", error: "Needs attention", idle: "Agent standing by", finished: "Run finished", completed: "Run complete"})[state.status] || "Waiting for agent";
+    renderControls(recordedState, telemetry);
+    const label = !telemetry.fresh ? telemetry.label : ({running: "Agent running", preparing: "Preparing new run", paused: "Agent paused", error: "Needs attention", idle: "Agent standing by", finished: "Run finished", completed: "Run complete"})[state.status] || "Waiting for agent";
     setStatus($("agent-status"), label, telemetry.fresh ? state.status || "neutral" : "neutral");
-    text("run-context", state.run_id ? `${mode === "demo" ? "SIMULATION · " : ""}${state.run_id}` : "No run connected");
+    text("run-context", launch?.active ? "Fresh world preparation · gameplay has not started" : state.run_id ? `${mode === "demo" ? "SIMULATION · " : ""}${state.run_id}` : "No run connected");
     text("objective", state.objective || "Ready when the agent is.");
     text("strategy", state.strategy || "The current plan will appear once a run begins.");
     text("expected-effect", state.expected_effect || "Waiting for a decision.");
@@ -437,14 +496,8 @@
     const extras = [...held].filter((key) => !["forward", "back", "left", "right", "jump", "sneak", "sprint", "attack", "use"].includes(key));
     if (action.hotbar) extras.push(`Hotbar ${action.hotbar}`);
     text("extra-input", extras.length ? extras.join(" · ") : held.size ? `${held.size} active input${held.size === 1 ? "" : "s"}` : "No held controls");
-    const claims = Array.isArray(state.milestones) ? state.milestones : [];
-    text("milestone-count", `${claims.filter((claim) => MILESTONES[claim.id]).length} / ${Object.keys(MILESTONES).length} milestones`);
-    document.querySelectorAll("[data-milestone]").forEach((element) => {
-      const claim = claims.find((item) => item.id === element.dataset.milestone);
-      element.classList.toggle("claimed", Boolean(claim));
-      element.querySelector("div > span").textContent = claim ? `${elapsed(claim.elapsed_ms)} · ${milestoneLabel(claim, mode)}` : "Not recorded";
-      element.title = evidenceText(claim?.evidence);
-    });
+    renderMilestones(state);
+    $("route-panel").hidden = Boolean(launch?.active);
     if (mode === "demo") text("capture-source", "Game window · agent in simulation mode");
     else text("capture-source", envelope?.source === "minecraft-window" ? "Minecraft window" : "Game window");
     updateCapture();
@@ -461,23 +514,95 @@
       if (Date.now() - journalLastFetched > JOURNAL_REFRESH_MS) fetchJournal();
     }
   }
+  function renderMilestones(state) {
+    const route = routeProgress(state);
+    const panel = $("route-panel");
+    if (panel.dataset.route !== route.key) {
+      panel.dataset.route = route.key;
+      route.groups.forEach((group, index) => {
+        const nodes = group.map(([id, label, icon]) => {
+          const item = document.createElement("li"); item.dataset.milestone = id;
+          const symbol = document.createElement("span"); symbol.className = `milestone-dot item-${icon}`; symbol.setAttribute("aria-hidden", "true");
+          const description = document.createElement("div");
+          const name = document.createElement("strong"); name.textContent = label;
+          const status = document.createElement("span"); status.textContent = "Not recorded";
+          description.append(name, status); item.append(symbol, description);
+          if (id === "nether") {const goal = document.createElement("b"); goal.className = "goal-tag"; goal.textContent = "GOAL"; item.append(goal);}
+          return item;
+        });
+        $(index === 0 ? "preparation-milestones" : "milestones").replaceChildren(...nodes);
+      });
+    }
+    text("progression-title", route.label);
+    text("preparation-label", route.preparation);
+    text("portal-route-label", route.journey);
+    text("portal-route-caption", route.caption);
+    text("milestone-count", `${route.completed} / ${route.ids.length} milestones`);
+    const claims = Array.isArray(state.milestones) ? state.milestones : [];
+    document.querySelectorAll("[data-milestone]").forEach((element) => {
+      const claim = claims.find((item) => item.id === element.dataset.milestone);
+      element.classList.toggle("claimed", Boolean(claim));
+      element.querySelector("div > span").textContent = claim ? `${elapsed(claim.elapsed_ms)} · ${milestoneLabel(claim, state.mode)}` : "Not recorded";
+      element.title = evidenceText(claim?.evidence);
+    });
+  }
   function renderControls(state = envelope?.state || {}, telemetry = telemetryState(envelope, Date.now(), reachable)) {
     const pending = commandBusy || operatorCommand?.status === "pending";
+    const launchSupported = Object.hasOwn(state, "launch");
     const availability = controlAvailability(state, telemetry.fresh, Boolean(operatorToken), pending);
     for (const action of ["start_new", "resume", "pause", "stop"]) $(`control-${action}`).disabled = !availability[action];
     text("operator-status", operatorToken ? "Operator access" : "View only");
     $("operator-status").classList.toggle("unlocked", Boolean(operatorToken));
     $("lock-controls").hidden = !operatorToken;
+    $("operator-unlock-link").hidden = Boolean(operatorToken);
+    renderLogin();
+    renderVoice();
+    renderLaunch(state, telemetry);
+    text("operator-world-note", !launchSupported ? "Launcher not connected" : state.connected !== true && state.launch?.status !== "preparing" ? "Waiting for Minecraft" : "Fresh world · Automatic start");
+    $("control-start_new").title = launchSupported ? "Fresh world · Automatic start" : "Launcher not connected";
     let feedback = commandMessage;
     if (operatorCommand?.status === "pending" && operatorCommand.expires_at) {
       const remaining = Math.max(0, Math.ceil((Date.parse(operatorCommand.expires_at) - Date.now()) / 1000));
       feedback = remaining ? `Command accepted · waiting for the local agent (${remaining}s remaining).` : "Waiting for the final command result…";
     }
-    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : "New recordings use the current Minecraft world. Saved runs below are view-only."));
+    text("control-feedback", feedback || (!operatorToken ? "Operator access is required to control runs." : !telemetry.fresh ? "Waiting for fresh agent telemetry." : !launchSupported ? "Launcher not connected. Fresh-world starts are unavailable until it connects." : state.launch?.status === "preparing" ? "Preparing a clean world. Pause or End run cancels this launch." : "New run loads a clean world copy and starts the agent. Previous runs stay in the journal."));
     if (operatorToken && operatorCommand?.status === "pending" && !commandBusy && !commandChecking && Date.now() - commandLastChecked >= 1000) refreshCommand();
+  }
+  function renderLaunch(state, telemetry) {
+    const launch = launchProgress(state.launch);
+    $("run-launch").hidden = !launch;
+    $("control-pause").title = launch?.active ? "Cancel fresh-world preparation" : "Pause gameplay";
+    $("control-stop").title = launch?.active ? "Cancel this launch and preserve its world" : "Stop and archive the current run";
+    $("control-pause").setAttribute("aria-label", $("control-pause").title);
+    $("control-stop").setAttribute("aria-label", $("control-stop").title);
+    if (!launch) return;
+    $("run-launch").dataset.status = launch.status;
+    $("run-launch").classList.toggle("active", launch.active && telemetry.fresh);
+    text("launch-heading", launch.label);
+    text("launch-state", !telemetry.fresh ? "LAST RECORDED" : launch.active ? "PREPARING" : launch.status.toUpperCase());
+    text("launch-detail", launch.detail || (launch.active ? "Preparing the next world. Gameplay has not started." : "This launch attempt has ended."));
+    $("launch-world").hidden = !launch.world;
+    text("launch-world", launch.world);
+    $("launch-run").hidden = !launch.runId;
+    text("launch-run", launch.runId ? `Recording ${launch.runId}` : "");
+    $("launch-stages").hidden = !launch.active;
+    $("launch-cancel-note").hidden = !launch.active;
+    document.querySelectorAll("[data-launch-stage]").forEach((element) => {
+      const current = element.dataset.launchStage === launch.stage;
+      element.classList.toggle("current", current);
+      if (current) element.setAttribute("aria-current", "step"); else element.removeAttribute?.("aria-current");
+    });
   }
   function lockControls(message = "Controls locked. Public viewing remains available.") {
     operatorToken = "";
+    voiceSession?.cancel();
+    voiceQueue.length = 0;
+    voicePartial = "";
+    voiceMessage = "Microphone off. Unlock controls to speak or send a message.";
+    loginAttempt++;
+    loginBusy = false;
+    loginMessage = "Controls locked. You can continue watching.";
+    $("operator-password").value = "";
     try { storage?.removeItem("holospeed.operator"); storage?.removeItem("holospeed.command"); } catch { /* Memory is cleared regardless. */ }
     commandMessage = message;
     operatorCommand = null;
@@ -485,6 +610,48 @@
     $("devin-confirm").checked = false;
     renderControls();
     renderEngineering();
+  }
+  function renderLogin() {
+    $("operator-login-form").hidden = Boolean(operatorToken);
+    $("operator-footer-lock").hidden = !operatorToken;
+    $("operator-password").disabled = loginBusy;
+    $("operator-login-submit").disabled = loginBusy;
+    text("operator-login-submit", loginBusy ? "Unlocking…" : "Unlock controls");
+    text("operator-access-state", operatorToken ? "UNLOCKED IN THIS TAB" : "VIEW ONLY");
+    $("operator-access-state").classList.toggle("unlocked", Boolean(operatorToken));
+    text("operator-login-feedback", loginMessage || (operatorToken ? "Run controls and Devin investigations are available in this tab." : "Enter the operator password to control runs. Watching is always available."));
+  }
+  async function unlockControls(event) {
+    event?.preventDefault();
+    if (loginBusy || operatorToken) return;
+    const password = $("operator-password").value;
+    $("operator-password").value = "";
+    if (!password || password.length > 512) {loginMessage = "Enter the operator password."; renderLogin(); return;}
+    const attempt = ++loginAttempt;
+    loginBusy = true; loginMessage = "Checking operator access…"; renderLogin();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch("/api/operator/login", {method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal, headers: {"Content-Type": "application/json"}, body: JSON.stringify({password})});
+      if (attempt !== loginAttempt || operatorToken) return;
+      if (!response.ok) {
+        loginMessage = ({400: "Enter a valid operator password.", 401: "That password did not unlock the controls.", 403: "Operator access must be requested from this dashboard.", 429: "Too many attempts. Wait a minute before trying again.", 503: "Password access is not configured yet. Please try again later."})[response.status] || "Controls could not be unlocked. Please try again.";
+        return;
+      }
+      const result = await response.json();
+      if (attempt !== loginAttempt || operatorToken) return;
+      if (typeof result.token !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(result.token)) {loginMessage = "The server did not return valid operator access."; return;}
+      operatorToken = result.token;
+      try {storage?.setItem("holospeed.operator", operatorToken);} catch { /* Access remains available in this page only. */ }
+      loginMessage = "Controls unlocked in this tab. Choose a run action above.";
+      commandMessage = "Operator access unlocked. Run controls are ready when the agent is connected.";
+    } catch (error) {
+      if (attempt !== loginAttempt) return;
+      loginMessage = error.name === "AbortError" ? "The unlock request timed out. Please try again." : "Operator access could not be reached. Please try again.";
+    } finally {
+      clearTimeout(timer);
+      if (attempt === loginAttempt) {loginBusy = false; renderControls(); renderEngineering();}
+    }
   }
   async function commandRequest(path, body) {
     const controller = new AbortController();
@@ -523,6 +690,7 @@
       operatorCommand = {...result, action: result.action || action, submitted_at: submittedAt};
       commandMessage = operatorCommand.status === "pending" ? "Command accepted; waiting for the local agent." : operatorCommand.detail || `Command ${operatorCommand.status}.`;
       handleEngineeringCommand(operatorCommand);
+      handleVoiceCommand(operatorCommand);
     } catch (error) {
       if (operatorToken !== submittedToken || operatorCommand?.id !== id) return;
       if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
@@ -541,12 +709,155 @@
       operatorCommand = {...result, submitted_at: operatorCommand.submitted_at};
       commandMessage = result.status === "completed" ? result.detail || "Command completed." : result.status === "failed" ? `Command failed · ${result.detail || "Inspect the agent status."}` : result.status === "expired" ? "Command expired without a confirmed result. Check the current agent state." : "Command accepted; waiting for the local agent.";
       handleEngineeringCommand(operatorCommand);
+      handleVoiceCommand(operatorCommand);
     } catch (error) {
       if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Open a current private operator link.");
       else if (error.status === 404 && operatorCommand?.id === id && Date.now() - n(operatorCommand.submitted_at) > 45000) {
         operatorCommand = null; commandMessage = "No command acceptance was confirmed. Check the current agent state before retrying.";
       } else commandMessage = "Command result is unavailable; checking again automatically.";
     } finally { commandChecking = false; renderControls(); renderEngineering(); }
+  }
+  function voiceAvailable() {
+    return Boolean(operatorToken && telemetryState(envelope, Date.now(), reachable).fresh);
+  }
+  async function createVoiceSession(signal) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal.addEventListener("abort", abort, {once: true});
+    const timer = setTimeout(abort, 12000);
+    const token = operatorToken;
+    try {
+      const response = await fetch("/api/voice/session", {method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal, headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: JSON.stringify({id: crypto.randomUUID()})});
+      if (!response.ok) {
+        const error = new Error("Voice session unavailable");
+        error.voiceMessage = ({401: "Unlock operator controls before using the microphone.", 409: "That speech session was already requested. Click the microphone to start a new one.", 429: "Please wait a few seconds before starting another recording.", 503: "Voice is not configured yet. You can still use the text field.", 504: "The speech provider timed out. No automatic retry was made."})[response.status] || "The speech service could not start. Use text or try the microphone again.";
+        throw error;
+      }
+      const result = await response.json();
+      if (signal.aborted || operatorToken !== token) throw new Error("Cancelled");
+      return result;
+    } finally {clearTimeout(timer); signal.removeEventListener("abort", abort);}
+  }
+  function toggleVoice() {
+    if (voiceSession?.active) {voiceSession.stop(); return;}
+    if (!voiceAvailable()) return;
+    if (!globalThis.HoloVoice?.Session) {voiceMessage = "Voice streaming is unavailable. Use the text field instead."; renderVoice(); return;}
+    if (!voiceSession) voiceSession = new globalThis.HoloVoice.Session({
+      requestSession: createVoiceSession,
+      onState(phase) {
+        const previous = voicePhase;
+        voicePhase = phase;
+        if (phase === "listening") {voiceStartedAt = Date.now(); voiceMessage = "Speak naturally. Final transcripts are sent to the agent.";}
+        if (["idle", "error", "finishing"].includes(phase)) voiceStartedAt = null;
+        if (phase === "idle" && previous === "finishing" && !voiceQueue.length && operatorCommand?.status !== "pending") voiceMessage = "Microphone off. Start another recording or type below.";
+        if (phase === "finishing") voiceMessage = "Microphone off. Waiting briefly for the final transcript…";
+        renderVoice();
+      },
+      onPartial(value) {voicePartial = value; renderVoice();},
+      onFinal(value) {queueVoice({...value, run_id: voiceRunId});},
+      onError(message) {voiceMessage = message; renderVoice();}
+    });
+    voiceRunId = envelope?.state?.run_id || null;
+    voicePartial = ""; voiceMessage = "Requesting microphone access…";
+    voiceSession.start();
+  }
+  function queueVoice(value) {
+    const textValue = typeof value.text === "string" ? value.text.trim() : "";
+    if (!voiceAvailable() || value.run_id !== (envelope?.state?.run_id || null)) {voiceMessage = "The run or operator connection changed. This instruction was not sent."; renderVoice(); return;}
+    if (!textValue || textValue.length > 1000) {voiceMessage = "Use an instruction under 1,000 characters."; renderVoice(); return;}
+    if (voiceQueue.length >= 5) {voiceMessage = "Five instructions are already waiting. Let the agent catch up before sending another."; renderVoice(); return;}
+    const item = {...value, text: textValue, id: crypto.randomUUID(), queued_at: Date.now()};
+    voiceQueue.push(item);
+    voiceDisplayRunId = value.run_id;
+    voiceCurrentCommandId = item.id;
+    voiceSeenReceivedSeq = Math.max(voiceSeenReceivedSeq, n(latestEvent(envelope?.state?.events || [], "voice_received")?.seq));
+    voiceTranscript = item.text; voiceReply = "";
+    voiceMessage = "Instruction queued for the agent.";
+    renderVoice();
+  }
+  function sendTypedVoice(event) {
+    event?.preventDefault();
+    const value = $("voice-text").value;
+    if (!voiceAvailable() || !value.trim()) return;
+    $("voice-text").value = "";
+    queueVoice({text: value, run_id: envelope?.state?.run_id || null, session_id: "typed", utterance_id: crypto.randomUUID()});
+  }
+  async function sendNextVoice() {
+    if (!voiceAvailable() || !voiceQueue.length || commandBusy || commandChecking || operatorCommand?.status === "pending" || Date.now() < voiceRetryAt) return;
+    const item = voiceQueue.shift();
+    if (item.run_id !== (envelope?.state?.run_id || null) || Date.now() - item.queued_at > 30000) {voiceMessage = "An unsent instruction expired or belonged to a previous run. Please say it again if needed."; renderVoice(); return;}
+    const token = operatorToken;
+    const {id, text: transcript, run_id, session_id, utterance_id} = item;
+    operatorCommand = {id, action: "voice", run_id, status: "pending", submitted_at: Date.now()};
+    try {storage?.setItem("holospeed.command", JSON.stringify({id, submitted_at: operatorCommand.submitted_at}));} catch { /* In-memory command tracking still prevents replay. */ }
+    const submittedAt = operatorCommand.submitted_at;
+    commandBusy = true;
+    voiceMessage = "Sending instruction…"; renderControls();
+    try {
+      const result = await commandRequest("/api/commands", {id, action: "voice", text: transcript, run_id, session_id, utterance_id});
+      if (operatorToken !== token || operatorCommand?.id !== id) return;
+      operatorCommand = {...result, action: "voice", submitted_at: submittedAt};
+      commandMessage = result.detail || "Voice instruction received.";
+      handleVoiceCommand(operatorCommand);
+      if (result.status === "pending") voiceMessage = "Instruction accepted. Waiting for the agent…";
+    } catch (error) {
+      if (operatorToken !== token || operatorCommand?.id !== id) return;
+      if (error.status === 409) {
+        operatorCommand = null;
+        voiceQueue.unshift(item); voiceRetryAt = Date.now() + 1000;
+        voiceMessage = "Another command is finishing. This instruction is waiting.";
+      } else if (error.status === 401 || error.status === 503) lockControls("Operator access is unavailable. Unlock controls again when the agent is ready.");
+      else if (error.status && error.status < 500) {operatorCommand = null; voiceMessage = "The instruction was not accepted. Please check the current run and try again.";}
+      else {voiceMessage = "Delivery is unconfirmed. Checking this instruction ID without sending it again."; commandMessage = voiceMessage;}
+    } finally {commandBusy = false; renderControls(); renderEngineering();}
+  }
+  function handleVoiceCommand(command) {
+    if (command?.action !== "voice" || command.id !== voiceCurrentCommandId || command.status === "pending") return;
+    if (command.status === "completed") {voiceReply = typeof command.data?.reply === "string" ? command.data.reply : command.detail || "Instruction received."; voiceMessage = "Agent replied.";}
+    else voiceMessage = command.detail || `Instruction ${command.status}. No automatic resubmission.`;
+  }
+  function renderVoice() {
+    const currentRun = envelope?.state?.run_id || null;
+    if (voiceDisplayRunId !== currentRun) {
+      voiceDisplayRunId = currentRun; voiceSeenReceivedSeq = -1;
+      voiceTranscript = ""; voiceReply = ""; voiceCurrentCommandId = null;
+    }
+    if (voiceSession?.active && (!operatorToken || voiceRunId !== (envelope?.state?.run_id || null))) {
+      voiceQueue.length = 0; voiceSession.cancel(); voiceMessage = "The run changed. Microphone off; start a new recording when ready.";
+    }
+    const active = voiceSession?.active === true;
+    const available = voiceAvailable();
+    const labels = {permission: "Allow microphone", connecting: "Connecting", listening: "Listening", finishing: "Finalizing", error: "Microphone off", idle: "Microphone off"};
+    $("voice-panel").classList.toggle("listening", voicePhase === "listening");
+    $("voice-toggle").disabled = active ? voicePhase === "finishing" : !available;
+    $("voice-toggle").setAttribute("aria-pressed", String(active));
+    text("voice-toggle-label", active ? voicePhase === "finishing" ? "Finishing…" : "Stop listening" : "Speak");
+    text("voice-status", labels[voicePhase] || "Microphone off");
+    text("voice-timer", voiceStartedAt == null ? "" : `${elapsed(Date.now() - voiceStartedAt)} / 02:00`);
+    $("voice-timer").hidden = voiceStartedAt == null;
+    text("voice-caption", voicePartial || "Live words appear here while you speak.");
+    $("voice-caption").hidden = !voicePartial;
+    $("voice-text").disabled = !available;
+    $("voice-send").disabled = !available || voiceQueue.length >= 5;
+    text("voice-feedback", voiceMessage || (!operatorToken ? "Unlock controls below to speak or send a message." : !available ? "Waiting for the agent connection. Text and voice will be available when it returns." : "Try “pause”, “collect more wood”, or “what are you doing?”"));
+    const events = envelope?.state?.events || [];
+    const received = latestEvent(events, "voice_received");
+    if (received && n(received.seq) > voiceSeenReceivedSeq) {
+      voiceSeenReceivedSeq = n(received.seq);
+      const pendingLocal = voiceQueue.some((item) => item.id === voiceCurrentCommandId) || operatorCommand?.id === voiceCurrentCommandId && operatorCommand?.status === "pending";
+      if (!pendingLocal || received.data?.command_id === voiceCurrentCommandId) {
+        voiceCurrentCommandId = received.data?.command_id;
+        voiceTranscript = typeof received.data?.text === "string" ? received.data.text : "";
+        voiceReply = "";
+      }
+    }
+    const response = latestEvent(events.filter((event) => event.data?.command_id === voiceCurrentCommandId), "voice_reply");
+    if (response?.data?.command_id === voiceCurrentCommandId && typeof response.data.reply === "string") voiceReply = response.data.reply;
+    $("voice-conversation").hidden = !voiceTranscript;
+    text("voice-transcript", voiceTranscript);
+    $("voice-reply-row").hidden = !voiceReply;
+    text("voice-reply", voiceReply);
+    if (available && voiceQueue.length && !commandBusy && !commandChecking && operatorCommand?.status !== "pending" && Date.now() >= voiceRetryAt) sendNextVoice();
   }
   function renderResources(state, telemetry) {
     // Keep only the latest evidence of each kind, scoped to the current run.
@@ -559,8 +870,9 @@
     const skill = skillTelemetry(state.action, resourceEvidence);
     const active = telemetry.fresh && state.status === "running";
     text("skill-state", skill ? active ? "Current skill" : "Last reported skill" : "Current skill");
-    text("skill-name", skill ? state.action.skill === "portal" ? "Navigate · build · enter Nether" : `${skill.name} · ${skill.item}` : "No active skill recorded");
-    text("skill-count", skill ? state.action.skill === "portal" ? "Portal route" : `${skill.count == null ? "—" : count(skill.count)} / ${skill.target == null ? "—" : count(skill.target)}` : "—");
+    const portalSkill = ["portal", "cast_portal"].includes(state.action?.skill);
+    text("skill-name", skill ? portalSkill ? "Navigate · build · enter Nether" : `${skill.name} · ${skill.item}` : "No active skill recorded");
+    text("skill-count", skill ? portalSkill ? "Portal route" : `${skill.count == null ? "—" : count(skill.count)} / ${skill.target == null ? "—" : count(skill.target)}` : "—");
     text("skill-phase", skill ? `${skill.phase || "Awaiting progress"}${skill.event ? ` · sampled ${elapsed(skill.event.elapsed_ms)}` : ""}` : "Skill progress will appear during a state-aware run.");
     text("resource-stamp", sample ? `${telemetry.fresh ? "Recorded" : "Last recorded"} ${elapsed(sample.elapsed_ms)} · tick ${sample.data.tick ?? "—"}` : "No state sample");
     const data = sample?.data || {};
@@ -609,11 +921,11 @@
     const executing = Boolean(telemetry.fresh && state.status === "running" && skill?.event?.data?.skill?.active === true && skillAge != null && skillAge >= -2000 && skillAge < 5000);
     $("mission-executor").classList.toggle("active", executing);
     text("mission-executor-status", executing ? "Executing" : !telemetry.fresh && skill ? "Last recorded" : state.action?.skill && state.status === "running" ? "Awaiting progress" : "Standby");
-    const phase = !telemetry.fresh ? "Telemetry unavailable" : holo.active ? "Holo4 is planning" : jev.active ? "Jev is checking" : executing ? "Acting in Minecraft" : state.status === "paused" ? "Agent paused" : state.status === "error" ? "Needs attention" : "Ready for the next step";
+    const phase = !telemetry.fresh ? "Telemetry unavailable" : holo.active ? "Holo4 is planning" : jev.active ? "Jev is checking" : executing ? "Acting in Minecraft" : state.status === "preparing" ? "Waiting for the fresh world" : state.status === "paused" ? "Agent paused" : state.status === "error" ? "Needs attention" : "Ready for the next step";
     text("mission-flow-state", phase);
     $("mission-flow-state").classList.toggle("active", holo.active || jev.active || executing);
     const progress = $("executor-progress");
-    const quantified = executing && state.action?.skill !== "portal" && Number.isFinite(skill?.count) && Number.isFinite(skill?.target) && skill.target > 0;
+    const quantified = executing && !["portal", "cast_portal"].includes(state.action?.skill) && Number.isFinite(skill?.count) && Number.isFinite(skill?.target) && skill.target > 0;
     progress.hidden = !executing;
     if (quantified) { progress.max = skill.target; progress.value = Math.min(skill.target, Math.max(0, skill.count)); }
     else progress.removeAttribute?.("value");
@@ -713,7 +1025,7 @@
     $("devin-confirmation").hidden = !preview?.can_submit;
     text("devin-prompt", preview?.prompt || "");
     text("devin-digest", preview ? `SHA-256 ${preview.digest_hash}` : "");
-    text("devin-feedback", engineeringMessage || (!operatorToken ? "Open your private operator link to prepare an investigation. Existing findings remain viewable." : engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
+    text("devin-feedback", engineeringMessage || (!operatorToken ? "Unlock controls at the bottom of the page to prepare an investigation. Existing findings remain viewable." : engineeringRun ? "Prepare a redacted brief from this run, review it, then send it to Devin." : "Choose a recorded run to investigate."));
     text("devin-session-status", engineeringStatus(value));
     text("devin-session-detail", value?.status_detail ? `Reported state: ${value.status_detail}${value.updated_at ? ` · updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : ""}` : value?.updated_at ? `Updated ${new Date(value.updated_at).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : "No session has been recorded for this run.");
     const sessionUrl = devinSessionUrl(value?.url);
@@ -885,6 +1197,11 @@
     finally { setTimeout(pollVideo, document.hidden ? 2000 : 1000); }
   }
 
+  $("voice-toggle").addEventListener("click", toggleVoice);
+  $("voice-form").addEventListener("submit", sendTypedVoice);
+  globalThis.addEventListener?.("pagehide", () => {voiceQueue.length = 0; voiceSession?.cancel();});
+  $("operator-login-form").addEventListener("submit", unlockControls);
+  $("operator-footer-lock").addEventListener("click", () => lockControls());
   $("devin-open").addEventListener("click", openEngineering);
   $("devin-open-journal").addEventListener("click", openEngineering);
   $("devin-close").addEventListener("click", closeEngineering);

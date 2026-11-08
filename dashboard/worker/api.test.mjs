@@ -72,6 +72,59 @@ test("waiting state is honest and control routes do not exist", async () => {
   assert.equal((await handleApi(new Request(ORIGIN + "/api/state", { method: "POST" }), configuration)).status, 405);
 });
 
+test("route discriminator survives live metadata and archived summary configuration", async () => {
+  for (const route of ["from_scratch", "ruined_portal"]) {
+    const configuration = env();
+    const input = metadata();
+    input.state.route = route;
+    input.runs[0].config = {route};
+    assert.equal((await handleApi(ingest(input), configuration)).status, 200);
+    const saved = await (await handleApi(get("/api/state"), configuration)).json();
+    assert.equal(saved.state.route, route);
+    assert.equal(saved.runs[0].config.route, route);
+    const archive = {summary: input.runs[0], events: []};
+    assert.equal((await handleApi(postRun("run-1", archive), configuration)).status, 200);
+    assert.equal((await (await handleApi(get("/api/runs/run-1"), configuration)).json()).summary.config.route, route);
+  }
+});
+
+test("invalid route values never enter public state or archives", async () => {
+  for (const route of ["unknown_route", null, 1, {name: "from_scratch"}]) {
+    const configuration = env();
+    const input = metadata();
+    input.state.route = route;
+    assert.equal((await handleApi(ingest(input), configuration)).status, 400);
+    assert.equal((await handleApi(postRun("run-1", {summary: {id: "run-1", config: {route}}, events: []}), configuration)).status, 400);
+    assert.equal(configuration.BUCKET.records.size, 0);
+  }
+});
+
+test("public launch stages retain bounded display metadata without private save paths", async () => {
+  for (const [status, stage] of [["preparing", "copying"], ["preparing", "verifying"], ["running", "running"], ["failed", "failed"], ["cancelled", "cancelled"], ["interrupted", "interrupted"]]) {
+    const configuration = env();
+    const input = metadata();
+    input.state.launch = {id: "d0a560fa-401d-481c-99aa-a540db217e75", status, stage, started_at: input.updated_at, updated_at: input.updated_at, world_name: "HoloSpeed fresh run", run_id: status === "running" ? "run-1" : null, detail: "Preparing a clean copy of the demonstration world."};
+    assert.equal((await handleApi(ingest(input), configuration)).status, 200);
+    assert.deepEqual((await (await handleApi(get("/api/state"), configuration)).json()).state.launch, input.state.launch);
+  }
+  const configuration = env(), input = metadata();
+  input.state.launch = null;
+  assert.equal((await handleApi(ingest(input), configuration)).status, 200);
+  assert.equal((await (await handleApi(get("/api/state"), configuration)).json()).state.launch, null);
+});
+
+test("launch metadata rejects unknown fields, malformed stages, and private paths before writes", async () => {
+  const input = metadata();
+  const launch = {id: "d0a560fa-401d-481c-99aa-a540db217e75", status: "preparing", stage: "copying", started_at: input.updated_at, updated_at: input.updated_at, world_name: null, run_id: null, detail: "Preparing a clean world."};
+  for (const change of [{id: "bad"}, {status: "done"}, {stage: "arbitrary_command"}, {started_at: "today"}, {updated_at: "2000-01-01T00:00:00Z"}, {run_id: "../private"}, {world_name: "/workspace/private/world"}, {world_name: "C:\\private\\world"}, {world_name: "x".repeat(161)}, {detail: "x".repeat(301)}, {detail: "Copy failed at /workspace/private/template"}, {template_path: "/private/world"}, {stage: undefined}]) {
+    const configuration = env();
+    const value = {...launch, ...change};
+    if (value.stage === undefined) delete value.stage;
+    assert.equal((await handleApi(ingest({...input, state: {...input.state, launch: value}}), configuration)).status, 400);
+    assert.equal(configuration.BUCKET.records.size, 0);
+  }
+});
+
 test("lightweight capture metadata omits telemetry and preserves actual capture freshness", async () => {
   const configuration = env();
   const input = metadata(Date.now() - 30000);

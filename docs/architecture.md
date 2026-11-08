@@ -1,158 +1,181 @@
 # State-aware hybrid architecture
 
-The default live mode (`GAMEPLAY_MODE=state`) combines structured Minecraft
-state with Holo4 strategy, Jev candidate selection, and deterministic local
-skills. The environment-backed live default is `RUN_GOAL=nether`: reach the
-Nether and verify the actual dimension change. `RUN_GOAL=early_game` retains the
-wood, table, wooden pickaxe, stone pickaxe, and stone axe benchmark. Direct
-`Settings()` construction defaults to `early_game` for existing fixtures; the
-CLI's environment loader defaults to `nether`.
+The live defaults are `GAMEPLAY_MODE=state`, `RUN_GOAL=nether`, and
+`NETHER_ROUTE=from_scratch`. Holo4 strategy and Jev fresh-state checks select
+bounded local skills that gather, mine, craft, smelt, and build a complete portal
+using normal Minecraft interactions. The demonstration uses Java 1.21.1 seed
+`-7131204740862824481` and natural lava landmark `(4,63,2)`. Structure loot and
+existing portal frames are excluded. [Seed research](new-route-research.md)
+verifies the resources, not an autonomous completion time; roughly two minutes
+remains a performance target until supported by a live run.
 
-Actual resource collection and a separate stone-tools continuation are recorded
-in [state-aware verification](state-aware-verification.md). Fixed-seed development
-trial `20261108T100936-acd35b07` started with empty inventory and reached the
-Nether goal at 25.304 seconds, with zero recorded errors or recoveries. The
-[independent review](run-judge.md) checked all seven linked milestone state assets,
-their hashes, and visual evidence. A fresh repeat after the final merge remains
-pending; this single trial does not establish random-seed reliability.
+`RUN_GOAL=early_game` retains the separate wood-to-stone-pickaxe-and-axe benchmark.
+Direct `Settings()` construction uses that early-game goal for existing fixtures;
+the environment loader defaults to Nether. Earlier successful Nether trials used
+the [historical ruined-portal route](nether-route.md). Their measured times and
+model caveats remain in [verification](state-aware-verification.md) and the
+[independent judge report](run-judge.md); they do not validate the new route.
 
 ```mermaid
 flowchart LR
-    MC[Minecraft 1.21.1 + Fabric] -->|Structured state and screenshots| C[Local controller]
-    C --> P[Prerequisites and bounded skill candidates]
+    MC[Minecraft 1.21.1 + Fabric] -->|State and screenshots| C[Local controller]
+    C --> P[Prerequisites and bounded candidates]
     P --> H[Holo4 strategy and recovery]
-    P --> J[Jev routine candidate choice]
-    H --> V[Fresh state validation]
-    J --> V
-    P -->|Validated fallback| V
-    V --> S[Local skill executor]
-    S --> B[Baritone navigation, mining, pickup]
-    S --> R[Vanilla recipe and interaction APIs]
+    H -->|Proposal plus newly sampled state| J[Jev fresh-state check]
+    P -->|Routine selection| J
+    J --> V[Fresh local eligibility check]
+    V --> S[One local skill at a time]
+    S --> B[Baritone navigation and mining]
+    S --> R[Vanilla crafting, smelting and bucket use]
     B --> MC
     R --> MC
-    C --> L[Complete local run journal]
-    L --> O[Replay and sanitized observer feed]
+    C --> L[Complete local journal]
+    L --> O[Replay and live mission dashboard]
 ```
 
 ## State and planning
 
-The Fabric client provides position, orientation, velocity, health/hunger,
-inventory, current screen and slots, crosshair target, nearby blocks/entities,
-and bounded local geometry. It labels sampled bounds, truncated results, cache
-age, and unknown-world state. This is broader than visual perception, but it is
-not an unlimited map of unloaded chunks. Screenshots preserve the spectator
-experience and give Holo visual context; the agent's HUD is excluded.
+The Fabric client supplies coordinates, orientation, velocity, health/hunger,
+inventory, screens/slots, crosshair, nearby blocks/entities, and bounded local
+geometry. Sampling labels bounds, truncation, cache age, and unknown cells; it
+does not load unseen chunks. Screenshots provide visual context to Holo4 and
+exclude the agent HUD. The strategy summary preserves the complete bounded
+executor capability list so a model does not mistake an omitted capability for
+an unavailable action.
 
-The local prerequisite planner creates valid next candidates from fresh state.
-Skill types are `mine`, `craft`, and the capability-gated `portal`. Mining and
-crafting use an exact item ID, total inventory target, and tick deadline.
-The early-game allowlist covers logs, planks,
-sticks, crafting tables, wooden pickaxes, and the materials/tools for the stone
-goal. A candidate is a next step, not a long script to execute without checking
-the world again. The planner accounts for ingredients already converted into
-tools and remembers a verified crafting-table position, so a return from mining
-does not automatically trigger another wood/table cycle.
+The prerequisite planner selects from `mine`, `craft`, `smelt`, and
+`cast_portal`. Inventory tasks carry an exact item, total inventory target, and
+deadline. The from-scratch opening normally takes 16 skill completions, but
+existing observed supplies can remove redundant steps. It makes a wooden pickaxe
+for three cobblestone, upgrades to a stone pickaxe, then mines furnace materials
+and four raw iron. A stone axe is not required for this route. Recipes account
+for consumed ingredients; world-scoped memory supports returning to a table or
+owned furnace without inventing a new workstation.
 
-The direct portal route requires `MINECRAFT_SEED=-1950884254474434485`, an
-Overworld snapshot, Baritone, and the client's advertised
-`portal:minecraft:nether_portal` capability. Its waypoint is `(48,68,48)` in Java
-1.21.1. This seed-specific route knowledge does not create current-world facts:
-the local executor checks the actual chest, frame, supplies, placement, and
-ignition. The route can start without stone tools. A different or undeclared
-seed never inherits this waypoint. The [protocol](protocol.md) documents its
-bounded composite skill and the [route research](nether-route.md) records sources.
+A bucket and flint and steel consume all four smelted ingots. Actual flint must
+be collected from gravel. Spare wood can fuel the furnace; tools are never
+burned. Nine dirt/cobblestone mold blocks are reserved only after furnace recipe
+consumption, so the same materials are not counted twice. Casting is offered
+only with the exact advertised capability, owned supplies, and configured lava
+landmark. The landmark is route context, not proof of current terrain or a clear
+path. The active mod rejects the old `portal` command; its parser compatibility
+in historical Python records does not make structure looting available.
 
-Holo4 chooses strategy on the first step, when the confirmed milestone phase
-changes, and after a failed skill. When configured, Jev selects the routine next
-candidate even when only one prerequisite remains; without Jev that choice is
-local. Both models select an existing ID; neither rewrites the
-candidate's parameters. Model failures or
-replans are recorded separately from actual physical failures. A deterministic
-candidate fallback still has to pass current local preconditions. Remote model
-latency does not determine how long movement or mining runs.
+Holo4 selects strategy at the first step, a milestone phase change, or recovery.
+Jev checks a newly sampled state after each Holo4 planning attempt when enabled,
+including a correctly labeled local proposal after a Holo4 service failure.
+Jev also selects routine candidates between strategic calls. Both providers
+select an immutable supplied ID; neither rewrites executable parameters. The
+controller resamples and recomputes local eligibility before dispatch.
 
-The orchestration layer currently caps a strategic selection at eight seconds
-or the remaining run budget, whichever is shorter. A selection timeout uses the
-recorded local fallback; it does not leave a key held during another cloud retry.
-
-See [provider contracts](providers.md) for the exact native tool and Jev choice
-formats. The older `GAMEPLAY_MODE=visual` path remains available for comparison;
-its per-action screenshot validation is not the state-aware execution policy.
+Each model call has a stable request ID and real thinking/complete/failed or
+cancelled lifecycle evidence. Strategic calls are bounded to eight seconds or
+the remaining run budget. Service fallbacks are labeled local. An explicit Jev
+veto prevents execution; an outage after a previous veto cannot silently approve
+the same plan. Eight consecutive rejections stop the loop for inspection.
+Controls remain released during inference, and late replies cannot restart a
+paused run. See [provider contracts](providers.md).
 
 ## Normal-mechanics execution
 
-Baritone's supported public API handles path planning, movement, aiming,
-continuous block breaking, and matching dropped-item pickup. Crafting uses the
-actual game recipes and normal client interaction/screen-handler APIs, preserving
-ingredient consumption and server validation. The portal skill combines bounded
-approach, normal chest transfer, frame repair, ignition, and entry. A held log target or a broken
-trunk is not proof that a log reached inventory.
+Baritone's public API handles navigation, mining, aiming, and dropped-item pickup.
+Crafting uses actual unlocked recipes and ordinary screen-handler interactions.
+Flint collection mines gravel and may recycle owned gravel with normal placement
+and breaking; gravel inventory is not flint. The furnace helper places an owned
+furnace, transfers owned ore/fuel, waits for vanilla cooking, and verifies output
+through a fresh server inventory synchronization. It never takes output from an
+unrelated structure furnace. Cancellation releases controls while normal furnace
+cooking may continue.
 
-One skill owns controls at a time. The raw input executor must not fight
-Baritone's key overrides. A skill acknowledgment accepts the request; fresh skill
-status and inventory establish mining/crafting outcomes. Portal completion
-instead requires a fresh, ready, living player in `minecraft:the_nether`;
-an accepted or completed acknowledgment alone cannot establish it.
+The casting executor observes natural water and at least ten exposed still-lava
+sources near the landmark. It chooses a clear 5×6 workspace with six blocks of
+headroom and water-flow separation from the lava pool. Normal placement, mining,
+and bucket use create a nine-block mold and form ten new obsidian frame cells.
+Each cast consumes an individually recorded natural lava source and waits for
+an actual server block update. The final cast consumes the owned water source;
+remaining flow drains before flint and steel ignites the complete 2×3 interior.
+The executor walks into the portal and uses the normal Survival transfer delay.
+[Protocol details](protocol.md) specify bounds and acknowledgments.
 
-Pausing, F8, disconnects, lost focus, unexpected world changes, timeouts, and run
-budgets cancel active work and release input ownership. During an active portal
-skill, the expected dimension transfer releases controls while the controller
-allows up to five seconds for fresh destination state. Other world changes
-pause the run. Stale model replies cannot restart cancelled work.
+One skill owns inputs at a time. An accepted request is not a successful result.
+Inventory tasks require their total inventory postcondition; portal completion
+requires a fresh, ready, living player in `minecraft:the_nether`. Pause, F8,
+disconnect, focus loss, unexpected world changes, death, deadlines, and run budgets
+release control ownership. Expected portal transfer permits up to five seconds
+for destination state while inputs remain released. After goal confirmation the
+controller requests normal single-player pause so an unattended player is not
+left exposed to Nether mobs; pause availability is recorded separately.
 
-State-aware milestones use physical observations: acquired wood/planks, an
-available crafting table, a wooden pickaxe, and the required stone tools. A later
-tool does not fabricate an earlier unobserved milestone, and dropped stacks do
-not count as inventory. Earlier verified milestones may remain recorded after
-their ingredients are consumed. The ordered portal milestones are:
+## Evidence-backed milestones
 
-| Milestone | Required evidence |
+The from-scratch dashboard has fourteen checkpoints:
+
+| Milestone ID | Required recorded evidence |
 | --- | --- |
-| `portal_located` | Client-verified loaded portal geometry. |
-| `chest_looted` | Normal chest transfer followed by authoritative inventory synchronization and relevant item gain. |
-| `obsidian_acquired` | Actual owned obsidian, or its retained client-verified acquisition step. |
-| `ignition_acquired` | Actual flint and steel/fire charge, or its retained client-verified acquisition step. |
-| `portal_repaired` | The client checks the required repaired frame block. |
-| `portal_lit` | The client checks actual portal blocks. |
-| `nether` | Fresh actual Nether dimension with a ready, living player. |
+| `wood` | Owned logs or planks. |
+| `crafting_table` | Owned table or verified available table. |
+| `wooden_pickaxe` | Owned wooden pickaxe. |
+| `stone_pickaxe` | Owned stone pickaxe. |
+| `furnace` | Owned crafted furnace. |
+| `iron_mined` | Owned raw iron or iron ore. |
+| `iron_smelted` | Owned iron ingot. |
+| `bucket` | Owned empty or filled bucket. |
+| `flint_and_steel` | Owned flint and steel. |
+| `water_collected` | Owned water bucket or retained client-verified collection. |
+| `lava_located` | Client-verified natural source pool. |
+| `portal_built` | All ten newly cast frame cells verified. |
+| `portal_lit` | Actual portal interior blocks verified. |
+| `nether` | Fresh actual Nether dimension, ready world, living player. |
 
-The mod's bounded `verified_steps` list retains the six intermediate proofs
-after items are consumed. Phase names, model prose, and later milestones never
-manufacture earlier proofs. Each milestone links to its full recorded state.
+Resource milestones show first acquisition; a skill still needs its full target
+quantity to complete. Earlier proven steps survive normal item consumption.
+Phase names, model prose, later items, and dropped stacks do not manufacture
+missing proofs. Each milestone links to its full state asset, tick, and inventory
+or client-verified evidence.
 
-## Observability and limits
+## Observability and integrations
 
-Local journals retain state/observations, requests and responses, decisions,
-skill commands, acknowledgments, outcome evidence, screenshots, timing, usage,
-failures, and recovery. Credential redaction applies before logging. The hosted
-dashboard receives sanitized state and run journals, including ordinary model
-request/response text; credentials and inline images are removed. Full original
-journals, screenshots, and compressed state assets stay local. Replay inspects
-recorded evidence rather than re-executing the Minecraft world.
+Complete local journals retain observations, compressed states, model payloads,
+decisions, commands, acknowledgments, outcomes, screenshots, usage, timing,
+failures, and recovery, with credential redaction. Hosted journals are sanitized,
+bounded copies; full originals stay local. Replay inspects recorded evidence and
+does not rerun the Minecraft world.
 
-The hosted camera uses Minecraft-window-only H.264/fMP4 HLS. Its target follows
-display refresh, or an explicit `--video-fps 60`; this is separate from measured
-browser playback FPS and actual game-render cadence. A one-FPS JPEG fallback,
-telemetry, archive publication, and operator commands run independently. HLS is
-a rolling live buffer, not a complete video archive.
+The live camera uses Minecraft-window-only H.264/fMP4 HLS. Its target follows
+display refresh or `--video-fps 60`, separately from measured browser FPS and game
+render cadence. A one-FPS JPEG fallback, telemetry, archives, and operator commands
+run independently. HLS is a rolling live buffer rather than a full video archive.
+The mission panel animates actual fresh Holo4/Jev requests and local execution,
+then retains completed decisions without implying continuous inference.
 
-Public viewing and private operator capabilities are separate. Authenticated
-commands have a 30-second delivery window and a durable local dispatch ledger.
-New recorded run archives the current recording and starts another in the same
-world; resume, pause, and stop/archive operate on that recording. Starting uses
-the mod's guarded rearm acknowledgment. See the [dashboard guide](../dashboard/README.md)
-for operator access and publishing.
+Public viewers cannot control the game. Private operator commands have a
+30-second dispatch window and durable claims against accidental replay.
+New run saves and unloads the previous world, copies the verified pristine
+template into a unique save, and loads it through Minecraft's normal client API.
+Only verified empty-inventory, full-health starts arm the agent and begin its timer.
+Pause, Stop, F8, or a disconnected bridge cancel pending automatic startup.
+Old worlds and logs remain available. Resume requires guarded mod rearming. [Dashboard setup](../dashboard/README.md)
+documents access and publishing.
 
-Devin runs outside the gameplay loop. The real v3 integration submits a bounded
-diagnostic digest only when requested, caps an investigation at 2 ACU, and returns
-analysis plus proposed test source for review. A real investigation and its
-validation limits are documented in [the investigation report](devin-investigation.md).
+[Devin engineering](devin.md) prepares an exact redacted run brief for operator
+review, submits the approved hash with a 2-ACU cap, and publishes bounded findings
+and proposed tests. Durable claims prevent duplicate paid submissions. Proposed
+code is not applied automatically and gameplay never waits for the investigation.
+The [real investigation report](devin-investigation.md) preserves its validation
+limits.
 
-Demo mode uses scripted decisions and generated frames, without Minecraft or
-model calls. Historical [verification results](verification.md) identify their
-visual-control architecture and evidence. Use the separate
-[state-aware results](state-aware-verification.md) for measured live outcomes;
-simulation timings and encoder targets are not gameplay performance results.
+[Gladia voice interaction](gladia.md) starts from an explicit microphone gesture.
+The browser streams audio through an ephemeral Gladia session; only final
+transcripts enter the private operator command path. Partial captions do not
+execute controls. Pause/stop/resume use bounded local commands; guidance informs
+Holo4 within the available skills, and questions use recorded state. Server
+credentials remain private, and raw microphone audio is not stored by HoloSpeed.
+API/synthetic-audio verification is distinct from production microphone testing.
+
+Demo mode uses scripted decisions and synthetic frames without Minecraft or model
+calls. Historical [visual-mode results](verification.md) and current
+[state-aware results](state-aware-verification.md) keep their architecture and
+limits explicit.
 
 ## Reused components and attribution
 

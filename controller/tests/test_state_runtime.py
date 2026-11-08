@@ -454,7 +454,11 @@ class PortalBridge(SkillBridge):
 async def test_portal_goal_completes_only_after_ready_nether_snapshot(tmp_path, stale_polls):
     bridge = PortalBridge(stale_polls=stale_polls)
     engine, _, strategist = await engine_with_fakes(
-        tmp_path, bridge, run_goal="nether", declared_seed="-1950884254474434485"
+        tmp_path,
+        bridge,
+        run_goal="nether",
+        nether_route="ruined_portal",
+        declared_seed="-1950884254474434485",
     )
     try:
         await engine.start()
@@ -494,7 +498,11 @@ async def test_portal_goal_completes_only_after_ready_nether_snapshot(tmp_path, 
 async def test_completed_portal_ack_in_overworld_never_earns_goal_or_action(tmp_path):
     bridge = PortalBridge(behavior="false_completion")
     engine, _, _ = await engine_with_fakes(
-        tmp_path, bridge, run_goal="nether", declared_seed="-1950884254474434485"
+        tmp_path,
+        bridge,
+        run_goal="nether",
+        nether_route="ruined_portal",
+        declared_seed="-1950884254474434485",
     )
     try:
         await engine.start()
@@ -517,6 +525,7 @@ async def test_transition_grace_cannot_extend_global_run_deadline(tmp_path):
         tmp_path,
         bridge,
         run_goal="nether",
+        nether_route="ruined_portal",
         declared_seed="-1950884254474434485",
         max_run_seconds=0.3,
     )
@@ -538,7 +547,11 @@ async def test_transition_grace_cannot_extend_global_run_deadline(tmp_path):
 async def test_portal_transfer_does_not_retry_unrelated_bridge_failure(tmp_path):
     bridge = PortalBridge(failure="Minecraft disconnected")
     engine, _, _ = await engine_with_fakes(
-        tmp_path, bridge, run_goal="nether", declared_seed="-1950884254474434485"
+        tmp_path,
+        bridge,
+        run_goal="nether",
+        nether_route="ruined_portal",
+        declared_seed="-1950884254474434485",
     )
     try:
         await engine.start()

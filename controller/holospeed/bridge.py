@@ -22,6 +22,7 @@ class GameBridge:
         self.lock = asyncio.Lock()
         self.frames: dict[str, float] = {}
         self.ready = False
+        self.journal = None
 
     @property
     def connected(self) -> bool:
@@ -48,6 +49,8 @@ class GameBridge:
         self.pending.clear()
 
     async def receive(self, message: dict[str, Any]) -> None:
+        if message.get("type") == "ack" and self.journal:
+            self.journal("bridge_ack", message)
         if message.get("type") == "hello":
             if message.get("protocol") != 1 or message.get("minecraft") != "1.21.1":
                 raise BridgeError("This controller requires protocol 1 / Minecraft 1.21.1")
@@ -61,6 +64,8 @@ class GameBridge:
         if self.socket is None:
             raise BridgeError("Minecraft is not connected")
         async with self.lock:
+            if message.get("type") != "status" and self.journal:
+                self.journal("bridge_command", message)
             await self.socket.send_json(message)
 
     async def request(self, message: dict[str, Any], timeout: float) -> dict[str, Any]:

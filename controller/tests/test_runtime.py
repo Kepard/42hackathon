@@ -202,6 +202,107 @@ async def test_pause_during_inference_never_executes_late_result(tmp_path, suppr
         await engine.close()
 
 
+@pytest.mark.parametrize("suppress_cancellation", [False, True])
+async def test_run_deadline_cancels_inference_without_executing_late_result(
+    tmp_path, suppress_cancellation
+):
+    bridge = FakeBridge()
+    engine = AgentEngine(
+        Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused", max_run_seconds=0.1),
+        bridge,
+    )
+    await engine.holo.aclose()
+    provider = WaitingProvider(suppress_cancellation=suppress_cancellation)
+    engine.holo = provider
+    try:
+        await engine.start()
+        await asyncio.wait_for(provider.entered.wait(), timeout=1)
+        await asyncio.wait_for(engine.task, timeout=2)
+        assert provider.cancelled.is_set()
+        assert bridge.executed == []
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 0
+        assert engine.state["metrics"]["errors"] == 0
+        assert engine.state["keys"] == [] and engine.state["action"] is None
+        assert bridge.stops[-1] == "Agent loop stopped"
+        events = read_events(engine.recorder.path / "events.jsonl")
+        assert not any(event["type"] in {"action", "ack", "error"} for event in events)
+        assert any(
+            event["type"] == "event" and event["data"].get("name") == "run_budget_reached"
+            for event in events
+        )
+        summary = json.loads((engine.recorder.path / "summary.json").read_text())
+        assert summary["status"] == "paused"
+        assert summary["metrics"]["actions"] == 0
+    finally:
+        await engine.close()
+
+
+async def test_run_deadline_cancels_execution_and_releases_inputs_without_completed_ack(
+    tmp_path, monkeypatch
+):
+    class SlowBridge(FakeBridge):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def execute(self, action, frame_id, ttl_ms):
+            self.executed.append((action, frame_id, ttl_ms))
+            self.entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    bridge = SlowBridge()
+    engine = AgentEngine(
+        Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused", max_run_seconds=0.1),
+        bridge,
+    )
+
+    async def decide(observation, context):
+        return ModelResult(
+            decision=Decision(
+                objective="Approach a visible tree",
+                strategy="Walk toward the trunk",
+                expected_effect="Trunk becomes closer",
+                action=Action(keys=["forward"], duration_ticks=10),
+            ),
+            request={"frame_id": observation.frame_id},
+            response={"plan": True},
+            latency_ms=1,
+            model="fake-holo",
+        )
+
+    monkeypatch.setattr(engine.holo, "decide", decide)
+    try:
+        await engine.start()
+        await asyncio.wait_for(bridge.entered.wait(), timeout=1)
+        assert engine.state["keys"] == ["forward"]
+        await asyncio.wait_for(engine.task, timeout=2)
+        assert bridge.cancelled.is_set()
+        assert len(bridge.executed) == 1
+        assert engine.state["status"] == "paused"
+        assert engine.state["metrics"]["actions"] == 0
+        assert engine.state["metrics"]["errors"] == 0
+        assert engine.state["keys"] == [] and engine.state["action"] is None
+        assert bridge.stops[-1] == "Agent loop stopped"
+        events = read_events(engine.recorder.path / "events.jsonl")
+        assert len([event for event in events if event["type"] == "action"]) == 1
+        assert not any(event["type"] in {"ack", "error"} for event in events)
+        assert any(
+            event["type"] == "event" and event["data"].get("name") == "run_budget_reached"
+            for event in events
+        )
+        summary = json.loads((engine.recorder.path / "summary.json").read_text())
+        assert summary["status"] == "paused"
+        assert summary["metrics"]["actions"] == 0
+    finally:
+        await engine.close()
+
+
 async def test_holo_completion_claim_pauses_without_executing_an_action(tmp_path, monkeypatch):
     bridge = FakeBridge()
     engine = AgentEngine(Settings(mode="live", runs_dir=tmp_path, holo_api_key="unused"), bridge)
@@ -629,6 +730,59 @@ async def test_action_ack_timeout_releases_controls_and_discards_late_ack(monkey
     await bridge.receive({"type": "ack", "id": socket.sent[0]["id"], "status": "completed"})
     assert bridge.pending == {}
     await bridge.detach(socket)
+
+
+@pytest.mark.parametrize("late_status", ["completed", "cancelled"])
+async def test_cancelled_bridge_request_retains_wire_command_and_unmatched_ack(
+    tmp_path, monkeypatch, late_status
+):
+    bridge, socket = await connected_bridge()
+    recorder = RunRecorder(tmp_path, "live", {})
+    bridge.journal = recorder.log
+    send = socket.send_json
+
+    async def send_after_journal(message):
+        events = read_events(recorder.path / "events.jsonl")
+        assert events[-1]["type"] == "bridge_command"
+        assert events[-1]["data"] == message
+        await send(message)
+
+    monkeypatch.setattr(socket, "send_json", send_after_journal)
+    task = asyncio.create_task(
+        bridge.execute(Action(keys=["forward"], duration_ticks=10), "frame-1", 15_000)
+    )
+    try:
+        await asyncio.wait_for(socket.action_sent.wait(), timeout=1)
+        command = socket.sent[0]
+        assert command["id"] in bridge.pending
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert bridge.pending == {}
+        await bridge.stop("Controller cancelled the in-flight action")
+        late_ack = {
+            "type": "ack",
+            "id": command["id"],
+            "status": late_status,
+            "start_tick": 5,
+            "end_tick": 6,
+        }
+        await bridge.receive(late_ack)
+        assert bridge.pending == {}
+        events = read_events(recorder.path / "events.jsonl")
+        commands = [event for event in events if event["type"] == "bridge_command"]
+        acknowledgments = [event for event in events if event["type"] == "bridge_ack"]
+        assert len(commands) == 2
+        assert commands[0]["data"] == command
+        assert commands[1]["data"]["type"] == "stop"
+        assert len(acknowledgments) == 1
+        assert acknowledgments[0]["data"] == late_ack
+        assert commands[0]["seq"] < acknowledgments[0]["seq"]
+    finally:
+        if not task.done():
+            task.cancel()
+        await bridge.detach(socket)
+        recorder.finish("interrupted")
 
 
 async def test_disconnect_fails_pending_action_and_clears_frame_validity():

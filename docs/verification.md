@@ -6,7 +6,7 @@ and actual model-driven gameplay.
 ## Automated and interface checks
 
 * 106 Python tests passed at the initial implementation commit; subsequent
-  exploration and recovery changes expand the suite to 128 tests covering provider formats, fresh-frame validation,
+  exploration, recovery, and deadline changes expand the suite to 133 tests covering provider formats, fresh-frame validation,
   cancellation, credentials, action bounds, recordings, replay, and API controls.
 * The Fabric mod built and remapped successfully; 14 Java tests passed.
 * Both GitHub CI jobs passed for implementation commit `01c2f56`.
@@ -78,3 +78,23 @@ frame, does not move the player or use items, and requires Holo to interpret the
 new view. It is bounded to four attempts per run and disabled when exploration
 is disabled. This is a local recovery policy, not a model-generated action or
 evidence that wood collection now succeeds.
+
+## Real camera recovery check
+
+Run `20261108T080357-7967ff6d` verified the recovery in the actual game:
+local proposal event 88 → fresh Jev approval 91 → completed ACK 95 → changed
+observation 96 → Holo replanning 99. The scan held no keys, turned 25° right
+and 15° down for one tick, and exposed ground and a nearby birch trunk.
+
+![Observed view after Jev-approved camera recovery](assets/recovered-view.png)
+
+The run executed 5 actions and captured 21 observations, then exhausted eight
+recovery attempts without obtaining wood. Holo median latency was 23.0 seconds;
+Jev median was 338ms. This establishes real visual recovery, not tool collection.
+
+The original loop checked its 180-second budget only between decisions, so this
+trial stopped at 193.6 seconds while an inference completed. No action executed
+after the deadline. The controller now applies the remaining deadline to
+observations, inference, and action execution, cancels in-flight operations when
+it expires, and releases inputs. Regression tests cover this behavior and the
+preservation of late cancellation acknowledgments in the complete wire journal.

@@ -18,10 +18,15 @@ from .providers import HoloProvider, JevProvider, ProviderError, ReplanRequired
 from .recording import RunRecorder, redact
 
 
+class RunBudgetReached(RuntimeError):
+    pass
+
+
 class AgentEngine:
     def __init__(self, settings: Settings, bridge: GameBridge):
         self.settings = settings
         self.live_bridge = bridge
+        self.live_bridge.journal = self.log
         self.bridge = DemoBridge() if settings.mode == "demo" else bridge
         self.recorder: RunRecorder | None = None
         self.task: asyncio.Task | None = None
@@ -86,7 +91,7 @@ class AgentEngine:
         if self.recorder and not self.recorder.closed:
             event = self.recorder.log(kind, data)
             # Large provider request bodies stay on disk, never on the live websocket.
-            if not kind.startswith("model_"):
+            if not kind.startswith(("model_", "bridge_")):
                 self.events.append(event)
             return event
         return None
@@ -249,6 +254,20 @@ class AgentEngine:
             if isinstance(value, int) and value >= 0:
                 self.state["metrics"][target] += value
 
+    async def bounded(self, function, *args):
+        remaining = self.settings.max_run_seconds - self.recorder.elapsed_ms / 1000
+        if remaining <= 0:
+            raise RunBudgetReached("Run time budget reached")
+        try:
+            result = await asyncio.wait_for(function(*args), timeout=remaining)
+        except TimeoutError as error:
+            raise RunBudgetReached(
+                "Run time budget reached during an in-flight operation"
+            ) from error
+        if self.recorder.elapsed_ms >= self.settings.max_run_seconds * 1000:
+            raise RunBudgetReached("Discarded result after run time budget")
+        return result
+
     async def run(self) -> None:
         generation = self.generation
         repeat = 0
@@ -275,7 +294,7 @@ class AgentEngine:
                     )
                     self.checkpoint()
                     break
-                observation = await self.bridge.observe()
+                observation = await self.bounded(self.bridge.observe)
                 if generation != self.generation or self.state["status"] != "running":
                     break
                 observed_at = time.monotonic()
@@ -373,7 +392,7 @@ class AgentEngine:
                         )
                     else:
                         adapter = self.holo if provider == "holo" else self.jev
-                        result = await adapter.decide(observation, context)
+                        result = await self.bounded(adapter.decide, observation, context)
                         decision, latency, usage = result.decision, result.latency_ms, result.usage
                         proposed = decision
                         completed = result.completed
@@ -416,7 +435,7 @@ class AgentEngine:
                             expected_effect="Jev is validating this plan on a fresh screenshot",
                         )
                         await self.bridge.stop("Fresh visual validation before executing Holo plan")
-                        observation = await self.bridge.observe()
+                        observation = await self.bounded(self.bridge.observe)
                         observed_at = time.monotonic()
                         event = self.recorder.save_observation(observation)
                         self.events.append(event)
@@ -432,7 +451,7 @@ class AgentEngine:
                             validation_frame_id=observation.frame_id,
                         )
                         provider = "jev"
-                        validated = await self.jev.decide(observation, context)
+                        validated = await self.bounded(self.jev.decide, observation, context)
                         self.log(
                             "model_call",
                             {
@@ -613,8 +632,11 @@ class AgentEngine:
                 self.broadcast()
                 if generation != self.generation or self.state["status"] != "running":
                     break
-                ack = await self.bridge.execute(
-                    decision.action, observation.frame_id, self.settings.frame_ttl_ms
+                ack = await self.bounded(
+                    self.bridge.execute,
+                    decision.action,
+                    observation.frame_id,
+                    self.settings.frame_ttl_ms,
                 )
                 ack.update(action_seq=action_event["seq"], frame_id=observation.frame_id)
                 self.log("ack", ack)
@@ -652,6 +674,12 @@ class AgentEngine:
                     self.checkpoint()
                     break
                 await asyncio.sleep(0.15 if self.settings.mode == "demo" else 0)
+        except RunBudgetReached as error:
+            self.state.update(
+                status="paused", expected_effect="Run time budget reached; inputs released."
+            )
+            self.log("event", {"name": "run_budget_reached", "detail": str(error)})
+            self.checkpoint()
         except asyncio.CancelledError:
             self.log(
                 "event",

@@ -133,7 +133,7 @@ def read_events(path: Path, *, exclude_model: bool = False) -> list[dict[str, An
         for line in stream:
             try:
                 event = json.loads(line)
-                if not exclude_model or not event.get("type", "").startswith("model_"):
+                if not exclude_model or not event.get("type", "").startswith(("model_", "bridge_")):
                     events.append(event)
             except json.JSONDecodeError:
                 # A process may have died during its last append; preserve prior evidence.

@@ -6,7 +6,7 @@ import math
 import time
 
 from .session import KEYS, keycode
-from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls, lava_sound_nearby
+from .vision import changes, outline, outline_box, large_face_box, close_face, movement_danger, broken_caption, hotbar_change, recipe_book_controls, lava_sound_nearby, crafting_controls, crafting_slot, filtered_recipe_icons, stack_count, matching_hotbar_slots
 
 
 class InvalidToolArgs(ValueError):
@@ -40,6 +40,7 @@ RAW = {
 }
 SKILLS = {
     **RAW,
+    "craft": ("Craft using screenshot pixels in an OPEN inventory/table. Opens its recipe book, searches exact English item name with craftable-only filter, requires ONE non-ghost filtered icon and empty grid, selects ONE batch, verifies non-ghost output, then transfers it. count is minimum items (recipe batches may round up). Stops on ambiguous/empty/ghost pixels or full inventory. Reports visible output count and matching GUI hotbar slots, not inventory API state. Prefer this over manual GUI clicks.", {"item":{"type":"string","minLength":1,"maxLength":40},"count":{"type":"integer","minimum":1,"maximum":64}}),
     "key_down": ("Bounded key hold for ms (default500,max1000), within THIS turn only. Auto-released before thinking. Back/strafe refused while vanilla 'Lava pops' subtitle shows; turn toward safe ground, then walk forward. Prefer move/reposition for walking and atomic key_press modifiers for GUI chords.", {"key":KEY,"ms":{**number(0,1000),"default":500}}),
     "mouse_down": ("Bounded mouse hold for ms (default500,max1000), within THIS turn only. Batch cursor moves/up in the same turn for GUI drag splitting; use mining skills for blocks.", {"button":BUTTON,"ms":{**number(0,1000),"default":500}}),
     "key_press": (RAW["key_press"][0], {**RAW["key_press"][1],"ms":number(0,1000)}),
@@ -133,7 +134,7 @@ def observation_prefix(calls, reflex="none"):
             call = parse_calls({"tool_calls": [raw]}, "skills", reflex)[0]
         except InvalidToolArgs:
             return calls[:index + 1], calls[index + 1:]
-        if call["name"] in {"seek", "attack", "mine", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "collect"} or (
+        if call["name"] in {"craft", "seek", "attack", "mine", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "collect"} or (
                 call["name"] in ("move", "reposition") and call["arguments"]["seconds"] > .5):
             return calls[:index + 1], calls[index + 1:]
     return calls, []
@@ -521,7 +522,7 @@ class ToolExecutor:
             return await self.execute_inputs(call, tier)
         before = self.current_frame or await self.observe()
         outcome = await self.execute_inputs(call, tier)
-        after = self.current_frame if call["name"] in ("search_recipe", "seek", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "mine", "collect") else await self.observe()
+        after = self.current_frame if call["name"] in ("craft", "search_recipe", "seek", "attack_until_broken", "mine_up", "mine_down", "approach_until_outline", "mine", "collect") else await self.observe()
         delta = changes(before, after)
         moving = call["name"] in ("move", "reposition")
         if moving:
@@ -537,6 +538,9 @@ class ToolExecutor:
                           hotbar_changed=outcome == "hotbar_changed")
         if outcome is not None:
             result["outcome"] = outcome
+        if call["name"] == "craft":
+            result["crafting"] = dict(self.craft_report)
+            if outcome != "crafted": result["next_action"] = "Inspect pixels and fix the reported grid/material/ambiguity problem; do not repeat failed GUI clicks."
         if call["name"] in ("mine_up","mine_down"):
             result["vertical_mining"] = self.vertical_mining[vertical_start:]
             result["hotbar_changed"] = any(a["hotbar_changed"] for a in result["vertical_mining"])
@@ -592,6 +596,8 @@ class ToolExecutor:
             return "lava_sound_nearby"
         if name == "seek":
             return await self.seek(args["target"], args.get("max_s", 8))
+        if name == "craft":
+            return await self.craft(args["item"],args["count"])
         if tier == "skills" and name == "mine" and not await self.approach_close():
             self.mining_probes.append({"used": False, "succeeded": None, "skipped": "not_close"})
             return "not_close"
@@ -676,6 +682,56 @@ class ToolExecutor:
             await self.tap("e" if name == "open_inventory" else "esc")
         elif name == "wait":
             await self.primitive("wait", ms=args["ms"] if tier == "raw" else args["seconds"] * 1000)
+
+    async def craft(self, item, count):
+        self.craft_report = {"item":item,"requested_count":count,"items_taken":0,"hotbar_slots":[]}
+        if self.held_keys or self.held_buttons: return "release_inputs_before_crafting"
+        layout = crafting_controls(self.current_frame or await self.observe())
+        if layout is None: return "open_inventory_or_table_first"
+        async def click_point(point,shift=False):
+            owned = shift and not any(keycode(k) in (340,344) for k in self.held_keys)
+            try:
+                if owned: await self.key("shift",True)
+                await self.primitive("mouse",x=point[0],y=point[1])
+                await self.click()
+            finally:
+                try:
+                    await self.button(0,False)
+                finally:
+                    if owned: await self.key("shift",False)
+        if not layout["book_open"]:
+            await click_point(layout["book_toggle"])
+            await self.observe()
+        status = await self.search_recipe(item)
+        if status != "recipe_search_ready": return status
+        while self.craft_report["items_taken"] < count:
+            layout = crafting_controls(self.current_frame)
+            if layout is None: return "crafting_gui_unconfirmed"
+            if any(crafting_slot(self.current_frame,p,layout["scale"])["occupied"] for p in layout["inputs"]+[layout["output"]]):
+                return "craft_grid_not_empty"
+            icons = filtered_recipe_icons(self.current_frame)
+            if len(icons) != 1: return "recipe_result_missing_or_ambiguous"
+            if not icons[0]["occupied"] or icons[0]["ghost"]: return "recipe_result_empty_or_ghost"
+            await click_point(icons[0]["center"])
+            await self.observe()
+            if crafting_controls(self.current_frame) != layout: return "crafting_gui_changed"
+            output = crafting_slot(self.current_frame,layout["output"],layout["scale"])
+            if not output["occupied"] or output["ghost"]: return "craft_output_empty_or_ghost"
+            ingredients = [p for p in layout["inputs"] if crafting_slot(self.current_frame,p,layout["scale"])["occupied"]]
+            if not ingredients or any(crafting_slot(self.current_frame,p,layout["scale"])["ghost"] or stack_count(self.current_frame,p,layout["scale"]) != 1 for p in ingredients):
+                return "craft_input_batch_unconfirmed"
+            output_frame = self.current_frame
+            batch = stack_count(output_frame,layout["output"],layout["scale"])
+            if not 1 <= batch <= 64: return "craft_output_count_unconfirmed"
+            await click_point(layout["output"],shift=True)
+            search = recipe_book_controls(output_frame)["search"]
+            await self.primitive("mouse",x=search[0],y=search[1])
+            await self.observe()
+            if crafting_controls(self.current_frame) != layout: return "crafting_gui_changed"
+            if crafting_slot(self.current_frame,layout["output"],layout["scale"])["occupied"]: return "craft_output_not_taken"
+            self.craft_report["items_taken"] += batch
+            self.craft_report["hotbar_slots"] = matching_hotbar_slots(output_frame,layout["output"],self.current_frame,layout)
+        return "crafted"
 
     async def search_recipe(self, query):
         controls = recipe_book_controls(self.current_frame or await self.observe())

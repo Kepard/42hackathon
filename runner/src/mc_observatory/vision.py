@@ -86,8 +86,102 @@ def recipe_book_controls(png):
             white = sum(min(pixels[z,t]) >= 240 for z in range(x,right) for t in range(y,bottom))
             return {"search": (x + width//2, (y+bottom)//2), "filter": (right+10*scale, (y+bottom)//2),
                     "results": (x-15*scale,y+18*scale,x+110*scale,y+143*scale),
-                    "craftable_only": green > red, "query_present": white > 16*scale*scale}
+                    "craftable_only": green > red, "query_present": white > 16*scale*scale,
+                    "scale": scale, "anchor": (x,y)}
     return None
+
+
+def _slot_border(im, center, scale):
+    x,y = center
+    if not (9*scale <= x < im.width-9*scale and 9*scale <= y < im.height-9*scale): return False
+    p = im.load()
+    return all(p[x+z*scale,y-9*scale] == (55,55,55) and p[x-9*scale,y+z*scale] == (55,55,55)
+               for z in (-7,-3,1,5)) and p[x+8*scale,y] == (255,255,255)
+
+
+def crafting_controls(png):
+    im = image(png)
+    book = recipe_book_controls(png)
+    candidates = [(book["scale"],book["anchor"][0]+122*book["scale"],book["anchor"][1]-14*book["scale"])] if book else [
+        (s,((im.width//s-176)//2)*s,((im.height//s-166)//2)*s) for s in range(1,7)]
+    for s,left,top in candidates:
+        for kind,cols,start,output,toggle in (("inventory",2,(98,18),(162,36),(114,70)),("table",3,(30,17),(132,43),(15,43))):
+            slots = [(left+(start[0]+8+18*c)*s,top+(start[1]+8+18*r)*s) for r in range(cols) for c in range(cols)]
+            if all(_slot_border(im,point,s) for point in slots):
+                return {"kind":kind,"scale":s,"inputs":slots,"output":(left+output[0]*s,top+output[1]*s),
+                        "book_open":book is not None,"book_toggle":(left+toggle[0]*s,top+toggle[1]*s),
+                        "hotbar":[(left+(16+18*i)*s,top+150*s) for i in range(9)]}
+    return None
+
+
+def container_gui_visible(png):
+    im = image(png)
+    for s in range(1,7):
+        for shift in (0,77):
+            left = ((im.width//s-176)//2+shift)*s
+            for y in range(max(9*s,im.height//2-40*s),min(im.height-9*s,im.height//2+100*s),s):
+                if all(_slot_border(im,(left+(16+18*i)*s,y),s) for i in range(9)):
+                    return True
+    return False
+
+
+def crafting_slot(png, center, scale):
+    im = image(png)
+    x,y = center
+    patch = im.crop((x-8*scale,y-8*scale,x+8*scale,y+8*scale))
+    colors = list(zip(*(channel.tobytes() for channel in patch.split())))
+    corners = [im.getpixel((x+dx*scale,y+dy*scale)) for dx,dy in ((-7,-7),(6,-7),(-7,6),(6,6))]
+    return {"occupied":sum(max(abs(v-139) for v in color)>20 for color in colors)>4*scale*scale,
+            "ghost":sum(r>g+25 and r>b+25 and abs(g-b)<8 for r,g,b in corners)>=3}
+
+
+def filtered_recipe_icons(png):
+    controls = recipe_book_controls(png)
+    if not controls or not controls["craftable_only"] or not controls["query_present"]: return []
+    im = image(png);s=controls["scale"];left,top,_,_=controls["results"]
+    icons = []
+    for row in range(4):
+        for col in range(5):
+            center = (left+(12+25*col)*s,top+(11+25*row)*s)
+            corner = im.getpixel((center[0]-12*s,center[1]-12*s))
+            ring = [im.getpixel((center[0]+dx*s,center[1]+dy*s)) for dx,dy in ((-9,-9),(9,-9),(-9,9),(9,9))]
+            if min(corner)>80 and max(corner)-min(corner)<8 and all(min(p)>80 and max(p)-min(p)<8 for p in ring):
+                icons.append({"center":center,**crafting_slot(png,center,s)})
+    return icons
+
+
+_STACK_DIGITS = (
+    "01110/10001/10011/10101/11001/10001/01110",
+    "00100/01100/00100/00100/00100/00100/11111",
+    "01110/10001/00001/00110/01000/10001/11111",
+    "01110/10001/00001/00110/00001/10001/01110",
+    "00011/00101/01001/10001/11111/00001/00001",
+    "11111/10000/11110/00001/00001/10001/01110",
+    "00110/01000/10000/11110/10001/10001/01110",
+    "11111/10001/00001/00010/00100/00100/00100",
+    "01110/10001/10001/01110/10001/10001/01110",
+    "01110/10001/10001/01111/00001/00010/01100",
+)
+
+
+def stack_count(png, center, scale):
+    im = image(png);p=im.load();cx,cy=center
+    def digit(x):
+        bits = "/".join("".join("1" if min(p[x+dx*scale,cy+(1+dy)*scale])>=240 else "0" for dx in range(5)) for dy in range(7))
+        return _STACK_DIGITS.index(bits) if bits in _STACK_DIGITS else None
+    units = digit(cx+3*scale)
+    tens = digit(cx-3*scale)
+    return 1 if units is None else units+(10*tens if tens is not None else 0)
+
+
+def matching_hotbar_slots(output_png, output_center, after_png, layout):
+    s=layout["scale"]
+    def icon(im,point):
+        x,y=point
+        return im.crop((x-8*s,y-8*s,x+8*s,y+s)).resize((16,9),Image.Resampling.NEAREST)
+    reference=icon(image(output_png),output_center);after=image(after_png)
+    return [{"slot":i+1,"count":stack_count(after_png,point,s)} for i,point in enumerate(layout["hotbar"])
+            if sum(ImageStat.Stat(ImageChops.difference(reference,icon(after,point))).mean)/3<2]
 
 
 def changes(before, after, target_box=None):

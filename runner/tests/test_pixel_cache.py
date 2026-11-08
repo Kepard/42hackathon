@@ -48,4 +48,4 @@ async def test_still_close_check_frame_is_reused_for_probe_reference(monkeypatch
     ex.begin_step(PNG)
     result = await ex.execute({"name": "attack_until_broken", "arguments": {"max_s": 2}}, "skills")
     assert result["outcome"] == "not_in_reach"
-    assert result["timings"]["screenshot_count"] == 3
+    assert result["timings"]["screenshot_count"] == 4

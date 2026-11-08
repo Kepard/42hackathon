@@ -231,3 +231,30 @@ without sending game controls. **The updated full casting route still needs a
 fresh live run proving ten newly cast frame blocks, ignition, and a living
 player in the actual Nether dimension.** Historical ruined-portal success must
 not be used as evidence that this construction route has passed.
+
+## Latest hosted run: 20261108T121602-417ab388
+
+This run used the final tested working tree before its subsequent commit and
+merge into main at `d7abfc35391522fe0f8b770dab520f7dd305210a`. It is not described
+as a client restarted from that exact merge commit.
+
+**Judgment: hosted New run worked without an operator pause before failure;
+construction remains blocked after collecting the first lava bucket.** Initial snapshot
+`72593781-9123-4634-98bd-b0cefd6aee27` at 87 ms has a verified asset hash and shows
+41 empty inventory slots, full health/hunger, and the same Overworld spawn.
+
+Thirteen resource and crafting skills completed before casting. The new
+navigation recovery reached a natural lava source and collected an actual lava
+bucket. At 267.159 seconds, returning to the casting pad failed with
+`casting runoff waypoint is no longer reachable on verified terrain`. Recorded
+diagnostics show **one lava source collected and zero frame blocks cast**;
+the player remained in the Overworld with health 20 and the owned lava bucket.
+
+The displayed result froze at **267.219 seconds (4:27.219)**. The journal contains
+no operator pause event before this failure. The controller automatically
+released controls and paused the world at 267.246 seconds. The independent judge
+sent no controls. An operator end event occurred later, at 313.802 seconds; it
+did not cause the failure. This is evidence that launch and first-lava acquisition work;
+it does **not** establish a completed portal or Nether arrival. The user requested
+publication at this point, and the remaining casting failure is retained here
+for the next engineering pass.

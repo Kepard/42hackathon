@@ -82,7 +82,7 @@ class HoloAPIError(RuntimeError):
 class HoloAPI:
     _locks = {}
     _next = {}
-    short_timeout = 6
+    short_timeout = 15
 
     def __init__(self, api_key, api_timeout=15):
         if not api_key:

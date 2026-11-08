@@ -194,11 +194,11 @@ async def test_http_error_redaction_and_recovered_429(monkeypatch):
 
 
 @pytest.mark.parametrize("recover", [False, True])
-async def test_default_api_six_second_first_attempt_and_full_fifteen_second_retry(monkeypatch, recover):
+async def test_default_api_fifteen_second_attempts_admit_measured_gui_latency(monkeypatch, recover):
     from unittest.mock import AsyncMock
     class API(HoloAPI):
         async def _request(self, session, payload, errors, request_timeout):
-            assert request_timeout == (6 if self.last_attempts == 1 else 15)
+            assert request_timeout == 15
             if recover and self.last_attempts == 2:
                 return {"_api_errors": errors}
             raise TimeoutError
@@ -213,7 +213,7 @@ async def test_default_api_six_second_first_attempt_and_full_fifteen_second_retr
             await api.complete({"model": "fake"})
         assert len(api.last_errors) == 2
     assert api.last_attempts == 2
-    assert api.last_errors[0]["timeout_s"] == 6
+    assert api.last_errors[0]["timeout_s"] == 15
     assert api.last_errors[0]["phase"] == "dispatch"
     assert api.last_errors[0]["response_status"] is None
 

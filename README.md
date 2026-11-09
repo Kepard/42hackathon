@@ -2,6 +2,8 @@
 
 **Holo4 plans. Jev checks. Minecraft moves.**
 
+**Hackathon finalist** — our team reached the finals with HoloSpeed.
+
 HoloSpeed is an autonomous Minecraft agent built around H Company’s **Holo4** and
 TypeSafe AI’s **Jev**. It combines visual reasoning, fresh game-state validation,
 and local execution to turn model decisions into precise gameplay. The current

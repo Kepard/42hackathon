@@ -1,1 +1,27 @@
-{"name":"holospeed-live-dashboard","private":true,"type":"module","scripts":{"build":"node scripts/build.mjs","test":"node worker/api.test.mjs && node tests/commands.test.mjs && node tests/operator.test.mjs && node tests/voice.test.mjs && node tests/video.test.mjs && node tests/engineering.test.mjs && node tests/ui.test.cjs && node tests/voice.test.cjs"}}
+{
+  "name": "minecraft-observatory-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run build:holospeed",
+    "build:holospeed": "node scripts/build.mjs",
+    "build:observatory": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
+    "test": "node worker/api.test.mjs && node tests/commands.test.mjs && node tests/operator.test.mjs && node tests/voice.test.mjs && node tests/video.test.mjs && node tests/engineering.test.mjs && node tests/ui.test.cjs && node tests/voice.test.cjs"
+  },
+  "dependencies": {
+    "cal-sans": "^2.1.1",
+    "motion": "^14.10.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

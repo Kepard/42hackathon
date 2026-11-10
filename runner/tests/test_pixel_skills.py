@@ -1,0 +1,418 @@
+import asyncio
+import base64
+import io
+import json
+import math
+from pathlib import Path
+
+import pytest
+from PIL import Image, ImageDraw
+
+from mc_observatory.holo import HoloAgent, HoloConfig, PRIMER
+from mc_observatory.holo_tools import InvalidToolArgs, ToolExecutor, parse_calls, tool_schemas
+from mc_observatory.vision import center_crop, changes, hotbar_row_boxes, hotbar_rows_crop
+from test_holo import FakeAPI, PixelClient, PNG, call, response
+
+
+@pytest.fixture(autouse=True)
+def isolate_hold_loop_from_close_approach(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(ToolExecutor, "approach_close", AsyncMock(return_value=True))
+
+
+def png(color, size=(854, 480)):
+    out = io.BytesIO()
+    Image.new("RGB", size, color).save(out, format="PNG")
+    return out.getvalue()
+
+
+def parsed(name, **args):
+    return parse_calls({"tool_calls": [call(name, **args)]}, "skills")[0]
+
+
+def test_pixel_transforms_and_errors():
+    a, b = png("black"), png("white")
+    assert changes(a, a) == {"frame_change": 0, "center_change": 0, "center_changed_fraction": 0}
+    assert changes(a, b) == {"frame_change": 1, "center_change": 1, "center_changed_fraction": 1}
+    assert Image.open(io.BytesIO(center_crop(a))).size == (320, 240)
+    assert Image.open(io.BytesIO(center_crop(png("black", (20, 10))))).size == (40, 20)
+    with pytest.raises(ValueError, match="dimensions"):
+        changes(a, PNG)
+    with pytest.raises(OSError):
+        center_crop(b"not a picture")
+
+
+def test_real_seam_cracks_are_inside_target_but_outside_screen_center():
+    fixtures = Path(__file__).parent / "fixtures"
+    before = (fixtures / "mining_seam_before_442_15.png").read_bytes()
+    after = (fixtures / "mining_seam_progress_442_15.png").read_bytes()
+    box = [.37,.41,.63,.80]
+    assert changes(before,after)["center_change"] == 0
+    cue = changes(before,after,box)
+    assert cue["center_change"] > .002
+    assert cue["center_changed_fraction"] > .01
+    assert changes(before,before,box)["center_change"] == 0
+    for invalid in ((0,0,0,0),(-1,0,1,1),(0,0,.00001,.00001)):
+        with pytest.raises(ValueError): changes(before,after,invalid)
+
+
+@pytest.mark.parametrize("cracks,breaks",[(False,False),(True,False),(True,True)])
+async def test_probe_holds_for_real_off_center_cracks_without_new_jev_questions(monkeypatch,cracks,breaks):
+    fixtures = Path(__file__).parent / "fixtures"
+    before = (fixtures / "mining_seam_before_442_15.png").read_bytes()
+    progress = (fixtures / "mining_seam_progress_442_15.png").read_bytes()
+    im = Image.open(io.BytesIO(progress)).convert("RGB")
+    ImageDraw.Draw(im).rectangle((315,196,539,383),fill=(25,140,30))
+    out = io.BytesIO();im.save(out,format="PNG")
+    clock = [0.0]
+    monkeypatch.setattr("mc_observatory.holo_tools.time.monotonic",lambda:clock[0])
+    monkeypatch.setattr("mc_observatory.holo_tools.outline",lambda _:False)
+    class Client(PixelClient):
+        async def screenshot(self):
+            if clock[0] >= .9 and breaks: return out.getvalue()
+            return progress if clock[0] >= .6 and cracks else before
+    class NoQuestions:
+        async def ask(self,*args,**kwargs): raise AssertionError("Probe must not ask Jev")
+    class Executor(ToolExecutor):
+        async def primitive(self,kind,**args):
+            if kind=="wait": clock[0] += args["ms"]/1000
+            else: await super().primitive(kind,**args)
+    ex = Executor(Client(),854,480,jev=NoQuestions())
+    ex.begin_step(before)
+    ex.close_checks.append({"box":[.37,.41,.63,.80],"close":True})
+    result = await ex.execute(parsed("attack_until_broken",max_s=3.5),"skills")
+    probe = result["mining_probes"][0]
+    assert probe["succeeded"] is cracks
+    assert probe["center_change"] == 0
+    assert (probe["target_center_change"] >= .002) is cracks
+    assert clock[0] == pytest.approx(.6 if not cracks else 1.30 if breaks else 3.85)
+    assert not ex.held_buttons
+    assert result["outcome"] == ("scene_changed" if cracks else "not_in_reach")
+
+
+def test_hotbar_rows_are_only_nearest_scaled_current_pixels():
+    im = Image.new("RGB", (854, 480))
+    for y in range(im.height):
+        for x in range(im.width):
+            im.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+    source = io.BytesIO()
+    im.save(source, format="PNG")
+    result = Image.open(io.BytesIO(hotbar_rows_crop(source.getvalue())))
+    width = 494
+    world = im.crop((180, 432, 674, 480))
+    gui = im.crop((259, 295, 753, 402))
+    assert result.size == (width * 3, (world.height + gui.height) * 3)
+    assert result.crop((0, 0, width * 3, world.height * 3)).tobytes() == world.resize((width * 3, world.height * 3), Image.Resampling.NEAREST).tobytes()
+    assert result.crop((0, world.height * 3, width * 3, result.height)).tobytes() == gui.resize((width * 3, gui.height * 3), Image.Resampling.NEAREST).tobytes()
+    assert Image.open(io.BytesIO(hotbar_rows_crop(png("black", (1, 1))))).size == (3, 6)
+    with pytest.raises(OSError):
+        hotbar_rows_crop(b"")
+    with pytest.raises(OSError):
+        hotbar_rows_crop(b"not a picture")
+
+
+@pytest.mark.parametrize("size", [(640,480), (854,480), (1280,720), (2560,1440)])
+def test_hotbar_boxes_include_all_nine_slots_for_every_vanilla_scale(size):
+    width, height = size
+    world, gui = hotbar_row_boxes(width, height)
+    maximum = min(width // 320, height // 240)
+    maximum += maximum % 2
+    for scale in range(1, maximum + 1):
+        for book in (False, True):
+            shift = 77 * scale if book and width // scale >= 379 else 0
+            left = (width - 176 * scale) // 2 + 8 * scale + shift
+            top = (height - 166 * scale) // 2 + 142 * scale
+            assert gui[0] <= left and gui[2] >= left + 162 * scale
+            assert gui[1] <= top and gui[3] >= top + 18 * scale
+        assert world[0] <= width / 2 - 91 * scale
+        assert world[2] >= width / 2 + 91 * scale
+        assert world[1] <= height - 22 * scale and world[3] == height
+
+
+@pytest.mark.parametrize("book,frame", [(False,"inventory_closed_book_c226_36.png"), (True,"inventory_open_book_c226_85.png")])
+def test_real_inventory_hotbar_contains_every_slot(book, frame):
+    source = (Path(__file__).parent / "fixtures" / frame).read_bytes()
+    im = Image.open(io.BytesIO(source)).convert("RGB")
+    boxes = hotbar_row_boxes(*im.size)
+    result = Image.open(io.BytesIO(hotbar_rows_crop(source)))
+    world_height = (boxes[0][3] - boxes[0][1]) * 3
+    for slot in range(9):
+        left = 267 + (154 if book else 0) + slot * 36
+        original = im.crop((left,358,left+36,394))
+        x, y = (left - boxes[1][0]) * 3, world_height + (358 - boxes[1][1]) * 3
+        assert result.crop((x,y,x+108,y+108)).tobytes() == original.resize((108,108),Image.Resampling.NEAREST).tobytes()
+
+
+async def test_jev_payload_uses_only_current_pixels_and_exact_saved_refs(tmp_path):
+    c = PixelClient()
+    api = FakeAPI(c)
+    agent = HoloAgent(HoloConfig(max_steps=3, reflex="jev"), api, jev_client=object())
+    records = [r async for r in agent.steps(c, "Observe the current hotbar", tmp_path)]
+    for record, payload in zip(records, api.payloads):
+        refs = record["input_image_refs"]
+        assert refs == [record["screenshot_ref"], record["crop_ref"], record["hotbar_crop_ref"]]
+        parts = [p for p in payload["messages"][1]["content"] if p["type"] == "image_url"]
+        assert len(parts) == 3
+        for ref, part in zip(refs, parts):
+            assert (tmp_path / ref).read_bytes() == base64.b64decode(part["image_url"]["url"].split(",")[1])
+        assert (tmp_path / refs[0]).read_bytes() == PNG
+        assert "PRIVATE" not in json.dumps(payload)
+        assert not set(refs) & set(record.get("feedback_image_refs", []))
+
+
+@pytest.mark.parametrize("name,args", [
+    ("move", {"direction": "forward", "seconds": 1, "jump": 1}),
+    ("move", {"direction": "forward", "seconds": 1, "sprint": True, "sneak": True}),
+    ("aim_at", {"x": 1001, "y": 500}), ("set_pitch", {"deg": -91}),
+    ("mine_up", {"count": True}), ("mine_up", {"count": 0}),
+    ("attack_until_broken", {"max_s": 0}), ("update_notes", {"text": "x" * 4001})])
+def test_skill_validation(name, args):
+    with pytest.raises(InvalidToolArgs):
+        parsed(name, **args)
+
+
+def test_disclosed_skills_and_pure_raw_vocabulary():
+    assert all("screenshot-only" in t["function"]["description"] for t in tool_schemas("skills"))
+    assert all("frame_change" not in t["function"]["description"] for t in tool_schemas("raw"))
+    with pytest.raises(InvalidToolArgs):
+        parse_calls({"tool_calls": [call("set_pitch", deg=0)]}, "raw")
+    assert parsed("move", direction="forward", seconds=0)["arguments"] == {"direction": "forward", "seconds": 0, "intent": "Observe the world."}
+
+
+@pytest.mark.parametrize("flags,codes", [({"jump": True, "sprint": True}, [87, 341, 32]), ({"sneak": True}, [87, 340]), ({}, [87])])
+async def test_move_holds_concurrently_then_releases(flags, codes):
+    c = PixelClient()
+    ex = ToolExecutor(c, 854, 480)
+    ex.begin_step(PNG)
+    await ex.execute(parsed("move", direction="forward", seconds=0, **flags), "skills")
+    keys = [event for event in c.events if isinstance(event, tuple) and event[0] == "key"]
+    assert [k[1] for k in keys] == codes + list(reversed(codes))
+    assert [k[2]["pressed"] for k in keys] == [True] * len(codes) + [False] * len(codes)
+    assert not ex.held_keys
+    assert not ex.results[-1]["stuck"]
+    await ex.execute(parsed("move", direction="forward", seconds=0, **flags), "skills")
+    assert ex.results[-1]["stuck"] and ex.results[-1]["frame_change"] == 0
+
+
+@pytest.mark.parametrize("point,warns", [((500, 500), False), ((900, 900), True)])
+async def test_aim_corner_warning_is_not_an_object_classification(point, warns):
+    ex = ToolExecutor(PixelClient(), 854, 480)
+    ex.begin_step(PNG)
+    result = await ex.execute(parsed("aim_at", x=point[0], y=point[1]), "skills")
+    assert ("warning" in result) == warns
+    assert result["block_gone"] is None and result["item_collected"] is None
+
+
+@pytest.mark.parametrize("x,y", [(500, 500), (1000, 0), (0, 1000)])
+async def test_aim_fov_geometry(x, y):
+    c = PixelClient()
+    ex = ToolExecutor(c, 854, 480)
+    ex.begin_step(PNG)
+    await ex.execute(parsed("aim_at", x=x, y=y), "skills")
+    action = ex.actions[0]
+    f = 240 / math.tan(math.radians(35))
+    px, py = (x / 1000 - .5) * 853, (y / 1000 - .5) * 479
+    assert action["dx"] * .15 == pytest.approx(math.degrees(math.atan(px / f)))
+    assert action["dy"] * .15 == pytest.approx(math.degrees(math.atan(py / math.hypot(f, px))))
+
+
+@pytest.mark.parametrize("degrees", [-90, 0, 90])
+async def test_set_pitch_clamps_without_reading_state(degrees):
+    ex = ToolExecutor(PixelClient(), 854, 480)
+    ex.begin_step(PNG)
+    await ex.execute(parsed("set_pitch", deg=degrees), "skills")
+    assert [a["dy"] for a in ex.actions] == [1200, (degrees - 90) / .15]
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_attack_observes_without_early_release_or_semantic_claims(monkeypatch, changed):
+    clock = [0.0]
+    monkeypatch.setattr("mc_observatory.holo_tools.time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}))
+    class Client(PixelClient):
+        async def screenshot(self):
+            return png("white" if changed else "black")
+    class Executor(ToolExecutor):
+        async def primitive(self, name, **args):
+            if name == "wait":
+                clock[0] += args["ms"] / 1000
+            else:
+                await super().primitive(name, **args)
+    ex = Executor(Client(), 854, 480)
+    ex.begin_step(png("black"))
+    result = await ex.execute(parsed("attack_until_broken", max_s=1.4), "skills")
+    assert result["outcome"] == ("scene_changed" if changed else "no_change")
+    assert result["scene_changed"] is changed
+    assert result["block_gone"] is None and result["item_collected"] is None
+    assert clock[0] == pytest.approx(1.4)
+    assert len(ex.frames) == 5
+    assert ex.actions[0] == {"action": "mouse", "button": 0, "pressed": True}
+    assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
+    assert not ex.held_buttons
+
+
+@pytest.mark.parametrize("tier", ["raw", "skills"])
+async def test_observation_barrier_discards_dependent_calls_and_explains_history(tmp_path, tier):
+    client = PixelClient()
+    tools = ([call("update_notes", text="Observe after aiming"), call("aim_at", x=500, y=500),
+              call("move", direction="forward", seconds=0), call("attack", seconds=0)] if tier == "skills"
+             else [call("mouse_move", dx=0, dy=0), call("key_press", key="w", ms=0)])
+    api = FakeAPI(client, response(tools))
+    agent = HoloAgent(HoloConfig(max_steps=2, tier=tier), api)
+    records = [r async for r in agent.steps(client, "get log", tmp_path)]
+    assert len(records[0]["raw_tool_calls"]) == len(tools)
+    assert [c["name"] for c in records[0]["tool_calls"]] == (["update_notes", "aim_at", "move", "attack"] if tier == "skills" else ["mouse_move", "key_press"])
+    assert records[0]["skipped_tool_calls"] == []
+    assert any(e[0] == "key" for e in client.events if isinstance(e, tuple))
+    history = json.loads(api.payloads[1]["messages"][1]["content"][0]["text"].split(": ", 1)[1])
+    assert history[0]["actions"] == records[0]["tool_calls"]
+    assert history[0]["skipped_tool_calls"] == records[0]["skipped_tool_calls"]
+
+
+async def test_observation_barrier_empty_completion_does_not_invent_actions(tmp_path):
+    agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(PixelClient(), response([])))
+    records = [r async for r in agent.steps(PixelClient(), "get log", tmp_path)]
+    assert records[0]["tool_calls"] == records[0]["skipped_tool_calls"] == records[0]["executed_actions"] == []
+
+
+@pytest.mark.parametrize("tail", [[{"function": {"name": "attack", "arguments": "{"}}], [None], [{"function": {"name": "unknown", "arguments": {}}}]])
+async def test_observation_barrier_ignores_malformed_discarded_calls(tmp_path, tail):
+    client = PixelClient()
+    tools = [call("update_notes", text="Observe first"), call("attack", seconds=0), *tail]
+    api = FakeAPI(client, response(tools))
+    agent = HoloAgent(HoloConfig(max_steps=1), api)
+    record = [r async for r in agent.steps(client, "get log", tmp_path)][0]
+    assert not record["errors"]
+    assert [c["name"] for c in record["tool_calls"]] == ["update_notes", "attack"]
+    assert record["skipped_tool_calls"] == tail
+    assert any(a["action"] == "mouse" for a in record["executed_actions"])
+
+
+@pytest.mark.parametrize("tools,executed", [
+    ([call("click_at", x=200, y=200), call("type_text", text="planks"), call("shift_click_at", x=300, y=300)], 3),
+    ([call("look", yaw_deg=0, pitch_deg=0), call("move", direction="forward", seconds=0), call("update_notes", text="done")], 3),
+    ([call("move", direction="forward", seconds=.51), call("attack", seconds=0)], 1),
+    ([call("mine", max_s=.2), call("collect", max_s=.2)], 1),
+    ([call("approach_until_outline", max_s=.2), call("mine", max_s=.2)], 1),
+])
+async def test_action_class_batching(tmp_path, monkeypatch, tools, executed):
+    async def no_reflex(self, *args): return "timeout"
+    monkeypatch.setattr(ToolExecutor, "reflex", no_reflex)
+    c = PixelClient()
+    agent = HoloAgent(HoloConfig(max_steps=1), FakeAPI(c, response(tools)))
+    record = [r async for r in agent.steps(c, "batch", tmp_path)][0]
+    assert not record["errors"]
+    assert len(record["tool_calls"]) == executed
+    assert record["skipped_tool_calls"] == tools[executed:]
+
+
+async def test_attack_screenshot_error_releases_mouse():
+    class Client(PixelClient):
+        async def screenshot(self):
+            raise OSError("capture failed")
+    class Executor(ToolExecutor):
+        async def primitive(self, name, **args):
+            if name != "wait":
+                await super().primitive(name, **args)
+    ex = Executor(Client(), 854, 480)
+    ex.begin_step(PNG)
+    with pytest.raises(OSError, match="capture failed"):
+        await ex.execute(parsed("attack_until_broken", max_s=1), "skills")
+    assert not ex.held_buttons
+    assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
+
+
+async def test_attack_final_sample_timeout_checks_released_settled_frame(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("mc_observatory.holo_tools.time", type("Clock", (), {"monotonic": staticmethod(lambda: clock[0])}))
+    async def timeout(capture, seconds):
+        capture.close()
+        raise asyncio.TimeoutError
+    monkeypatch.setattr("mc_observatory.holo_tools.asyncio.wait_for", timeout)
+    class Client(PixelClient):
+        async def screenshot(self):
+            assert not ex.held_buttons
+            return png("white")
+    class Executor(ToolExecutor):
+        async def primitive(self, kind, **args):
+            if kind == "wait":
+                clock[0] += args["ms"] / 1000
+            else:
+                await super().primitive(kind, **args)
+    ex = Executor(Client(), 854, 480)
+    ex.begin_step(png("black"))
+    result = await ex.execute(parsed("attack_until_broken", max_s=.35), "skills")
+    assert result["outcome"] == "scene_changed" and result["scene_changed"]
+    assert result["block_gone"] is None and result["item_collected"] is None
+    assert len(ex.frames) == 1
+    assert ex.actions[-1] == {"action": "mouse", "button": 0, "pressed": False}
+
+
+@pytest.mark.parametrize("name,args", [("move", {"direction": "forward", "seconds": 1, "jump": True}), ("attack_until_broken", {"max_s": 1})])
+async def test_action_error_releases_controls(name, args):
+    class Executor(ToolExecutor):
+        async def primitive(self, method, **values):
+            if method == "wait":
+                raise RuntimeError("input failed")
+            await super().primitive(method, **values)
+    ex = Executor(PixelClient(), 854, 480)
+    ex.begin_step(PNG)
+    with pytest.raises(RuntimeError, match="input failed"):
+        await ex.execute(parsed(name, **args), "skills")
+    assert not ex.held_keys and not ex.held_buttons
+
+
+async def test_mine_up_count_and_notes(monkeypatch):
+    ex = ToolExecutor(PixelClient(), 854, 480)
+    ex.begin_step(PNG)
+    attempts = []
+    async def attack(count, seconds):
+        attempts.extend([seconds]*count)
+        return ["no_change"]*count
+    monkeypatch.setattr(ex, "mine_vertical", attack)
+    result = await ex.execute(parsed("mine_up", count=3), "skills")
+    assert attempts == [1.5, 1.5, 1.5] and result["outcome"] == ["no_change"] * 3
+    assert ex.actions[:2] == [{"action": "mouse", "dx": 0, "dy": 1200}, {"action": "mouse", "dx": 0, "dy": -1200}]
+    for text in ("I saw a trunk; try jumping.", ""):
+        await ex.execute(parsed("update_notes", text=text), "skills")
+        assert ex.notes == text
+
+
+@pytest.mark.parametrize("tier", ["raw", "skills"])
+async def test_three_frames_crop_notes_and_pixel_boundary(tmp_path, tier):
+    c = PixelClient()
+    api = FakeAPI(c, response([call("update_notes", text="MY OBSERVATION")]) if tier == "skills" else response([call("wait", ms=0)]))
+    agent = HoloAgent(HoloConfig(max_steps=4, tier=tier), api)
+    records = [r async for r in agent.steps(c, "get log", tmp_path)]
+    assert len(records[-1]["image_refs"]) == 3
+    assert len(records[-1]["input_image_refs"]) == 4
+    content = api.payloads[-1]["messages"][1]["content"]
+    image_parts = [p for p in content if p["type"] == "image_url"]
+    refs = records[-1]["input_image_refs"]
+    assert len(refs) == len(image_parts)
+    for ref, part in zip(refs, image_parts):
+        assert (tmp_path / ref).read_bytes() == base64.b64decode(part["image_url"]["url"].split(",")[1])
+    text = json.dumps(content)
+    assert "not game-state feedback" not in text
+    assert ("MY OBSERVATION" in text) == (tier == "skills")
+    assert bool(records[-1]["tool_results"]) == (tier == "skills")
+    assert ("center_change" in text) == (tier == "skills")
+    assert len(PRIMER.split()) < 550
+
+
+async def test_model_input_hook_only_announces_api_payloads(tmp_path):
+    announcements = []
+    class Client(PixelClient):
+        async def model_input(self, step, content, refs):
+            announcements.append((step, content, refs))
+            self.events.append("model_input")
+    c = Client()
+    api = FakeAPI(c)
+    agent = HoloAgent(HoloConfig(max_steps=2), api)
+    records = [r async for r in agent.steps(c, "observe", tmp_path)]
+    assert c.events.count("screenshot") == 4
+    assert c.events.count("model_input") == c.events.count("api") == 2
+    for idx, (_, content, refs) in enumerate(announcements):
+        assert content == api.payloads[idx]["messages"][1]["content"]
+        assert refs == records[idx]["input_image_refs"]
+    assert records[0]["feedback_image_refs"][0] not in announcements[0][2]
+    assert records[0]["feedback_image_refs"][0] in announcements[1][2]

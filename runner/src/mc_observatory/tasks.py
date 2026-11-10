@@ -1,0 +1,35 @@
+import time
+
+import cua_bench as cb
+from .user_tasks import definitions
+
+
+@cb.tasks_config(split="train")
+def tasks():
+    return [cb.Task(task_id=task["id"], description=task["description"], metadata=task)
+            for task in definitions()]
+
+
+@cb.setup_task(split="train")
+async def setup(task_cfg, session):
+    task = task_cfg.metadata
+    await session.client.reset(task["seed"], task["inventory"], task.get("spawn"))
+    await session.client.resume()
+    session.evaluator.reset()
+    await session.state()
+    session.task_started = time.monotonic()
+
+
+@cb.evaluate_task(split="train")
+async def evaluate(task_cfg, session):
+    if session.task_started is None:
+        raise RuntimeError("Call setup before evaluation")
+    state = await session.state()
+    task = task_cfg.metadata
+    goal = task["goal"]
+    achieved = (state.get("dimension") == goal["dimension"] if "dimension" in goal else
+                state.get("stats", {}).get("crafted", {}).get(goal["crafted"], 0) > 0 if "crafted" in goal else
+                goal["milestone"] in session.evaluator.result()["completed"]
+                if "milestone" in goal else session.evaluator.has_item(goal["item"]))
+    within_limit = time.monotonic() - session.task_started <= task["time_limit_seconds"]
+    return [float(achieved and within_limit)]

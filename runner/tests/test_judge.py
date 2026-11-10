@@ -1,0 +1,97 @@
+import json
+import pytest
+
+from mc_observatory.judge import verdict,read_records,watch,evidence,agent_elapsed
+
+
+def row(step=0,completed=(),next_rung="log",outcome=None):
+    return {"step":step,"elapsed_seconds":step*10,"evaluator":{"completed":list(completed),"next":next_rung},
+            "tool_calls":[{"name":"seek","arguments":{"target":"oak log","intent":str(step)}}],
+            "tool_results":[{"outcome":outcome,"scene_changed":False}],"failure_tags":[]}
+
+
+def test_rung_budgets_and_new_progress_reset_clock():
+    assert verdict([],299) is None
+    assert verdict([],301)["reason"]=="rung_time_budget"
+    assert verdict([row(20,["log"],"crafting_table")],499) is None
+    assert verdict([row(20,["log"],"crafting_table")],501)["rung_age_s"]==301
+    assert verdict([row(0,["log"],"iron_ore")],479) is None
+    assert verdict([row(0,["log"],"iron_ore")],481)["budget_s"]==480
+
+
+def test_world_setup_does_not_consume_later_rung_budget():
+    from datetime import datetime
+    meta={"created_at":"2020-01-01T00:00:00+00:00"}
+    r=row(1,["log"],"crafting_table")
+    r["finished_at"]="2020-01-01T00:02:10+00:00"
+    now=datetime.fromisoformat("2020-01-01T00:07:09+00:00").timestamp()
+    elapsed=agent_elapsed(meta,[r],now)
+    assert elapsed==309
+    assert verdict([r],elapsed) is None
+    assert verdict([r],agent_elapsed(meta,[r],now+2))["rung_age_s"]==301
+
+
+def test_common_failure_is_not_hidden_by_changing_secondary_tags():
+    rows=[row(i) for i in range(4)]
+    for r,extra in zip(rows,["invalid_tool_args",None,None,"no_tool_call"]):
+        r["failure_tags"]=["gui_stuck"]+([extra] if extra else [])
+    assert verdict(rows,60)["reason"]=="same_failure_four_times: gui_stuck"
+    rows[-1]["failure_tags"]=[]
+    assert verdict(rows,60) is None
+
+
+def test_repeated_failures_and_api_errors():
+    rows=[row(i,outcome="not_close") for i in range(4)]
+    assert verdict(rows,40)["reason"]=="same_failure_four_times: not_close"
+    assert verdict(rows[:3],30) is None
+    for r in rows:r["failure_tags"]=["api_error","api_timeout"]
+    assert "api_timeout" in verdict(rows,40)["reason"]
+
+
+def test_identical_actions_only_interrupt_when_not_changing_scene():
+    rows=[row(i) for i in range(6)]
+    assert verdict(rows,60)["reason"]=="identical_actions_without_scene_progress"
+    rows[-1]["tool_results"][0]["scene_changed"]=True
+    assert verdict(rows,60) is None
+
+
+@pytest.mark.parametrize("last",["black","white",None])
+def test_raw_identical_actions_use_saved_model_frames(tmp_path,last):
+    from PIL import Image
+    rows=[]
+    for i in range(6):
+        r=row(i);r["tool_results"]=[];r["screenshot_ref"]=f"{i}.png"
+        r["tool_calls"]=[{"name":"key_press","arguments":{"key":"w","ms":200,"intent":str(i)}}]
+        rows.append(r)
+        if i<5 or last is not None: Image.new("RGB",(16,16),last if i==5 else "black").save(tmp_path/f"{i}.png")
+    path=tmp_path/"steps.jsonl";path.write_text("\n".join(json.dumps(r) for r in rows))
+    decision=verdict(read_records(path),60)
+    assert bool(decision) is (last=="black")
+    if decision: assert decision["reason"]=="identical_actions_without_scene_progress"
+
+
+def test_partial_trace_tail_is_ignored(tmp_path):
+    p=tmp_path/"steps.jsonl";p.write_text(json.dumps(row())+'\n{"partial":')
+    assert read_records(p)==[row()]
+
+
+def test_evidence_cannot_escape_run_folder(tmp_path):
+    (tmp_path/"a.png").write_bytes(b"png")
+    assert evidence(tmp_path,[{"step":1,"screenshot_ref":"a.png"}])==["judge_evidence/step-1.png"]
+    assert evidence(tmp_path,[{"step":2,"screenshot_ref":"../outside.png"}])==[]
+
+
+def test_watch_only_stops_owned_run_and_never_emits_gameplay_inputs(tmp_path):
+    (tmp_path/"run.json").write_text(json.dumps({"status":"running","created_at":"2020-01-01T00:00:00+00:00"}))
+    calls=[]
+    def request(method,route,payload=None):
+        calls.append((method,route,payload))
+        return {"active_run":tmp_path.name} if method=="GET" else {"status":"STOPPING"}
+    result=watch(tmp_path,request=request)
+    assert result["reason"]=="rung_time_budget"
+    assert calls==[("GET","/api/status",None),("POST","/api/control",{"action":"stop","source":"devin","text":"judge: rung_time_budget"})]
+    assert json.loads((tmp_path/"judge_metadata.json").read_text())["judge_cost"]==0
+    assert (tmp_path/"judge_verdict.json").exists()
+    calls.clear()
+    assert watch(tmp_path,request=lambda *args:{"active_run":"another-run"}) is None
+    assert not calls
